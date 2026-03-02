@@ -80,6 +80,22 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("rewrites missing provider API key errors with actionable setup guidance", () => {
+    const input =
+      'No API key found for provider "google". Auth store: /tmp/openclaw/auth-profiles.json.';
+    expect(sanitizeUserFacingText(input, { errorContext: true })).toBe(
+      'Missing API key for provider "google". Set GEMINI_API_KEY and retry, or run openclaw agents add <id> to configure auth for this agent.',
+    );
+  });
+
+  it("rewrites all-models fallback summaries when primary provider API key is missing", () => {
+    const input =
+      'All models failed (2): google/gemini-3-flash: No API key found for provider "google". Auth store: /tmp/openclaw/auth-profiles.json. | openai-codex/gpt-5.3-codex: OAuth token refresh failed for openai-codex.';
+    expect(sanitizeUserFacingText(input, { errorContext: true })).toBe(
+      'Missing API key for provider "google". Set GEMINI_API_KEY and retry, or run openclaw agents add <id> to configure auth for this agent.',
+    );
+  });
+
   it.each([
     {
       input: "Hello there!\n\nHello there!",

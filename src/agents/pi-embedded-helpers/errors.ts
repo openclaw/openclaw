@@ -23,6 +23,70 @@ export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
+const MISSING_API_KEY_PROVIDER_RE = /no api key found for provider\s+"?([a-z0-9._-]+)"?/i;
+const PROVIDER_API_KEY_ENV_HINTS: Record<string, string[]> = {
+  anthropic: ["ANTHROPIC_API_KEY"],
+  cerebras: ["CEREBRAS_API_KEY"],
+  deepgram: ["DEEPGRAM_API_KEY"],
+  google: ["GEMINI_API_KEY"],
+  groq: ["GROQ_API_KEY"],
+  kilocode: ["KILOCODE_API_KEY"],
+  litellm: ["LITELLM_API_KEY"],
+  minimax: ["MINIMAX_API_KEY"],
+  mistral: ["MISTRAL_API_KEY"],
+  moonshot: ["MOONSHOT_API_KEY"],
+  nvidia: ["NVIDIA_API_KEY"],
+  ollama: ["OLLAMA_API_KEY"],
+  opencode: ["OPENCODE_API_KEY"],
+  openai: ["OPENAI_API_KEY"],
+  openrouter: ["OPENROUTER_API_KEY"],
+  qianfan: ["QIANFAN_API_KEY"],
+  synthetic: ["SYNTHETIC_API_KEY"],
+  together: ["TOGETHER_API_KEY"],
+  venice: ["VENICE_API_KEY"],
+  voyage: ["VOYAGE_API_KEY"],
+  vllm: ["VLLM_API_KEY"],
+  xai: ["XAI_API_KEY"],
+  xiaomi: ["XIAOMI_API_KEY"],
+};
+
+function formatApiKeyEnvVarHint(vars: string[]): string | null {
+  if (vars.length === 0) {
+    return null;
+  }
+  if (vars.length === 1) {
+    return vars[0];
+  }
+  if (vars.length === 2) {
+    return `${vars[0]} or ${vars[1]}`;
+  }
+  const head = vars.slice(0, -1).join(", ");
+  return `${head}, or ${vars[vars.length - 1]}`;
+}
+
+function formatMissingApiKeyErrorCopy(raw: string): string | undefined {
+  const providerMatch = raw.match(MISSING_API_KEY_PROVIDER_RE);
+  if (!providerMatch?.[1]) {
+    return undefined;
+  }
+
+  const provider = providerMatch[1];
+  const providerKey = provider.toLowerCase();
+  if (providerKey === "openai" && /authenticated with openai codex oauth/i.test(raw)) {
+    return (
+      'Missing API key for provider "openai". ' +
+      "You currently have OpenAI Codex OAuth configured. " +
+      "Use an openai-codex/* model or set OPENAI_API_KEY."
+    );
+  }
+
+  const envHint = formatApiKeyEnvVarHint(PROVIDER_API_KEY_ENV_HINTS[providerKey] ?? []);
+  const envClause = envHint ? `Set ${envHint} and retry, or ` : "";
+  return (
+    `Missing API key for provider "${provider}". ` +
+    `${envClause}run openclaw agents add <id> to configure auth for this agent.`
+  );
+}
 
 function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
   if (isRateLimitErrorMessage(raw)) {
@@ -583,6 +647,11 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
 
     if (isBillingErrorMessage(trimmed)) {
       return BILLING_ERROR_USER_MESSAGE;
+    }
+
+    const missingApiKeyCopy = formatMissingApiKeyErrorCopy(trimmed);
+    if (missingApiKeyCopy) {
+      return missingApiKeyCopy;
     }
 
     if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {

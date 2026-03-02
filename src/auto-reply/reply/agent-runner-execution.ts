@@ -566,7 +566,11 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
-      const safeMessage = isTransientHttp
+      const shouldSanitizeMessage =
+        isTransientHttp ||
+        /no api key found for provider/i.test(message) ||
+        /all models failed\s*\(\d+\):/i.test(message);
+      const safeMessage = shouldSanitizeMessage
         ? sanitizeUserFacingText(message, { errorContext: true })
         : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
