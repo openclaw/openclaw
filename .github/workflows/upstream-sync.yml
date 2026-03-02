@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: write
 
 jobs:
   sync:
@@ -52,6 +53,18 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Clean up stale sync branches
+        if: steps.check.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.AMERICAN_CLAW_DISPATCH_TOKEN }}
+        run: |
+          echo "Cleaning up stale sync branches..."
+          for ref in $(git ls-remote --heads origin 'sync/upstream-*' | awk '{print $2}'); do
+            BRANCH="${ref#refs/heads/}"
+            echo "Deleting stale branch: $BRANCH"
+            git push origin --delete "$BRANCH" 2>/dev/null || echo "  Warning: could not delete $BRANCH"
+          done
+
       - name: Create sync branch and merge
         if: steps.check.outputs.has_changes == 'true'
         id: merge
@@ -76,81 +89,138 @@ jobs:
         run: |
           git push origin "${{ steps.merge.outputs.branch }}"
 
-      - name: Create PR (clean merge)
-        if: steps.check.outputs.has_changes == 'true' && steps.merge.outputs.merge_clean == 'true'
+      - name: Wait for branch indexing
+        if: steps.check.outputs.has_changes == 'true'
         env:
           GH_TOKEN: ${{ secrets.AMERICAN_CLAW_DISPATCH_TOKEN }}
         run: |
-          echo "Waiting for GitHub to index the branch..."
-          sleep 10
+          BRANCH="${{ steps.merge.outputs.branch }}"
+          ENCODED_BRANCH=$(echo "$BRANCH" | sed 's|/|%2F|g')
+          echo "Waiting for GitHub to index branch: $BRANCH"
 
-          for attempt in 1 2; do
-            if gh pr create \
-              --title "sync: merge ${{ steps.check.outputs.commit_count }} upstream commits ($(date +%Y-%m-%d))" \
-              --body "## Upstream Sync
-
-          **${{ steps.check.outputs.commit_count }}** new commits from [openclaw/openclaw](https://github.com/openclaw/openclaw).
-
-          ### Commits
-          \`\`\`
-          ${{ steps.check.outputs.summary }}
-          \`\`\`
-
-          **Status:** Clean merge, no conflicts." \
-              --base main \
-              --head "${{ steps.merge.outputs.branch }}"; then
-              echo "PR created successfully on attempt $attempt"
+          for i in $(seq 1 24); do
+            if gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/${ENCODED_BRANCH}" --silent 2>/dev/null; then
+              echo "Branch indexed after $((i * 5)) seconds"
               break
             fi
+            if [ "$i" -eq 24 ]; then
+              echo "::warning::Branch not indexed after 120 seconds, proceeding anyway"
+            fi
+            sleep 5
+          done
 
-            if [ "$attempt" -eq 1 ]; then
-              echo "PR creation failed, retrying in 30s..."
-              sleep 30
+          # Additional buffer for GraphQL index propagation (REST != GraphQL)
+          echo "Waiting 30s for GraphQL index propagation..."
+          sleep 30
+
+      - name: Create PR (clean merge)
+        if: steps.check.outputs.has_changes == 'true' && steps.merge.outputs.merge_clean == 'true'
+        id: create_pr_clean
+        env:
+          GH_TOKEN: ${{ secrets.AMERICAN_CLAW_DISPATCH_TOKEN }}
+          COMMIT_COUNT: ${{ steps.check.outputs.commit_count }}
+          SUMMARY: ${{ steps.check.outputs.summary }}
+          SYNC_BRANCH: ${{ steps.merge.outputs.branch }}
+        run: |
+          cat > /tmp/pr-body.md <<'BODYEOF'
+          ## Upstream Sync
+          BODYEOF
+
+          # Use env vars (safe from shell expansion) to inject dynamic content
+          {
+            echo ""
+            echo "**${COMMIT_COUNT}** new commits from [openclaw/openclaw](https://github.com/openclaw/openclaw)."
+            echo ""
+            echo "### Commits"
+            echo '```'
+            echo "$SUMMARY"
+            echo '```'
+            echo ""
+            echo "**Status:** Clean merge, no conflicts."
+          } >> /tmp/pr-body.md
+
+          PR_ERROR=""
+          DELAYS=(30 60 120 240)
+          for attempt in $(seq 1 4); do
+            if PR_ERROR=$(gh pr create \
+              --title "sync: merge ${COMMIT_COUNT} upstream commits ($(date +%Y-%m-%d))" \
+              --body-file /tmp/pr-body.md \
+              --base main \
+              --head "$SYNC_BRANCH" 2>&1); then
+              echo "PR created successfully on attempt $attempt"
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 4 ]; then
+              DELAY=${DELAYS[$((attempt - 1))]}
+              echo "PR creation failed (attempt $attempt/4), retrying in ${DELAY}s..."
+              echo "Error: $PR_ERROR"
+              sleep "$DELAY"
             else
-              echo "PR creation failed after 2 attempts"
+              echo "PR creation failed after 4 attempts"
+              echo "pr_error<<PR_ERROR_EOF" >> "$GITHUB_OUTPUT"
+              echo "$PR_ERROR" >> "$GITHUB_OUTPUT"
+              echo "PR_ERROR_EOF" >> "$GITHUB_OUTPUT"
               exit 1
             fi
           done
 
       - name: Create draft PR (conflicts)
         if: steps.check.outputs.has_changes == 'true' && steps.merge.outputs.merge_clean == 'false'
+        id: create_pr_conflicts
         env:
           GH_TOKEN: ${{ secrets.AMERICAN_CLAW_DISPATCH_TOKEN }}
+          COMMIT_COUNT: ${{ steps.check.outputs.commit_count }}
+          SUMMARY: ${{ steps.check.outputs.summary }}
+          CONFLICTS: ${{ steps.merge.outputs.conflicts }}
+          SYNC_BRANCH: ${{ steps.merge.outputs.branch }}
         run: |
-          echo "Waiting for GitHub to index the branch..."
-          sleep 10
+          cat > /tmp/pr-body.md <<'BODYEOF'
+          ## Upstream Sync — Conflicts Detected
+          BODYEOF
 
-          for attempt in 1 2; do
+          {
+            echo ""
+            echo "**${COMMIT_COUNT}** new commits from [openclaw/openclaw](https://github.com/openclaw/openclaw)."
+            echo ""
+            echo "### Conflicted Files"
+            echo '```'
+            echo "$CONFLICTS"
+            echo '```'
+            echo ""
+            echo "### Commits"
+            echo '```'
+            echo "$SUMMARY"
+            echo '```'
+            echo ""
+            echo "**Action required:** Checkout this branch, resolve conflicts, and push."
+          } >> /tmp/pr-body.md
+
+          PR_ERROR=""
+          DELAYS=(30 60 120 240)
+          for attempt in $(seq 1 4); do
             if PR_URL=$(gh pr create \
-              --title "sync: merge ${{ steps.check.outputs.commit_count }} upstream commits ($(date +%Y-%m-%d)) — CONFLICTS" \
-              --body "## Upstream Sync — Conflicts Detected
-
-          **${{ steps.check.outputs.commit_count }}** new commits from [openclaw/openclaw](https://github.com/openclaw/openclaw).
-
-          ### Conflicted Files
-          \`\`\`
-          ${{ steps.merge.outputs.conflicts }}
-          \`\`\`
-
-          ### Commits
-          \`\`\`
-          ${{ steps.check.outputs.summary }}
-          \`\`\`
-
-          **Action required:** Checkout this branch, resolve conflicts, and push." \
+              --title "sync: merge ${COMMIT_COUNT} upstream commits ($(date +%Y-%m-%d)) — CONFLICTS" \
+              --body-file /tmp/pr-body.md \
               --base main \
-              --head "${{ steps.merge.outputs.branch }}" \
-              --draft); then
+              --head "$SYNC_BRANCH" \
+              --draft 2>&1); then
               echo "Created PR: $PR_URL"
               gh pr edit "$PR_URL" --add-label "conflicts" || echo "Warning: could not add 'conflicts' label"
-              break
+              exit 0
             fi
 
-            if [ "$attempt" -eq 1 ]; then
-              echo "PR creation failed, retrying in 30s..."
-              sleep 30
+            PR_ERROR="$PR_URL"
+            if [ "$attempt" -lt 4 ]; then
+              DELAY=${DELAYS[$((attempt - 1))]}
+              echo "PR creation failed (attempt $attempt/4), retrying in ${DELAY}s..."
+              echo "Error: $PR_ERROR"
+              sleep "$DELAY"
             else
-              echo "PR creation failed after 2 attempts"
+              echo "PR creation failed after 4 attempts"
+              echo "pr_error<<PR_ERROR_EOF" >> "$GITHUB_OUTPUT"
+              echo "$PR_ERROR" >> "$GITHUB_OUTPUT"
+              echo "PR_ERROR_EOF" >> "$GITHUB_OUTPUT"
               exit 1
             fi
           done
@@ -159,12 +229,81 @@ jobs:
         if: failure() && steps.check.outputs.has_changes == 'true'
         env:
           GH_TOKEN: ${{ secrets.AMERICAN_CLAW_DISPATCH_TOKEN }}
+          PR_ERROR_CLEAN: ${{ steps.create_pr_clean.outputs.pr_error }}
+          PR_ERROR_CONFLICTS: ${{ steps.create_pr_conflicts.outputs.pr_error }}
         run: |
+          # Use the actual error from whichever PR step failed
+          ERROR="${PR_ERROR_CLEAN:-${PR_ERROR_CONFLICTS:-Upstream sync workflow failed}}"
+
+          # Dispatch sync-failure alert to american-claw
           gh api repos/justuseapen/american-claw/dispatches \
             -f event_type="sync-failure" \
-            -f 'client_payload[error]=Upstream sync workflow failed' \
+            -f "client_payload[error]=$ERROR" \
             -f 'client_payload[run_url]=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}' \
             -f 'client_payload[branch]=${{ steps.merge.outputs.branch }}' \
             -f 'client_payload[commit_count]=${{ steps.check.outputs.commit_count }}' \
             -f 'client_payload[merge_clean]=${{ steps.merge.outputs.merge_clean }}' \
             -f 'client_payload[conflicts]=${{ steps.merge.outputs.conflicts }}'
+
+          # Create ai-fix issue directly in this repo (else-core)
+          BRANCH="${{ steps.merge.outputs.branch }}"
+          COMMIT_COUNT="${{ steps.check.outputs.commit_count }}"
+          MERGE_CLEAN="${{ steps.merge.outputs.merge_clean }}"
+          CONFLICTS="${{ steps.merge.outputs.conflicts }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          if [ "$MERGE_CLEAN" = "false" ]; then
+            FAILURE_TYPE="merge-conflict"
+          elif echo "$ERROR" | grep -qi "pr.*create\|pull request\|Head sha"; then
+            FAILURE_TYPE="pr-creation"
+          else
+            FAILURE_TYPE="unknown"
+          fi
+
+          cat > /tmp/ai-fix-body.md <<'ISSUEEOF'
+          ## Sync Failure
+          ISSUEEOF
+
+          {
+            echo ""
+            echo "**Failure type:** ${FAILURE_TYPE}"
+            echo "**Workflow run:** ${RUN_URL}"
+            echo "**Sync branch:** ${BRANCH:-unknown}"
+            echo "**Upstream commits:** ${COMMIT_COUNT:-unknown} commits from openclaw/openclaw"
+            echo ""
+            echo "### Error Output"
+            echo '```'
+            echo "${ERROR}"
+            echo '```'
+            echo ""
+            echo "### Conflicted Files"
+            echo '```'
+            echo "${CONFLICTS:-none}"
+            echo '```'
+            echo ""
+            echo "### Context"
+            echo "- Base branch: main"
+            echo "- Upstream remote: https://github.com/openclaw/openclaw"
+            echo "- This repo is a fork that carries local patches in:"
+            echo "  - Dockerfiles (managed/byol/jarvis base images)"
+            echo "  - orchestrator/ (Python deployment tooling)"
+            echo "  - .github/workflows/"
+            echo ""
+            echo "### Instructions"
+            echo "1. Check out the sync branch and diagnose why the merge/PR failed"
+            echo "2. If merge conflict: resolve conflicts preserving our local patches over upstream where they conflict"
+            echo "3. If PR creation failed: retry creating the PR with \`gh pr create --base main --head ${BRANCH}\`"
+            echo "4. If workflow bug: fix the workflow file"
+            echo "5. Push your fix and create a PR targeting main, marked ready-for-review"
+          } >> /tmp/ai-fix-body.md
+
+          # Check for existing open ai-fix issue to avoid duplicates
+          EXISTING=$(gh issue list --label "ai-fix" --state open --limit 1 --json number -q '.[0].number' || echo "")
+          if [ -z "$EXISTING" ]; then
+            gh issue create \
+              --title "ai-fix: sync failure $(date +%Y-%m-%d)" \
+              --label "ai-fix" \
+              --body-file /tmp/ai-fix-body.md
+          else
+            gh issue comment "$EXISTING" --body-file /tmp/ai-fix-body.md
+          fi
