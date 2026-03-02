@@ -128,6 +128,28 @@ function emitJsonPayload(params: {
   return true;
 }
 
+async function resolveConfigAndTargetAgentIdOrExit(params: {
+  runtime: RuntimeEnv;
+  agentInput: string | undefined;
+}): Promise<{
+  cfg: NonNullable<Awaited<ReturnType<typeof requireValidConfig>>>;
+  agentId: string;
+} | null> {
+  const cfg = await requireValidConfig(params.runtime);
+  if (!cfg) {
+    return null;
+  }
+  const agentId = resolveTargetAgentIdOrExit({
+    cfg,
+    runtime: params.runtime,
+    agentInput: params.agentInput,
+  });
+  if (!agentId) {
+    return null;
+  }
+  return { cfg, agentId };
+}
+
 export async function agentsBindingsCommand(
   opts: AgentsBindingsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -186,15 +208,14 @@ export async function agentsBindCommand(
   opts: AgentsBindOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const cfg = await requireValidConfig(runtime);
-  if (!cfg) {
+  const resolved = await resolveConfigAndTargetAgentIdOrExit({
+    runtime,
+    agentInput: opts.agent,
+  });
+  if (!resolved) {
     return;
   }
-
-  const agentId = resolveTargetAgentIdOrExit({ cfg, runtime, agentInput: opts.agent });
-  if (!agentId) {
-    return;
-  }
+  const { cfg, agentId } = resolved;
 
   const parsed = resolveParsedBindingsOrExit({
     runtime,
@@ -264,15 +285,14 @@ export async function agentsUnbindCommand(
   opts: AgentsUnbindOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const cfg = await requireValidConfig(runtime);
-  if (!cfg) {
+  const resolved = await resolveConfigAndTargetAgentIdOrExit({
+    runtime,
+    agentInput: opts.agent,
+  });
+  if (!resolved) {
     return;
   }
-
-  const agentId = resolveTargetAgentIdOrExit({ cfg, runtime, agentInput: opts.agent });
-  if (!agentId) {
-    return;
-  }
+  const { cfg, agentId } = resolved;
   if (opts.all && (opts.bind?.length ?? 0) > 0) {
     runtime.error("Use either --all or --bind, not both.");
     runtime.exit(1);

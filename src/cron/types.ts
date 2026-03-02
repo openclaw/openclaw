@@ -77,43 +77,34 @@ export type CronFailureAlert = {
   accountId?: string;
 };
 
-export type CronPayload =
-  | { kind: "systemEvent"; text: string }
-  | {
-      kind: "agentTurn";
-      message: string;
-      /** Optional model override (provider/model or alias). */
-      model?: string;
-      /** Optional per-job fallback models; overrides agent/global fallbacks when defined. */
-      fallbacks?: string[];
-      thinking?: string;
-      timeoutSeconds?: number;
-      allowUnsafeExternalContent?: boolean;
-      /** If true, run with lightweight bootstrap context. */
-      lightContext?: boolean;
-      deliver?: boolean;
-      channel?: CronMessageChannel;
-      to?: string;
-      bestEffortDeliver?: boolean;
-    };
+export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnPayload;
 
-export type CronPayloadPatch =
-  | { kind: "systemEvent"; text?: string }
-  | {
-      kind: "agentTurn";
-      message?: string;
-      model?: string;
-      fallbacks?: string[];
-      thinking?: string;
-      timeoutSeconds?: number;
-      allowUnsafeExternalContent?: boolean;
-      /** If true, run with lightweight bootstrap context. */
-      lightContext?: boolean;
-      deliver?: boolean;
-      channel?: CronMessageChannel;
-      to?: string;
-      bestEffortDeliver?: boolean;
-    };
+export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgentTurnPayloadPatch;
+
+type CronAgentTurnPayloadFields = {
+  message: string;
+  /** Optional model override (provider/model or alias). */
+  model?: string;
+  /** Optional per-job fallback models; overrides agent/global fallbacks when defined. */
+  fallbacks?: string[];
+  thinking?: string;
+  timeoutSeconds?: number;
+  allowUnsafeExternalContent?: boolean;
+  /** If true, run with lightweight bootstrap context. */
+  lightContext?: boolean;
+  deliver?: boolean;
+  channel?: CronMessageChannel;
+  to?: string;
+  bestEffortDeliver?: boolean;
+};
+
+type CronAgentTurnPayload = {
+  kind: "agentTurn";
+} & CronAgentTurnPayloadFields;
+
+type CronAgentTurnPayloadPatch = {
+  kind: "agentTurn";
+} & Partial<CronAgentTurnPayloadFields>;
 
 export type CronJobState = {
   nextRunAtMs?: number;

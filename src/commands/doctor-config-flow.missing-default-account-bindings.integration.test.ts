@@ -1,13 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { note } from "../terminal/note.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runDoctorConfigWithInput } from "./doctor-config-flow.test-utils.js";
 
-const { noteSpy } = vi.hoisted(() => ({
-  noteSpy: vi.fn(),
-}));
-
 vi.mock("../terminal/note.js", () => ({
-  note: noteSpy,
+  note: vi.fn(),
 }));
 
 vi.mock("./doctor-legacy-config.js", async (importOriginal) => {
@@ -22,6 +19,8 @@ vi.mock("./doctor-legacy-config.js", async (importOriginal) => {
 });
 
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
+
+const noteSpy = vi.mocked(note);
 
 describe("doctor missing default account binding warning", () => {
   it("emits a doctor warning when named accounts have no valid account-scoped bindings", async () => {
