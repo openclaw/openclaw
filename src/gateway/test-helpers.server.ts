@@ -354,6 +354,57 @@ export async function withGatewayServer<T>(
   }
 }
 
+export async function createGatewaySuiteHarness(opts?: {
+  port?: number;
+  serverOptions?: GatewayServerOptions;
+}): Promise<{
+  port: number;
+  server: Awaited<ReturnType<typeof startGatewayServer>>;
+  openWs: (headers?: Record<string, string>) => Promise<WebSocket>;
+  close: () => Promise<void>;
+}> {
+  const started = await startGatewayServerWithRetries({
+    port: opts?.port ?? (await getFreePort()),
+    opts: opts?.serverOptions,
+  });
+  return {
+    port: started.port,
+    server: started.server,
+    openWs: async (headers?: Record<string, string>) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${started.port}`, headers ? { headers } : undefined);
+      trackConnectChallengeNonce(ws);
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
+        const cleanup = () => {
+          clearTimeout(timer);
+          ws.off("open", onOpen);
+          ws.off("error", onError);
+          ws.off("close", onClose);
+        };
+        const onOpen = () => {
+          cleanup();
+          resolve();
+        };
+        const onError = (err: unknown) => {
+          cleanup();
+          reject(err instanceof Error ? err : new Error(String(err)));
+        };
+        const onClose = (code: number, reason: Buffer) => {
+          cleanup();
+          reject(new Error(`closed ${code}: ${reason.toString()}`));
+        };
+        ws.once("open", onOpen);
+        ws.once("error", onError);
+        ws.once("close", onClose);
+      });
+      return ws;
+    },
+    close: async () => {
+      await started.server.close();
+    },
+  };
+}
+
 export async function startServerWithClient(
   token?: string,
   opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
