@@ -2,7 +2,7 @@ import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../agents/pi-settings.js";
-import { parseByteSize } from "../../cli/parse-bytes.js";
+import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -78,26 +78,6 @@ const normalizeNonNegativeInt = (value: unknown): number | null => {
   return int >= 0 ? int : null;
 };
 
-const normalizeOptionalByteSize = (value: unknown): number | null => {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    const int = Math.floor(value);
-    return int >= 0 ? int : null;
-  }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return null;
-    }
-    try {
-      const bytes = parseByteSize(trimmed, { defaultUnit: "b" });
-      return bytes >= 0 ? bytes : null;
-    } catch {
-      return null;
-    }
-  }
-  return null;
-};
-
 export function resolveMemoryFlushSettings(cfg?: OpenClawConfig): MemoryFlushSettings | null {
   const defaults = cfg?.agents?.defaults?.compaction?.memoryFlush;
   const enabled = defaults?.enabled ?? true;
@@ -107,7 +87,7 @@ export function resolveMemoryFlushSettings(cfg?: OpenClawConfig): MemoryFlushSet
   const softThresholdTokens =
     normalizeNonNegativeInt(defaults?.softThresholdTokens) ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
   const forceFlushTranscriptBytes =
-    normalizeOptionalByteSize(defaults?.forceFlushTranscriptBytes) ??
+    parseNonNegativeByteSize(defaults?.forceFlushTranscriptBytes) ??
     DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES;
   const prompt = defaults?.prompt?.trim() || DEFAULT_MEMORY_FLUSH_PROMPT;
   const systemPrompt = defaults?.systemPrompt?.trim() || DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT;
