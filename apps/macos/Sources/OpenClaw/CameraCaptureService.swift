@@ -64,45 +64,33 @@ actor CameraCaptureService {
 
         try await self.ensureAccess(for: .video)
 
-        let session = AVCaptureSession()
-        session.sessionPreset = .photo
-
-        guard let device = Self.pickCamera(facing: facing, deviceId: deviceId) else {
-            throw CameraError.cameraUnavailable
-        }
-
-        let input = try AVCaptureDeviceInput(device: device)
-        guard session.canAddInput(input) else {
-            throw CameraError.captureFailed("Failed to add camera input")
-        }
-        session.addInput(input)
-
-        let output = AVCapturePhotoOutput()
-        guard session.canAddOutput(output) else {
-            throw CameraError.captureFailed("Failed to add photo output")
-        }
-        session.addOutput(output)
-        output.maxPhotoQualityPrioritization = .quality
+        let prepared = try CameraCapturePipelineSupport.preparePhotoSession(
+            preferFrontCamera: facing == .front,
+            deviceId: deviceId,
+            pickCamera: { preferFrontCamera, deviceId in
+                Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
+            },
+            cameraUnavailableError: CameraError.cameraUnavailable,
+            mapSetupError: { setupError in
+                CameraError.captureFailed(setupError.localizedDescription)
+            })
+        let session = prepared.session
+        let device = prepared.device
+        let output = prepared.output
 
         session.startRunning()
         defer { session.stopRunning() }
-        await Self.warmUpCaptureSession()
+        await CameraCapturePipelineSupport.warmUpCaptureSession()
         await self.waitForExposureAndWhiteBalance(device: device)
         await self.sleepDelayMs(delayMs)
 
-        let settings: AVCapturePhotoSettings = {
-            if output.availablePhotoCodecTypes.contains(.jpeg) {
-                return AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
-            }
-            return AVCapturePhotoSettings()
-        }()
-        settings.photoQualityPrioritization = .quality
-
         var delegate: PhotoCaptureDelegate?
-        let rawData: Data = try await withCheckedThrowingContinuation { cont in
-            let d = PhotoCaptureDelegate(cont)
-            delegate = d
-            output.capturePhoto(with: settings, delegate: d)
+        let rawData: Data = try await withCheckedThrowingContinuation { continuation in
+            let captureDelegate = PhotoCaptureDelegate(continuation)
+            delegate = captureDelegate
+            output.capturePhoto(
+                with: CameraCapturePipelineSupport.makePhotoSettings(output: output),
+                delegate: captureDelegate)
         }
         withExtendedLifetime(delegate) {}
 
@@ -135,39 +123,19 @@ actor CameraCaptureService {
             try await self.ensureAccess(for: .audio)
         }
 
-        let session = AVCaptureSession()
-        session.sessionPreset = .high
-
-        guard let camera = Self.pickCamera(facing: facing, deviceId: deviceId) else {
-            throw CameraError.cameraUnavailable
-        }
-        let cameraInput = try AVCaptureDeviceInput(device: camera)
-        guard session.canAddInput(cameraInput) else {
-            throw CameraError.captureFailed("Failed to add camera input")
-        }
-        session.addInput(cameraInput)
-
-        if includeAudio {
-            guard let mic = AVCaptureDevice.default(for: .audio) else {
-                throw CameraError.microphoneUnavailable
-            }
-            let micInput = try AVCaptureDeviceInput(device: mic)
-            guard session.canAddInput(micInput) else {
-                throw CameraError.captureFailed("Failed to add microphone input")
-            }
-            session.addInput(micInput)
-        }
-
-        let output = AVCaptureMovieFileOutput()
-        guard session.canAddOutput(output) else {
-            throw CameraError.captureFailed("Failed to add movie output")
-        }
-        session.addOutput(output)
-        output.maxRecordedDuration = CMTime(value: Int64(durationMs), timescale: 1000)
-
-        session.startRunning()
+        let prepared = try await CameraCapturePipelineSupport.prepareWarmMovieSession(
+            preferFrontCamera: facing == .front,
+            deviceId: deviceId,
+            includeAudio: includeAudio,
+            durationMs: durationMs,
+            pickCamera: { preferFrontCamera, deviceId in
+                Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
+            },
+            cameraUnavailableError: CameraError.cameraUnavailable,
+            mapSetupError: Self.mapMovieSetupError)
+        let session = prepared.session
+        let output = prepared.output
         defer { session.stopRunning() }
-        await Self.warmUpCaptureSession()
 
         let tmpMovURL = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-camera-\(UUID().uuidString).mov")
@@ -180,7 +148,6 @@ actor CameraCaptureService {
             return FileManager().temporaryDirectory
                 .appendingPathComponent("openclaw-camera-\(UUID().uuidString).mp4")
         }()
-
         // Ensure we don't fail exporting due to an existing file.
         try? FileManager().removeItem(at: outputURL)
 
@@ -192,28 +159,12 @@ actor CameraCaptureService {
             output.startRecording(to: tmpMovURL, recordingDelegate: d)
         }
         withExtendedLifetime(delegate) {}
-
         try await Self.exportToMP4(inputURL: recordedURL, outputURL: outputURL)
         return (path: outputURL.path, durationMs: durationMs, hasAudio: includeAudio)
     }
 
     private func ensureAccess(for mediaType: AVMediaType) async throws {
-        let status = AVCaptureDevice.authorizationStatus(for: mediaType)
-        switch status {
-        case .authorized:
-            return
-        case .notDetermined:
-            let ok = await withCheckedContinuation(isolation: nil) { cont in
-                AVCaptureDevice.requestAccess(for: mediaType) { granted in
-                    cont.resume(returning: granted)
-                }
-            }
-            if !ok {
-                throw CameraError.permissionDenied(kind: mediaType == .video ? "Camera" : "Microphone")
-            }
-        case .denied, .restricted:
-            throw CameraError.permissionDenied(kind: mediaType == .video ? "Camera" : "Microphone")
-        @unknown default:
+        if !(await CameraAuthorization.isAuthorized(for: mediaType)) {
             throw CameraError.permissionDenied(kind: mediaType == .video ? "Camera" : "Microphone")
         }
     }
@@ -278,6 +229,13 @@ actor CameraCaptureService {
         return min(60000, max(250, v))
     }
 
+    private nonisolated static func mapMovieSetupError(_ setupError: CameraSessionConfigurationError) -> CameraError {
+        CameraCapturePipelineSupport.mapMovieSetupError(
+            setupError,
+            microphoneUnavailableError: .microphoneUnavailable,
+            captureFailed: { .captureFailed($0) })
+    }
+
     private nonisolated static func exportToMP4(inputURL: URL, outputURL: URL) async throws {
         let asset = AVURLAsset(url: inputURL)
         guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetMediumQuality) else {
@@ -315,11 +273,6 @@ actor CameraCaptureService {
         }
     }
 
-    private nonisolated static func warmUpCaptureSession() async {
-        // A short delay after `startRunning()` significantly reduces "blank first frame" captures on some devices.
-        try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
-    }
-
     private func waitForExposureAndWhiteBalance(device: AVCaptureDevice) async {
         let stepNs: UInt64 = 50_000_000
         let maxSteps = 30 // ~1.5s
@@ -338,11 +291,7 @@ actor CameraCaptureService {
     }
 
     private nonisolated static func positionLabel(_ position: AVCaptureDevice.Position) -> String {
-        switch position {
-        case .front: "front"
-        case .back: "back"
-        default: "unspecified"
-        }
+        CameraCapturePipelineSupport.positionLabel(position)
     }
 }
 

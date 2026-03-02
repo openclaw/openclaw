@@ -28,16 +28,30 @@ function makeRuntime() {
   };
 }
 
+async function withCapturedStdout(run: () => Promise<void>): Promise<string> {
+  const writes: string[] = [];
+  const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+    writes.push(String(chunk));
+    return true;
+  }) as typeof process.stdout.write);
+  try {
+    await run();
+    return writes.join("");
+  } finally {
+    writeSpy.mockRestore();
+  }
+}
+
 describe("ensureConfigReady", () => {
   async function loadEnsureConfigReady() {
     vi.resetModules();
     return await import("./config-guard.js");
   }
 
-  async function runEnsureConfigReady(commandPath: string[]) {
+  async function runEnsureConfigReady(commandPath: string[], suppressDoctorStdout = false) {
     const runtime = makeRuntime();
     const { ensureConfigReady } = await loadEnsureConfigReady();
-    await ensureConfigReady({ runtime: runtime as never, commandPath });
+    await ensureConfigReady({ runtime: runtime as never, commandPath, suppressDoctorStdout });
     return runtime;
   }
 
@@ -99,5 +113,30 @@ describe("ensureConfigReady", () => {
     await ensureConfigReady({ runtime: runtimeB as never, commandPath: ["message"] });
 
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still runs doctor flow when stdout suppression is enabled", async () => {
+    await runEnsureConfigReady(["message"], true);
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("prevents preflight stdout noise when suppression is enabled", async () => {
+    loadAndMaybeMigrateDoctorConfigMock.mockImplementation(async () => {
+      process.stdout.write("Doctor warnings\n");
+    });
+    const output = await withCapturedStdout(async () => {
+      await runEnsureConfigReady(["message"], true);
+    });
+    expect(output).not.toContain("Doctor warnings");
+  });
+
+  it("allows preflight stdout noise when suppression is not enabled", async () => {
+    loadAndMaybeMigrateDoctorConfigMock.mockImplementation(async () => {
+      process.stdout.write("Doctor warnings\n");
+    });
+    const output = await withCapturedStdout(async () => {
+      await runEnsureConfigReady(["message"], false);
+    });
+    expect(output).toContain("Doctor warnings");
   });
 });

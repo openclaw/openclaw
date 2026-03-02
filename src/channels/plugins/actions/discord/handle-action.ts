@@ -230,6 +230,7 @@ export async function handleDiscordMessageAction(
     const autoArchiveMinutes = readNumberParam(params, "autoArchiveMin", {
       integer: true,
     });
+    const appliedTags = readStringArrayParam(params, "appliedTags");
     return await handleDiscordAction(
       {
         action: "threadCreate",
@@ -239,6 +240,7 @@ export async function handleDiscordMessageAction(
         messageId,
         content,
         autoArchiveMinutes,
+        appliedTags: appliedTags ?? undefined,
       },
       cfg,
       actionOptions,

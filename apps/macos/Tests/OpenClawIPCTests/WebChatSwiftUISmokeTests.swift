@@ -1,6 +1,6 @@
 import AppKit
-import OpenClawChatUI
 import Foundation
+import OpenClawChatUI
 import Testing
 @testable import OpenClaw
 
@@ -28,7 +28,9 @@ struct WebChatSwiftUISmokeTests {
             return try JSONDecoder().decode(OpenClawChatSendResponse.self, from: Data(json.utf8))
         }
 
-        func requestHealth(timeoutMs _: Int) async throws -> Bool { true }
+        func requestHealth(timeoutMs _: Int) async throws -> Bool {
+            true
+        }
 
         func events() -> AsyncStream<OpenClawChatTransportEvent> {
             AsyncStream { continuation in

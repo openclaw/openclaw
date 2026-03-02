@@ -309,6 +309,10 @@ export async function dispatchCronDelivery(
         timeoutMs: params.timeoutMs,
         cleanup: params.job.deleteAfterRun ? "delete" : "keep",
         roundOneReply: synthesizedText,
+        // Cron output is a finished completion message: send it directly to the
+        // target channel via the completion-direct-send path rather than injecting
+        // a trigger message into the (likely idle) main agent session.
+        expectsCompletionMessage: true,
         // Keep delivery outcome truthful for cron state: if outbound send fails,
         // announce flow must report false so caller can apply best-effort policy.
         bestEffortDeliver: false,
@@ -322,31 +326,39 @@ export async function dispatchCronDelivery(
       if (didAnnounce) {
         delivered = true;
       } else {
+        // Announce delivery failed but the agent execution itself succeeded.
+        // Return ok so the job isn't penalized for a transient delivery issue
+        // (e.g. "pairing required" when no active client session exists).
+        // Delivery failure is tracked separately via delivered/deliveryAttempted.
         const message = "cron announce delivery failed";
+        logWarn(`[cron:${params.job.id}] ${message}`);
         if (!params.deliveryBestEffort) {
           return params.withRunSession({
-            status: "error",
+            status: "ok",
             summary,
             outputText,
             error: message,
+            delivered: false,
             deliveryAttempted,
             ...params.telemetry,
           });
         }
-        logWarn(`[cron:${params.job.id}] ${message}`);
       }
     } catch (err) {
+      // Same as above: announce delivery errors should not mark a successful
+      // agent execution as failed.
+      logWarn(`[cron:${params.job.id}] ${String(err)}`);
       if (!params.deliveryBestEffort) {
         return params.withRunSession({
-          status: "error",
+          status: "ok",
           summary,
           outputText,
           error: String(err),
+          delivered: false,
           deliveryAttempted,
           ...params.telemetry,
         });
       }
-      logWarn(`[cron:${params.job.id}] ${String(err)}`);
     }
     return null;
   };
