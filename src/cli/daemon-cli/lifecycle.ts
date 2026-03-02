@@ -83,46 +83,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   const restartWaitMs = POST_RESTART_HEALTH_ATTEMPTS * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
 
-  // Optional: write a restart sentinel so the gateway can announce restart completion
-  // back to the configured main session after it comes back up.
-  if (opts.notify) {
-    const mainSessionKey = resolveMainSessionKeyFromConfig();
-    const { deliveryContext, threadId } = extractDeliveryInfo(mainSessionKey);
-
-    const hasRoute = Boolean(deliveryContext?.channel && deliveryContext?.to);
-    if (!hasRoute) {
-      if (!json) {
-        defaultRuntime.log(
-          theme.warn(
-            `--notify requested but main session (${mainSessionKey}) has no delivery target; skipping post-restart notification.`,
-          ),
-        );
-      }
-    } else {
-      const note = typeof opts.note === "string" && opts.note.trim() ? opts.note.trim() : null;
-      const payload: RestartSentinelPayload = {
-        kind: "restart",
-        status: "ok",
-        ts: Date.now(),
-        sessionKey: mainSessionKey,
-        deliveryContext,
-        threadId,
-        message: note,
-        doctorHint: formatDoctorNonInteractiveHint(),
-        stats: {
-          mode: "gateway.restart",
-          reason: note ?? "cli --notify",
-        },
-      };
-      try {
-        await writeRestartSentinel(payload);
-      } catch {
-        // best-effort
-      }
-    }
-  }
-
-  return await runServiceRestart({
+  const restarted = await runServiceRestart({
     serviceNoun: "Gateway",
     service,
     renderStartHints: renderGatewayServiceStartHints,
@@ -186,4 +147,43 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       ]);
     },
   });
+
+  if (opts.notify && restarted) {
+    const mainSessionKey = resolveMainSessionKeyFromConfig();
+    const { deliveryContext, threadId } = extractDeliveryInfo(mainSessionKey);
+
+    const hasRoute = Boolean(deliveryContext?.channel && deliveryContext?.to);
+    if (!hasRoute) {
+      if (!json) {
+        defaultRuntime.log(
+          theme.warn(
+            `--notify requested but main session (${mainSessionKey}) has no delivery target; skipping post-restart notification.`,
+          ),
+        );
+      }
+    } else {
+      const note = typeof opts.note === "string" && opts.note.trim() ? opts.note.trim() : undefined;
+      const payload: RestartSentinelPayload = {
+        kind: "restart",
+        status: "ok",
+        ts: Date.now(),
+        sessionKey: mainSessionKey,
+        deliveryContext,
+        threadId,
+        message: note,
+        doctorHint: formatDoctorNonInteractiveHint(),
+        stats: {
+          mode: "gateway.restart",
+          reason: note ?? "cli --notify",
+        },
+      };
+      try {
+        await writeRestartSentinel(payload);
+      } catch {
+        // best-effort
+      }
+    }
+  }
+
+  return restarted;
 }
