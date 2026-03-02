@@ -28,12 +28,6 @@ function resolveExecutables(command) {
     if (process.env.OPENCLAW_PNPM_CMD) {
       executables.push(process.env.OPENCLAW_PNPM_CMD);
     }
-    if (process.env.APPDATA) {
-      executables.push(path.join(process.env.APPDATA, "npm", "pnpm.cmd"));
-    }
-    if (process.env.USERPROFILE) {
-      executables.push(path.join(process.env.USERPROFILE, "AppData", "Roaming", "npm", "pnpm.cmd"));
-    }
     executables.push("pnpm.cmd", "pnpm");
     return executables;
   }
