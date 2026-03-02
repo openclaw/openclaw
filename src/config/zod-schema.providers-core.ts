@@ -508,12 +508,23 @@ export const DiscordAccountSchema = z
       .optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    ackReactionScope: z
+      .enum(["group-mentions", "group-all", "direct", "all", "off", "none"])
+      .optional(),
     activity: z.string().optional(),
     status: z.enum(["online", "dnd", "idle", "invisible"]).optional(),
     activityType: z
       .union([z.literal(0), z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)])
       .optional(),
     activityUrl: z.string().url().optional(),
+    eventQueue: z
+      .object({
+        listenerTimeout: z.number().int().positive().optional(),
+        maxQueueSize: z.number().int().positive().optional(),
+        maxConcurrency: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

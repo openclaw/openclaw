@@ -5,13 +5,14 @@ import {
 } from "../../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 
-export const WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY: SsrFPolicy = {
+const WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY: SsrFPolicy = {
   dangerouslyAllowPrivateNetwork: true,
 };
 
 type WebToolGuardedFetchOptions = Omit<GuardedFetchOptions, "proxy"> & {
   timeoutSeconds?: number;
 };
+type WebToolEndpointFetchOptions = Omit<WebToolGuardedFetchOptions, "policy">;
 
 function resolveTimeoutMs(params: {
   timeoutMs?: number;
@@ -37,7 +38,7 @@ export async function fetchWithWebToolsNetworkGuard(
   });
 }
 
-export async function withWebToolsNetworkGuard<T>(
+async function withWebToolsNetworkGuard<T>(
   params: WebToolGuardedFetchOptions,
   run: (result: { response: Response; finalUrl: string }) => Promise<T>,
 ): Promise<T> {
@@ -47,4 +48,24 @@ export async function withWebToolsNetworkGuard<T>(
   } finally {
     await release();
   }
+}
+
+export async function withTrustedWebToolsEndpoint<T>(
+  params: WebToolEndpointFetchOptions,
+  run: (result: { response: Response; finalUrl: string }) => Promise<T>,
+): Promise<T> {
+  return await withWebToolsNetworkGuard(
+    {
+      ...params,
+      policy: WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY,
+    },
+    run,
+  );
+}
+
+export async function withStrictWebToolsEndpoint<T>(
+  params: WebToolEndpointFetchOptions,
+  run: (result: { response: Response; finalUrl: string }) => Promise<T>,
+): Promise<T> {
+  return await withWebToolsNetworkGuard(params, run);
 }

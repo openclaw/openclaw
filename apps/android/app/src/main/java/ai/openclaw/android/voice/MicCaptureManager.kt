@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -38,9 +39,16 @@ data class VoiceConversationEntry(
 class MicCaptureManager(
   private val context: Context,
   private val scope: CoroutineScope,
-  private val sendToGateway: suspend (String) -> String?,
+  /**
+   * Send [message] to the gateway and return the run ID.
+   * [onRunIdKnown] is called with the idempotency key *before* the network
+   * round-trip so [pendingRunId] is set before any chat events can arrive.
+   */
+  private val sendToGateway: suspend (message: String, onRunIdKnown: (String) -> Unit) -> String?,
+  private val speakAssistantReply: suspend (String) -> Unit = {},
 ) {
   companion object {
+    private const val tag = "MicCapture"
     private const val speechMinSessionMs = 30_000L
     private const val speechCompleteSilenceMs = 1_500L
     private const val speechPossibleSilenceMs = 900L
@@ -48,15 +56,14 @@ class MicCaptureManager(
     private const val pendingRunTimeoutMs = 45_000L
   }
 
-  private data class QueuedUtterance(
-    val text: String,
-  )
-
   private val mainHandler = Handler(Looper.getMainLooper())
   private val json = Json { ignoreUnknownKeys = true }
 
   private val _micEnabled = MutableStateFlow(false)
   val micEnabled: StateFlow<Boolean> = _micEnabled
+
+  private val _micCooldown = MutableStateFlow(false)
+  val micCooldown: StateFlow<Boolean> = _micCooldown
 
   private val _isListening = MutableStateFlow(false)
   val isListening: StateFlow<Boolean> = _isListening
@@ -79,7 +86,7 @@ class MicCaptureManager(
   private val _isSending = MutableStateFlow(false)
   val isSending: StateFlow<Boolean> = _isSending
 
-  private val messageQueue = ArrayDeque<QueuedUtterance>()
+  private val messageQueue = ArrayDeque<String>()
   private val sessionSegments = mutableListOf<String>()
   private var lastFinalSegment: String? = null
   private var pendingRunId: String? = null
@@ -88,6 +95,7 @@ class MicCaptureManager(
 
   private var recognizer: SpeechRecognizer? = null
   private var restartJob: Job? = null
+  private var drainJob: Job? = null
   private var pendingRunTimeoutJob: Job? = null
   private var stopRequested = false
 
@@ -98,9 +106,23 @@ class MicCaptureManager(
       start()
       sendQueuedIfIdle()
     } else {
-      stop()
-      flushSessionToQueue()
-      sendQueuedIfIdle()
+      // Give the recognizer time to finish processing buffered audio.
+      // Cancel any prior drain to prevent duplicate sends on rapid toggle.
+      drainJob?.cancel()
+      _micCooldown.value = true
+      drainJob = scope.launch {
+        delay(2000L)
+        stop()
+        // Capture any partial transcript that didn't get a final result from the recognizer
+        val partial = _liveTranscript.value?.trim().orEmpty()
+        if (partial.isNotEmpty() && sessionSegments.isEmpty()) {
+          sessionSegments.add(partial)
+        }
+        flushSessionToQueue()
+        drainJob = null
+        _micCooldown.value = false
+        sendQueuedIfIdle()
+      }
     }
   }
 
@@ -125,9 +147,9 @@ class MicCaptureManager(
         null
       } ?: return
 
-    val runId = pendingRunId ?: return
+    val runId = pendingRunId ?: run { Log.d("MicCapture", "no pendingRunId — drop"); return }
     val eventRunId = payload["runId"].asStringOrNull() ?: return
-    if (eventRunId != runId) return
+    if (eventRunId != runId) { Log.d("MicCapture", "runId mismatch: event=$eventRunId pending=$runId"); return }
 
     when (payload["state"].asStringOrNull()) {
       "delta" -> {
@@ -140,6 +162,7 @@ class MicCaptureManager(
         val finalText = parseAssistantText(payload)?.trim().orEmpty()
         if (finalText.isNotEmpty()) {
           upsertPendingAssistant(text = finalText, isStreaming = false)
+          playAssistantReplyAsync(finalText)
         } else if (pendingAssistantEntryId != null) {
           updateConversationEntry(pendingAssistantEntryId!!, text = null, isStreaming = false)
         }
@@ -241,7 +264,11 @@ class MicCaptureManager(
   }
 
   private fun flushSessionToQueue() {
-    val message = sessionSegments.joinToString(" ").trim()
+    // Add sentence-ending punctuation between recognizer segments to avoid run-on text
+    val message = sessionSegments.joinToString(". ") { segment ->
+      val trimmed = segment.trimEnd()
+      if (trimmed.isNotEmpty() && trimmed.last() in ".!?,;:") trimmed else trimmed
+    }.trim().let { if (it.isNotEmpty() && it.last() !in ".!?") "$it." else it }
     sessionSegments.clear()
     _liveTranscript.value = null
     lastFinalSegment = null
@@ -251,12 +278,12 @@ class MicCaptureManager(
       role = VoiceConversationRole.User,
       text = message,
     )
-    messageQueue.addLast(QueuedUtterance(text = message))
+    messageQueue.addLast(message)
     publishQueue()
   }
 
   private fun publishQueue() {
-    _queuedMessages.value = messageQueue.map { it.text }
+    _queuedMessages.value = messageQueue.toList()
   }
 
   private fun sendQueuedIfIdle() {
@@ -282,8 +309,13 @@ class MicCaptureManager(
 
     scope.launch {
       try {
-        val runId = sendToGateway(next.text)
-        pendingRunId = runId
+        val runId = sendToGateway(next) { earlyRunId ->
+          // Called with the idempotency key before chat.send fires so that
+          // pendingRunId is populated before any chat events can arrive.
+          pendingRunId = earlyRunId
+        }
+        // Update to the real runId if the gateway returned a different one.
+        if (runId != null && runId != pendingRunId) pendingRunId = runId
         if (runId == null) {
           pendingRunTimeoutJob?.cancel()
           pendingRunTimeoutJob = null
@@ -361,15 +393,21 @@ class MicCaptureManager(
 
   private fun updateConversationEntry(id: String, text: String?, isStreaming: Boolean) {
     val current = _conversation.value
-    _conversation.value =
-      current.map { entry ->
-        if (entry.id == id) {
-          val updatedText = text ?: entry.text
-          entry.copy(text = updatedText, isStreaming = isStreaming)
-        } else {
-          entry
-        }
+    if (current.isEmpty()) return
+
+    val targetIndex =
+      when {
+        current[current.lastIndex].id == id -> current.lastIndex
+        else -> current.indexOfFirst { it.id == id }
       }
+    if (targetIndex < 0) return
+
+    val entry = current[targetIndex]
+    val updatedText = text ?: entry.text
+    if (updatedText == entry.text && entry.isStreaming == isStreaming) return
+    val updated = current.toMutableList()
+    updated[targetIndex] = entry.copy(text = updatedText, isStreaming = isStreaming)
+    _conversation.value = updated
   }
 
   private fun upsertPendingAssistant(text: String, isStreaming: Boolean) {
@@ -384,6 +422,18 @@ class MicCaptureManager(
       return
     }
     updateConversationEntry(id = currentId, text = text, isStreaming = isStreaming)
+  }
+
+  private fun playAssistantReplyAsync(text: String) {
+    val spoken = text.trim()
+    if (spoken.isEmpty()) return
+    scope.launch {
+      try {
+        speakAssistantReply(spoken)
+      } catch (err: Throwable) {
+        Log.w(tag, "assistant speech failed: ${err.message ?: err::class.simpleName}")
+      }
+    }
   }
 
   private fun onFinalTranscript(text: String) {
@@ -499,8 +549,8 @@ class MicCaptureManager(
         val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty().firstOrNull()
         if (!text.isNullOrBlank()) {
           onFinalTranscript(text)
-          flushSessionToQueue()
-          sendQueuedIfIdle()
+          // Don't auto-send on silence — accumulate transcript.
+          // Send happens when mic is toggled off (setMicEnabled(false)).
         }
         scheduleRestart()
       }
