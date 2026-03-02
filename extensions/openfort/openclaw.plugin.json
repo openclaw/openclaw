@@ -1,0 +1,33 @@
+{
+  "id": "openfort",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "secretKey": {
+        "type": "string",
+        "description": "Openfort API secret key (sk_live_... or sk_test_...)"
+      },
+      "walletSecret": {
+        "type": "string",
+        "description": "Openfort wallet secret (ws_...)"
+      },
+      "network": {
+        "type": "string",
+        "enum": ["base", "base-sepolia"],
+        "default": "base-sepolia",
+        "description": "Network to use for wallet operations (EVM only)"
+      },
+      "usdcContractId": {
+        "type": "string",
+        "description": "Optional: Openfort USDC contract ID from dashboard (con_...) - auto-created if not provided"
+      },
+      "enableFeeSponsorship": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable fee sponsorship with USDC gas payment (default: true)"
+      }
+    },
+    "required": ["secretKey", "walletSecret"]
+  }
+}

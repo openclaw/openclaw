@@ -1,0 +1,25 @@
+{
+  "name": "@openclaw/openfort",
+  "version": "2026.2.28",
+  "description": "OpenClaw Openfort backend wallet integration",
+  "type": "module",
+  "main": "index.ts",
+  "dependencies": {
+    "@openfort/openfort-node": "^0.9.2",
+    "@sinclair/typebox": "^0.34.29",
+    "viem": "^2.21.54"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/openfort",
+      "localPath": "extensions/openfort",
+      "defaultChoice": "local"
+    }
+  }
+}

@@ -228,6 +228,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/memory-lancedb/**"
+"extensions: openfort":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/openfort/**"
 "extensions: open-prose":
   - changed-files:
       - any-glob-to-any-file:
