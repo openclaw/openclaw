@@ -33,6 +33,12 @@ Sandboxing details: [Sandboxing](/gateway/sandboxing)
 
 ### Quick start (recommended)
 
+<Note>
+Docker defaults here assume bind modes (`lan`/`loopback`), not host aliases. Use bind
+mode values in `gateway.bind` (for example `lan` or `loopback`), not host aliases like
+`0.0.0.0` or `localhost`.
+</Note>
+
 From repo root:
 
 ```bash
@@ -415,6 +421,10 @@ pnpm test:docker:qr
 
 The setup script also pins `gateway.mode=local` after onboarding so Docker CLI
 commands default to local loopback targeting.
+
+Legacy config note: use bind mode values in `gateway.bind` (`lan` / `loopback` /
+`custom` / `tailnet` / `auto`), not host aliases (`0.0.0.0`, `127.0.0.1`,
+`localhost`, `::`, `::1`).
 
 If you see `Gateway target: ws://172.x.x.x:18789` or repeated `pairing required`
 errors from Docker CLI commands, run:
