@@ -6,6 +6,7 @@ import type {
   SupportedLanguages,
 } from "@pierre/diffs";
 import type { DiffViewerPayload, DiffLayout, DiffTheme } from "./types.js";
+import { parseViewerPayloadJson } from "./viewer-payload.js";
 
 type ViewerState = {
   theme: DiffTheme;
@@ -33,18 +34,25 @@ function parsePayload(element: HTMLScriptElement): DiffViewerPayload {
   if (!raw) {
     throw new Error("Diff payload was empty.");
   }
-  return JSON.parse(raw) as DiffViewerPayload;
+  return parseViewerPayloadJson(raw);
 }
 
 function getCards(): Array<{ host: HTMLElement; payload: DiffViewerPayload }> {
-  return [...document.querySelectorAll<HTMLElement>(".oc-diff-card")].flatMap((card) => {
+  const cards: Array<{ host: HTMLElement; payload: DiffViewerPayload }> = [];
+  for (const card of document.querySelectorAll<HTMLElement>(".oc-diff-card")) {
     const host = card.querySelector<HTMLElement>("[data-openclaw-diff-host]");
     const payloadNode = card.querySelector<HTMLScriptElement>("[data-openclaw-diff-payload]");
     if (!host || !payloadNode) {
-      return [];
+      continue;
     }
-    return [{ host, payload: parsePayload(payloadNode) }];
-  });
+
+    try {
+      cards.push({ host, payload: parsePayload(payloadNode) });
+    } catch (error) {
+      console.warn("Skipping invalid diff payload", error);
+    }
+  }
+  return cards;
 }
 
 function ensureShadowRoot(host: HTMLElement): void {
@@ -249,8 +257,10 @@ function createRenderOptions(payload: DiffViewerPayload): FileDiffOptions<undefi
     theme: payload.options.theme,
     themeType: viewerState.theme,
     diffStyle: viewerState.layout,
+    diffIndicators: payload.options.diffIndicators,
     expandUnchanged: payload.options.expandUnchanged,
     overflow: viewerState.wrapEnabled ? "wrap" : "scroll",
+    disableLineNumbers: payload.options.disableLineNumbers,
     disableBackground: !viewerState.backgroundEnabled,
     unsafeCSS: payload.options.unsafeCSS,
     renderHeaderMetadata: () => createToolbar(),
