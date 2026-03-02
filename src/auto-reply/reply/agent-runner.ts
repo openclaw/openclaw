@@ -92,8 +92,10 @@ async function hasSessionRelatedCronJobs(params: {
     if (params.sessionKey) {
       return store.jobs.some((job) => job.enabled && job.sessionKey === params.sessionKey);
     }
-    // Fallback: any enabled cron job counts.
-    return store.jobs.some((job) => job.enabled);
+    // No session key available — cannot scope the check, so do not suppress
+    // the note.  Broadening to all enabled jobs could silently swallow the
+    // guard note due to unrelated sessions.
+    return false;
   } catch {
     // If we cannot read the cron store, do not suppress the note.
     return false;
