@@ -596,18 +596,25 @@
   margin-top: 16px;
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(340px, 0.8fr);
+  grid-template-rows: 1fr;
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
+  height: calc(100vh - 200px);
+  min-height: 400px;
+  max-height: calc(100dvh - 180px);
 }
 
 .cron-workspace-main {
   display: grid;
   gap: 16px;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
 }
 
 .cron-workspace-form {
-  position: sticky;
-  top: 74px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .cron-form {
@@ -919,10 +926,10 @@
 
   .cron-workspace {
     grid-template-columns: 1fr;
+    grid-template-rows: 1fr 1fr;
   }
 
   .cron-workspace-form {
-    position: static;
     order: -1;
   }
 
