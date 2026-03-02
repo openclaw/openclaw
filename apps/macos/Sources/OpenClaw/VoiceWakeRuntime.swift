@@ -312,10 +312,12 @@ actor VoiceWakeRuntime {
                     self.committedTranscript = trimmed
                     self.volatileTranscript = ""
                 } else {
-                    self.volatileTranscript = Self.delta(after: self.committedTranscript, current: trimmed)
+                    self.volatileTranscript = VoiceOverlayTextFormatting.delta(
+                        after: self.committedTranscript,
+                        current: trimmed)
                 }
 
-                let attributed = Self.makeAttributed(
+                let attributed = VoiceOverlayTextFormatting.makeAttributed(
                     committed: self.committedTranscript,
                     volatile: self.volatileTranscript,
                     isFinal: update.isFinal)
@@ -337,10 +339,11 @@ actor VoiceWakeRuntime {
         var usedFallback = false
         var match = WakeWordGate.match(transcript: transcript, segments: update.segments, config: gateConfig)
         if match == nil, update.isFinal {
-            match = self.textOnlyFallbackMatch(
+            match = VoiceWakeRecognitionDebugSupport.textOnlyFallbackMatch(
                 transcript: transcript,
                 triggers: config.triggers,
-                config: gateConfig)
+                config: gateConfig,
+                trimWake: Self.trimmedAfterTrigger)
             usedFallback = match != nil
         }
         self.maybeLogRecognition(
@@ -387,22 +390,19 @@ actor VoiceWakeRuntime {
         usedFallback: Bool,
         capturing: Bool)
     {
-        guard !transcript.isEmpty else { return }
-        let level = self.logger.logLevel
-        guard level == .debug || level == .trace else { return }
-        if transcript == self.lastLoggedText, !isFinal {
-            if let last = self.lastLoggedAt, Date().timeIntervalSince(last) < 0.25 {
-                return
-            }
-        }
-        self.lastLoggedText = transcript
-        self.lastLoggedAt = Date()
+        guard VoiceWakeRecognitionDebugSupport.shouldLogTranscript(
+            transcript: transcript,
+            isFinal: isFinal,
+            loggerLevel: self.logger.logLevel,
+            lastLoggedText: &self.lastLoggedText,
+            lastLoggedAt: &self.lastLoggedAt)
+        else { return }
 
-        let textOnly = WakeWordGate.matchesTextOnly(text: transcript, triggers: triggers)
-        let timingCount = segments.count(where: { $0.start > 0 || $0.duration > 0 })
-        let matchSummary = match.map {
-            "match=true gap=\(String(format: "%.2f", $0.postGap))s cmdLen=\($0.command.count)"
-        } ?? "match=false"
+        let summary = VoiceWakeRecognitionDebugSupport.transcriptSummary(
+            transcript: transcript,
+            triggers: triggers,
+            segments: segments)
+        let matchSummary = VoiceWakeRecognitionDebugSupport.matchSummary(match)
         let segmentSummary = segments.map { seg in
             let start = String(format: "%.2f", seg.start)
             let end = String(format: "%.2f", seg.end)
@@ -410,8 +410,8 @@ actor VoiceWakeRuntime {
         }.joined(separator: ", ")
 
         self.logger.debug(
-            "voicewake runtime transcript='\(transcript, privacy: .private)' textOnly=\(textOnly) " +
-                "isFinal=\(isFinal) timing=\(timingCount)/\(segments.count) " +
+            "voicewake runtime transcript='\(transcript, privacy: .private)' textOnly=\(summary.textOnly) " +
+                "isFinal=\(isFinal) timing=\(summary.timingCount)/\(segments.count) " +
                 "capturing=\(capturing) fallback=\(usedFallback) " +
                 "\(matchSummary) segments=[\(segmentSummary, privacy: .private)]")
     }
@@ -495,20 +495,6 @@ actor VoiceWakeRuntime {
         await self.beginCapture(command: "", triggerEndTime: nil, config: config)
     }
 
-    private func textOnlyFallbackMatch(
-        transcript: String,
-        triggers: [String],
-        config: WakeWordGateConfig) -> WakeWordGateMatch?
-    {
-        guard let command = VoiceWakeTextUtils.textOnlyCommand(
-            transcript: transcript,
-            triggers: triggers,
-            minCommandLength: config.minCommandLength,
-            trimWake: Self.trimmedAfterTrigger)
-        else { return nil }
-        return WakeWordGateMatch(triggerEndTime: 0, postGap: 0, command: command)
-    }
-
     private func isTriggerOnly(transcript: String, triggers: [String]) -> Bool {
         guard WakeWordGate.matchesTextOnly(text: transcript, triggers: triggers) else { return false }
         guard VoiceWakeTextUtils.startsWithTrigger(transcript: transcript, triggers: triggers) else { return false }
@@ -526,10 +512,11 @@ actor VoiceWakeRuntime {
         guard !self.isCapturing else { return }
         guard let lastSeenAt, let lastText else { return }
         guard self.lastTranscriptAt == lastSeenAt, self.lastTranscript == lastText else { return }
-        guard let match = self.textOnlyFallbackMatch(
+        guard let match = VoiceWakeRecognitionDebugSupport.textOnlyFallbackMatch(
             transcript: lastText,
             triggers: triggers,
-            config: gateConfig)
+            config: gateConfig,
+            trimWake: Self.trimmedAfterTrigger)
         else { return }
         if let cooldown = self.cooldownUntil, Date() < cooldown {
             return
@@ -564,7 +551,7 @@ actor VoiceWakeRuntime {
         }
 
         let snapshot = self.committedTranscript + self.volatileTranscript
-        let attributed = Self.makeAttributed(
+        let attributed = VoiceOverlayTextFormatting.makeAttributed(
             committed: self.committedTranscript,
             volatile: self.volatileTranscript,
             isFinal: false)
@@ -781,33 +768,10 @@ actor VoiceWakeRuntime {
     }
 
     static func _testAttributedColor(isFinal: Bool) -> NSColor {
-        self.makeAttributed(committed: "sample", volatile: "", isFinal: isFinal)
+        VoiceOverlayTextFormatting.makeAttributed(committed: "sample", volatile: "", isFinal: isFinal)
             .attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor ?? .clear
     }
 
     #endif
 
-    private static func delta(after committed: String, current: String) -> String {
-        if current.hasPrefix(committed) {
-            let start = current.index(current.startIndex, offsetBy: committed.count)
-            return String(current[start...])
-        }
-        return current
-    }
-
-    private static func makeAttributed(committed: String, volatile: String, isFinal: Bool) -> NSAttributedString {
-        let full = NSMutableAttributedString()
-        let committedAttr: [NSAttributedString.Key: Any] = [
-            .foregroundColor: NSColor.labelColor,
-            .font: NSFont.systemFont(ofSize: 13, weight: .regular),
-        ]
-        full.append(NSAttributedString(string: committed, attributes: committedAttr))
-        let volatileColor: NSColor = isFinal ? .labelColor : NSColor.tertiaryLabelColor
-        let volatileAttr: [NSAttributedString.Key: Any] = [
-            .foregroundColor: volatileColor,
-            .font: NSFont.systemFont(ofSize: 13, weight: .regular),
-        ]
-        full.append(NSAttributedString(string: volatile, attributes: volatileAttr))
-        return full
-    }
 }

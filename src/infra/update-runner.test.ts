@@ -182,6 +182,39 @@ describe("runGatewayUpdate", () => {
     );
   }
 
+  function createGlobalNpmUpdateRunner(params: {
+    pkgRoot: string;
+    nodeModules: string;
+    onBaseInstall?: () => Promise<CommandResult>;
+    onOmitOptionalInstall?: () => Promise<CommandResult>;
+  }) {
+    const baseInstallKey = "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error";
+    const omitOptionalInstallKey =
+      "npm i -g openclaw@latest --omit=optional --no-fund --no-audit --loglevel=error";
+
+    return async (argv: string[]): Promise<CommandResult> => {
+      const key = argv.join(" ");
+      if (key === `git -C ${params.pkgRoot} rev-parse --show-toplevel`) {
+        return { stdout: "", stderr: "not a git repository", code: 128 };
+      }
+      if (key === "npm root -g") {
+        return { stdout: params.nodeModules, stderr: "", code: 0 };
+      }
+      if (key === "pnpm root -g") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (key === baseInstallKey) {
+        return (await params.onBaseInstall?.()) ?? { stdout: "ok", stderr: "", code: 0 };
+      }
+      if (key === omitOptionalInstallKey) {
+        return (
+          (await params.onOmitOptionalInstall?.()) ?? { stdout: "", stderr: "not found", code: 1 }
+        );
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+  }
+
   it("skips git update when worktree is dirty", async () => {
     await setupGitCheckout();
     const { runner, calls } = createRunner({
@@ -392,23 +425,14 @@ describe("runGatewayUpdate", () => {
     await seedGlobalPackageRoot(pkgRoot);
 
     let stalePresentAtInstall = true;
-    const runCommand = async (argv: string[]) => {
-      const key = argv.join(" ");
-      if (key === `git -C ${pkgRoot} rev-parse --show-toplevel`) {
-        return { stdout: "", stderr: "not a git repository", code: 128 };
-      }
-      if (key === "npm root -g") {
-        return { stdout: nodeModules, stderr: "", code: 0 };
-      }
-      if (key === "pnpm root -g") {
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      if (key === "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error") {
+    const runCommand = createGlobalNpmUpdateRunner({
+      nodeModules,
+      pkgRoot,
+      onBaseInstall: async () => {
         stalePresentAtInstall = await pathExists(staleDir);
         return { stdout: "ok", stderr: "", code: 0 };
-      }
-      return { stdout: "", stderr: "", code: 0 };
-    };
+      },
+    });
 
     const result = await runWithCommand(runCommand, { cwd: pkgRoot });
 
@@ -423,33 +447,22 @@ describe("runGatewayUpdate", () => {
     await seedGlobalPackageRoot(pkgRoot);
 
     let firstAttempt = true;
-    const runCommand = async (argv: string[]) => {
-      const key = argv.join(" ");
-      if (key === `git -C ${pkgRoot} rev-parse --show-toplevel`) {
-        return { stdout: "", stderr: "not a git repository", code: 128 };
-      }
-      if (key === "npm root -g") {
-        return { stdout: nodeModules, stderr: "", code: 0 };
-      }
-      if (key === "pnpm root -g") {
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      if (key === "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error") {
+    const runCommand = createGlobalNpmUpdateRunner({
+      nodeModules,
+      pkgRoot,
+      onBaseInstall: async () => {
         firstAttempt = false;
         return { stdout: "", stderr: "node-gyp failed", code: 1 };
-      }
-      if (
-        key === "npm i -g openclaw@latest --omit=optional --no-fund --no-audit --loglevel=error"
-      ) {
+      },
+      onOmitOptionalInstall: async () => {
         await fs.writeFile(
           path.join(pkgRoot, "package.json"),
           JSON.stringify({ name: "openclaw", version: "2.0.0" }),
           "utf-8",
         );
         return { stdout: "ok", stderr: "", code: 0 };
-      }
-      return { stdout: "", stderr: "", code: 0 };
-    };
+      },
+    });
 
     const result = await runWithCommand(runCommand, { cwd: pkgRoot });
 

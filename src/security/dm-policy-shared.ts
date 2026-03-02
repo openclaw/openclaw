@@ -50,6 +50,17 @@ export const DM_GROUP_ACCESS_REASON = {
 export type DmGroupAccessReasonCode =
   (typeof DM_GROUP_ACCESS_REASON)[keyof typeof DM_GROUP_ACCESS_REASON];
 
+type DmGroupAccessInputParams = {
+  isGroup: boolean;
+  dmPolicy?: string | null;
+  groupPolicy?: string | null;
+  allowFrom?: Array<string | number> | null;
+  groupAllowFrom?: Array<string | number> | null;
+  storeAllowFrom?: Array<string | number> | null;
+  groupAllowFromFallbackToAllowFrom?: boolean | null;
+  isSenderAllowed: (allowFrom: string[]) => boolean;
+};
+
 export async function readStoreAllowFromForDmPolicy(params: {
   provider: ChannelId;
   accountId: string;
@@ -150,16 +161,7 @@ export function resolveDmGroupAccessDecision(params: {
   };
 }
 
-export function resolveDmGroupAccessWithLists(params: {
-  isGroup: boolean;
-  dmPolicy?: string | null;
-  groupPolicy?: string | null;
-  allowFrom?: Array<string | number> | null;
-  groupAllowFrom?: Array<string | number> | null;
-  storeAllowFrom?: Array<string | number> | null;
-  groupAllowFromFallbackToAllowFrom?: boolean | null;
-  isSenderAllowed: (allowFrom: string[]) => boolean;
-}): {
+export function resolveDmGroupAccessWithLists(params: DmGroupAccessInputParams): {
   decision: DmGroupAccessDecision;
   reasonCode: DmGroupAccessReasonCode;
   reason: string;
@@ -188,21 +190,15 @@ export function resolveDmGroupAccessWithLists(params: {
   };
 }
 
-export function resolveDmGroupAccessWithCommandGate(params: {
-  isGroup: boolean;
-  dmPolicy?: string | null;
-  groupPolicy?: string | null;
-  allowFrom?: Array<string | number> | null;
-  groupAllowFrom?: Array<string | number> | null;
-  storeAllowFrom?: Array<string | number> | null;
-  groupAllowFromFallbackToAllowFrom?: boolean | null;
-  isSenderAllowed: (allowFrom: string[]) => boolean;
-  command?: {
-    useAccessGroups: boolean;
-    allowTextCommands: boolean;
-    hasControlCommand: boolean;
-  };
-}): {
+export function resolveDmGroupAccessWithCommandGate(
+  params: DmGroupAccessInputParams & {
+    command?: {
+      useAccessGroups: boolean;
+      allowTextCommands: boolean;
+      hasControlCommand: boolean;
+    };
+  },
+): {
   decision: DmGroupAccessDecision;
   reason: string;
   effectiveAllowFrom: string[];

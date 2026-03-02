@@ -40,6 +40,30 @@ export type DeleteProfileResult = {
 
 const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
 
+const cdpPortRange = (resolved: {
+  controlPort: number;
+  cdpPortRangeStart?: number;
+  cdpPortRangeEnd?: number;
+}): { start: number; end: number } => {
+  const start = resolved.cdpPortRangeStart;
+  const end = resolved.cdpPortRangeEnd;
+  if (
+    typeof start === "number" &&
+    Number.isFinite(start) &&
+    Number.isInteger(start) &&
+    typeof end === "number" &&
+    Number.isFinite(end) &&
+    Number.isInteger(end) &&
+    start > 0 &&
+    end >= start &&
+    end <= 65535
+  ) {
+    return { start, end };
+  }
+
+  return deriveDefaultBrowserCdpPortRange(resolved.controlPort);
+};
+
 export function createBrowserProfilesService(ctx: BrowserRouteContext) {
   const listProfiles = async (): Promise<ProfileStatus[]> => {
     return await ctx.listProfiles();
@@ -80,7 +104,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       };
     } else {
       const usedPorts = getUsedPorts(resolvedProfiles);
-      const range = deriveDefaultBrowserCdpPortRange(state.resolved.controlPort);
+      const range = cdpPortRange(state.resolved);
       const cdpPort = allocateCdpPort(usedPorts, range);
       if (cdpPort === null) {
         throw new Error("no available CDP ports in range");

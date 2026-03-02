@@ -174,7 +174,7 @@ async function sendSystemRunDenied(
 }
 
 export { formatSystemRunAllowlistMissMessage } from "./exec-policy.js";
-export { buildSystemRunApprovalPlanV2 } from "./invoke-system-run-plan.js";
+export { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 
 async function parseSystemRunPhase(
   opts: HandleSystemRunInvokeOptions,

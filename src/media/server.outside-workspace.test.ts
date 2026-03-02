@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  openFileWithinRoot: vi.fn(),
+  readFileWithinRoot: vi.fn(),
   cleanOldMedia: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -15,7 +15,7 @@ vi.mock("../infra/fs-safe.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/fs-safe.js")>();
   return {
     ...actual,
-    openFileWithinRoot: mocks.openFileWithinRoot,
+    readFileWithinRoot: mocks.readFileWithinRoot,
   };
 });
 
@@ -48,7 +48,7 @@ describe("media server outside-workspace mapping", () => {
   });
 
   it("returns 400 with a specific outside-workspace message", async () => {
-    mocks.openFileWithinRoot.mockRejectedValueOnce(
+    mocks.readFileWithinRoot.mockRejectedValueOnce(
       new SafeOpenError("outside-workspace", "file is outside workspace root"),
     );
 

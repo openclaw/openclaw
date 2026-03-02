@@ -32,6 +32,7 @@ export const HeartbeatSchema = z
     prompt: z.string().optional(),
     ackMaxChars: z.number().int().nonnegative().optional(),
     suppressToolErrorWarnings: z.boolean().optional(),
+    lightContext: z.boolean().optional(),
   })
   .strict()
   .superRefine((val, ctx) => {
@@ -772,6 +773,21 @@ export const ToolsSchema = z
     sandbox: z
       .object({
         tools: ToolPolicySchema,
+      })
+      .strict()
+      .optional(),
+    sessions_spawn: z
+      .object({
+        attachments: z
+          .object({
+            enabled: z.boolean().optional(),
+            maxTotalBytes: z.number().optional(),
+            maxFiles: z.number().optional(),
+            maxFileBytes: z.number().optional(),
+            retainOnSessionKeep: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

@@ -89,7 +89,7 @@ The Gateway is the single source of truth for sessions, routing, and channel con
     Browser dashboard for chat, config, sessions, and nodes.
   </Card>
   <Card title="Mobile nodes" icon="smartphone">
-    Pair iOS and Android nodes with Canvas support.
+    Pair iOS and Android nodes for Canvas, camera/screen, and voice-enabled workflows.
   </Card>
 </Columns>
 
@@ -164,7 +164,7 @@ Example:
     Channel-specific setup for WhatsApp, Telegram, Discord, and more.
   </Card>
   <Card title="Nodes" href="/nodes" icon="smartphone">
-    iOS and Android nodes with pairing and Canvas.
+    iOS and Android nodes with pairing, Canvas, camera/screen, and device actions.
   </Card>
   <Card title="Help" href="/help" icon="life-buoy">
     Common fixes and troubleshooting entry point.
