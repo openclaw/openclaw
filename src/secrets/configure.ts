@@ -210,6 +210,31 @@ function assertNoCancel<T>(value: T | symbol, message: string): T {
   return value;
 }
 
+function validateEnvNameCsv(value: string): string | undefined {
+  const entries = parseCsv(value);
+  for (const entry of entries) {
+    if (!ENV_NAME_PATTERN.test(entry)) {
+      return `Invalid env name: ${entry}`;
+    }
+  }
+  return undefined;
+}
+
+async function promptEnvNameCsv(params: {
+  message: string;
+  initialValue: string;
+}): Promise<string[]> {
+  const raw = assertNoCancel(
+    await text({
+      message: params.message,
+      initialValue: params.initialValue,
+      validate: (value) => validateEnvNameCsv(String(value ?? "")),
+    }),
+    "Secrets configure cancelled.",
+  );
+  return parseCsv(String(raw ?? ""));
+}
+
 async function promptOptionalPositiveInt(params: {
   message: string;
   initialValue?: number;
@@ -275,23 +300,10 @@ async function promptProviderSource(initial?: SecretRefSource): Promise<SecretRe
 async function promptEnvProvider(
   base?: Extract<SecretProviderConfig, { source: "env" }>,
 ): Promise<Extract<SecretProviderConfig, { source: "env" }>> {
-  const allowlistRaw = assertNoCancel(
-    await text({
-      message: "Env allowlist (comma-separated, blank for unrestricted)",
-      initialValue: base?.allowlist?.join(",") ?? "",
-      validate: (value) => {
-        const entries = parseCsv(String(value ?? ""));
-        for (const entry of entries) {
-          if (!ENV_NAME_PATTERN.test(entry)) {
-            return `Invalid env name: ${entry}`;
-          }
-        }
-        return undefined;
-      },
-    }),
-    "Secrets configure cancelled.",
-  );
-  const allowlist = parseCsv(String(allowlistRaw ?? ""));
+  const allowlist = await promptEnvNameCsv({
+    message: "Env allowlist (comma-separated, blank for unrestricted)",
+    initialValue: base?.allowlist?.join(",") ?? "",
+  });
   return {
     source: "env",
     ...(allowlist.length > 0 ? { allowlist } : {}),
@@ -436,22 +448,10 @@ async function promptExecProvider(
     "Secrets configure cancelled.",
   );
 
-  const passEnvRaw = assertNoCancel(
-    await text({
-      message: "Pass-through env vars (comma-separated, blank for none)",
-      initialValue: base?.passEnv?.join(",") ?? "",
-      validate: (value) => {
-        const entries = parseCsv(String(value ?? ""));
-        for (const entry of entries) {
-          if (!ENV_NAME_PATTERN.test(entry)) {
-            return `Invalid env name: ${entry}`;
-          }
-        }
-        return undefined;
-      },
-    }),
-    "Secrets configure cancelled.",
-  );
+  const passEnv = await promptEnvNameCsv({
+    message: "Pass-through env vars (comma-separated, blank for none)",
+    initialValue: base?.passEnv?.join(",") ?? "",
+  });
 
   const trustedDirsRaw = assertNoCancel(
     await text({
@@ -486,7 +486,6 @@ async function promptExecProvider(
   );
 
   const args = await parseArgsInput(String(argsRaw ?? ""));
-  const passEnv = parseCsv(String(passEnvRaw ?? ""));
   const trustedDirs = parseCsv(String(trustedDirsRaw ?? ""));
 
   return {

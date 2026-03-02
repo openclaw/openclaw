@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./config.js";
 import { migrateLegacyConfig, validateConfigObject } from "./config.js";
+import { WHISPER_BASE_AUDIO_MODEL } from "./legacy-migrate.test-helpers.js";
 
 function getLegacyRouting(config: unknown) {
   return (config as { routing?: Record<string, unknown> } | undefined)?.routing;
@@ -137,17 +138,7 @@ describe("legacy config detection", () => {
       mode: "queue",
       cap: 3,
     });
-    expect(res.config?.tools?.media?.audio).toEqual({
-      enabled: true,
-      models: [
-        {
-          command: "whisper",
-          type: "cli",
-          args: ["--model", "base"],
-          timeoutSeconds: 2,
-        },
-      ],
-    });
+    expect(res.config?.tools?.media?.audio).toEqual(WHISPER_BASE_AUDIO_MODEL);
     expect(getLegacyRouting(res.config)).toBeUndefined();
   });
   it("migrates audio.transcription with custom script names", async () => {

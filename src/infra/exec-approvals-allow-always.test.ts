@@ -18,6 +18,49 @@ describe("resolveAllowAlwaysPatterns", () => {
     return exe;
   }
 
+  function expectAllowAlwaysBypassBlocked(params: {
+    dir: string;
+    firstCommand: string;
+    secondCommand: string;
+    env: Record<string, string | undefined>;
+    persistedPattern: string;
+  }) {
+    const safeBins = resolveSafeBins(undefined);
+    const first = evaluateShellAllowlist({
+      command: params.firstCommand,
+      allowlist: [],
+      safeBins,
+      cwd: params.dir,
+      env: params.env,
+      platform: process.platform,
+    });
+    const persisted = resolveAllowAlwaysPatterns({
+      segments: first.segments,
+      cwd: params.dir,
+      env: params.env,
+      platform: process.platform,
+    });
+    expect(persisted).toEqual([params.persistedPattern]);
+
+    const second = evaluateShellAllowlist({
+      command: params.secondCommand,
+      allowlist: [{ pattern: params.persistedPattern }],
+      safeBins,
+      cwd: params.dir,
+      env: params.env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(false);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: second.analysisOk,
+        allowlistSatisfied: second.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  }
+
   it("returns direct executable paths for non-shell segments", () => {
     const exe = path.join("/tmp", "openclaw-tool");
     const patterns = resolveAllowAlwaysPatterns({
@@ -233,42 +276,14 @@ describe("resolveAllowAlwaysPatterns", () => {
     const busybox = makeExecutable(dir, "busybox");
     const echo = makeExecutable(dir, "echo");
     makeExecutable(dir, "id");
-    const safeBins = resolveSafeBins(undefined);
     const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
-
-    const first = evaluateShellAllowlist({
-      command: `${busybox} sh -c 'echo warmup-ok'`,
-      allowlist: [],
-      safeBins,
-      cwd: dir,
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: `${busybox} sh -c 'echo warmup-ok'`,
+      secondCommand: `${busybox} sh -c 'id > marker'`,
       env,
-      platform: process.platform,
+      persistedPattern: echo,
     });
-    const persisted = resolveAllowAlwaysPatterns({
-      segments: first.segments,
-      cwd: dir,
-      env,
-      platform: process.platform,
-    });
-    expect(persisted).toEqual([echo]);
-
-    const second = evaluateShellAllowlist({
-      command: `${busybox} sh -c 'id > marker'`,
-      allowlist: [{ pattern: echo }],
-      safeBins,
-      cwd: dir,
-      env,
-      platform: process.platform,
-    });
-    expect(second.allowlistSatisfied).toBe(false);
-    expect(
-      requiresExecApproval({
-        ask: "on-miss",
-        security: "allowlist",
-        analysisOk: second.analysisOk,
-        allowlistSatisfied: second.allowlistSatisfied,
-      }),
-    ).toBe(true);
   });
 
   it("prevents allow-always bypass for dispatch-wrapper + shell-wrapper chains", () => {
@@ -278,41 +293,13 @@ describe("resolveAllowAlwaysPatterns", () => {
     const dir = makeTempDir();
     const echo = makeExecutable(dir, "echo");
     makeExecutable(dir, "id");
-    const safeBins = resolveSafeBins(undefined);
     const env = makePathEnv(dir);
-
-    const first = evaluateShellAllowlist({
-      command: "/usr/bin/nice /bin/zsh -lc 'echo warmup-ok'",
-      allowlist: [],
-      safeBins,
-      cwd: dir,
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "/usr/bin/nice /bin/zsh -lc 'echo warmup-ok'",
+      secondCommand: "/usr/bin/nice /bin/zsh -lc 'id > marker'",
       env,
-      platform: process.platform,
+      persistedPattern: echo,
     });
-    const persisted = resolveAllowAlwaysPatterns({
-      segments: first.segments,
-      cwd: dir,
-      env,
-      platform: process.platform,
-    });
-    expect(persisted).toEqual([echo]);
-
-    const second = evaluateShellAllowlist({
-      command: "/usr/bin/nice /bin/zsh -lc 'id > marker'",
-      allowlist: [{ pattern: echo }],
-      safeBins,
-      cwd: dir,
-      env,
-      platform: process.platform,
-    });
-    expect(second.allowlistSatisfied).toBe(false);
-    expect(
-      requiresExecApproval({
-        ask: "on-miss",
-        security: "allowlist",
-        analysisOk: second.analysisOk,
-        allowlistSatisfied: second.allowlistSatisfied,
-      }),
-    ).toBe(true);
   });
 });

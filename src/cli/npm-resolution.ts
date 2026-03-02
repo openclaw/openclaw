@@ -1,11 +1,7 @@
-export type NpmResolutionMetadata = {
-  name?: string;
-  version?: string;
-  resolvedSpec?: string;
-  integrity?: string;
-  shasum?: string;
-  resolvedAt?: string;
-};
+import {
+  buildNpmResolutionFields,
+  type NpmSpecResolution as NpmResolutionMetadata,
+} from "../infra/install-source-utils.js";
 
 export function resolvePinnedNpmSpec(params: {
   rawSpec: string;
@@ -36,14 +32,7 @@ export function mapNpmResolutionMetadata(resolution?: NpmResolutionMetadata): {
   shasum?: string;
   resolvedAt?: string;
 } {
-  return {
-    resolvedName: resolution?.name,
-    resolvedVersion: resolution?.version,
-    resolvedSpec: resolution?.resolvedSpec,
-    integrity: resolution?.integrity,
-    shasum: resolution?.shasum,
-    resolvedAt: resolution?.resolvedAt,
-  };
+  return buildNpmResolutionFields(resolution);
 }
 
 export function buildNpmInstallRecordFields(params: {
@@ -68,7 +57,7 @@ export function buildNpmInstallRecordFields(params: {
     spec: params.spec,
     installPath: params.installPath,
     version: params.version,
-    ...mapNpmResolutionMetadata(params.resolution),
+    ...buildNpmResolutionFields(params.resolution),
   };
 }
 

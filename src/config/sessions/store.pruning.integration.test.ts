@@ -37,6 +37,19 @@ function applyEnforcedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>
   });
 }
 
+function applyCappedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) {
+  mockLoadConfig.mockReturnValue({
+    session: {
+      maintenance: {
+        mode: "enforce",
+        pruneAfter: "365d",
+        maxEntries: 1,
+        rotateBytes: 10_485_760,
+      },
+    },
+  });
+}
+
 async function createCaseDir(prefix: string): Promise<string> {
   const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
   await fs.mkdir(dir, { recursive: true });
@@ -216,16 +229,7 @@ describe("Integration: saveSessionStore with pruning", () => {
   });
 
   it("archives transcript files for entries evicted by maxEntries capping", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "365d",
-          maxEntries: 1,
-          rotateBytes: 10_485_760,
-        },
-      },
-    });
+    applyCappedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
     const oldestSessionId = "oldest-session";
@@ -251,16 +255,7 @@ describe("Integration: saveSessionStore with pruning", () => {
   });
 
   it("does not archive external transcript paths when capping entries", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "365d",
-          maxEntries: 1,
-          rotateBytes: 10_485_760,
-        },
-      },
-    });
+    applyCappedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
     const externalDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-external-cap-"));

@@ -65,6 +65,18 @@ describe("cli program (nodes media)", () => {
     await program.parseAsync(argv, { from: "user" });
   }
 
+  async function expectCameraSnapParseFailure(args: string[], expectedError: RegExp) {
+    mockNodeGateway();
+
+    const parseProgram = new Command();
+    parseProgram.exitOverride();
+    registerNodesCli(parseProgram);
+    runtime.error.mockClear();
+
+    await expect(parseProgram.parseAsync(args, { from: "user" })).rejects.toThrow(/exit/i);
+    expect(runtime.error.mock.calls.some(([msg]) => expectedError.test(String(msg)))).toBe(true);
+  }
+
   async function runAndExpectUrlPayloadMediaFile(params: {
     command: "camera.snap" | "camera.clip";
     payload: Record<string, unknown>;
@@ -266,54 +278,27 @@ describe("cli program (nodes media)", () => {
   });
 
   it("fails nodes camera snap on invalid facing", async () => {
-    mockNodeGateway();
-
-    const program = new Command();
-    program.exitOverride();
-    registerNodesCli(program);
-    runtime.error.mockClear();
-
-    await expect(
-      program.parseAsync(["nodes", "camera", "snap", "--node", "ios-node", "--facing", "nope"], {
-        from: "user",
-      }),
-    ).rejects.toThrow(/exit/i);
-
-    expect(runtime.error.mock.calls.some(([msg]) => /invalid facing/i.test(String(msg)))).toBe(
-      true,
+    await expectCameraSnapParseFailure(
+      ["nodes", "camera", "snap", "--node", "ios-node", "--facing", "nope"],
+      /invalid facing/i,
     );
   });
 
   it("fails nodes camera snap when --facing both and --device-id are combined", async () => {
-    mockNodeGateway();
-
-    const program = new Command();
-    program.exitOverride();
-    registerNodesCli(program);
-    runtime.error.mockClear();
-
-    await expect(
-      program.parseAsync(
-        [
-          "nodes",
-          "camera",
-          "snap",
-          "--node",
-          "ios-node",
-          "--facing",
-          "both",
-          "--device-id",
-          "cam-123",
-        ],
-        { from: "user" },
-      ),
-    ).rejects.toThrow(/exit/i);
-
-    expect(
-      runtime.error.mock.calls.some(([msg]) =>
-        /facing=both is not allowed when --device-id is set/i.test(String(msg)),
-      ),
-    ).toBe(true);
+    await expectCameraSnapParseFailure(
+      [
+        "nodes",
+        "camera",
+        "snap",
+        "--node",
+        "ios-node",
+        "--facing",
+        "both",
+        "--device-id",
+        "cam-123",
+      ],
+      /facing=both is not allowed when --device-id is set/i,
+    );
   });
 
   describe("URL-based payloads", () => {

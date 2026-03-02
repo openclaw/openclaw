@@ -2,7 +2,12 @@ import type { Command } from "commander";
 import { danger } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { BrowserParentOpts } from "../browser-cli-shared.js";
-import { callBrowserAct, requireRef, resolveBrowserActionContext } from "./shared.js";
+import {
+  callBrowserAct,
+  logBrowserActionResult,
+  requireRef,
+  resolveBrowserActionContext,
+} from "./shared.js";
 
 export function registerBrowserElementCommands(
   browser: Command,
@@ -41,12 +46,8 @@ export function registerBrowserElementCommands(
             modifiers,
           },
         });
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
         const suffix = result.url ? ` on ${result.url}` : "";
-        defaultRuntime.log(`clicked ref ${refValue}${suffix}`);
+        logBrowserActionResult(parent, result, `clicked ref ${refValue}${suffix}`);
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -80,11 +81,7 @@ export function registerBrowserElementCommands(
             targetId: opts.targetId?.trim() || undefined,
           },
         });
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log(`typed into ref ${refValue}`);
+        logBrowserActionResult(parent, result, `typed into ref ${refValue}`);
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -104,11 +101,7 @@ export function registerBrowserElementCommands(
           profile,
           body: { kind: "press", key, targetId: opts.targetId?.trim() || undefined },
         });
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log(`pressed ${key}`);
+        logBrowserActionResult(parent, result, `pressed ${key}`);
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -128,11 +121,7 @@ export function registerBrowserElementCommands(
           profile,
           body: { kind: "hover", ref, targetId: opts.targetId?.trim() || undefined },
         });
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log(`hovered ref ${ref}`);
+        logBrowserActionResult(parent, result, `hovered ref ${ref}`);
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -165,11 +154,7 @@ export function registerBrowserElementCommands(
           },
           timeoutMs: Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined,
         });
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log(`scrolled into view: ${refValue}`);
+        logBrowserActionResult(parent, result, `scrolled into view: ${refValue}`);
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -195,11 +180,7 @@ export function registerBrowserElementCommands(
             targetId: opts.targetId?.trim() || undefined,
           },
         });
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log(`dragged ${startRef} → ${endRef}`);
+        logBrowserActionResult(parent, result, `dragged ${startRef} → ${endRef}`);
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -225,11 +206,7 @@ export function registerBrowserElementCommands(
             targetId: opts.targetId?.trim() || undefined,
           },
         });
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log(`selected ${values.join(", ")}`);
+        logBrowserActionResult(parent, result, `selected ${values.join(", ")}`);
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);

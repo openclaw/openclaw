@@ -301,20 +301,26 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.to).toBe("63448508");
   });
 
-  it("allows heartbeat delivery to Slack DMs and avoids inherited threadId by default", () => {
-    const cfg: OpenClawConfig = {};
-    const resolved = resolveHeartbeatDeliveryTarget({
-      cfg,
-      entry: {
-        sessionId: "sess-heartbeat-outbound",
-        updatedAt: 1,
-        lastChannel: "slack",
-        lastTo: "user:U123",
-        lastThreadId: "1739142736.000100",
-      },
+  const resolveHeartbeatTarget = (
+    entry: Parameters<typeof resolveHeartbeatDeliveryTarget>[0]["entry"],
+    directPolicy?: "allow" | "block",
+  ) =>
+    resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      entry,
       heartbeat: {
         target: "last",
+        ...(directPolicy ? { directPolicy } : {}),
       },
+    });
+
+  it("allows heartbeat delivery to Slack DMs and avoids inherited threadId by default", () => {
+    const resolved = resolveHeartbeatTarget({
+      sessionId: "sess-heartbeat-outbound",
+      updatedAt: 1,
+      lastChannel: "slack",
+      lastTo: "user:U123",
+      lastThreadId: "1739142736.000100",
     });
 
     expect(resolved.channel).toBe("slack");
@@ -323,21 +329,16 @@ describe("resolveSessionDeliveryTarget", () => {
   });
 
   it("blocks heartbeat delivery to Slack DMs when directPolicy is block", () => {
-    const cfg: OpenClawConfig = {};
-    const resolved = resolveHeartbeatDeliveryTarget({
-      cfg,
-      entry: {
+    const resolved = resolveHeartbeatTarget(
+      {
         sessionId: "sess-heartbeat-outbound",
         updatedAt: 1,
         lastChannel: "slack",
         lastTo: "user:U123",
         lastThreadId: "1739142736.000100",
       },
-      heartbeat: {
-        target: "last",
-        directPolicy: "block",
-      },
-    });
+      "block",
+    );
 
     expect(resolved.channel).toBe("none");
     expect(resolved.reason).toBe("dm-blocked");
@@ -460,19 +461,12 @@ describe("resolveSessionDeliveryTarget", () => {
   });
 
   it("uses session chatType hint when target parser cannot classify and allows direct by default", () => {
-    const cfg: OpenClawConfig = {};
-    const resolved = resolveHeartbeatDeliveryTarget({
-      cfg,
-      entry: {
-        sessionId: "sess-heartbeat-imessage-direct",
-        updatedAt: 1,
-        lastChannel: "imessage",
-        lastTo: "chat-guid-unknown-shape",
-        chatType: "direct",
-      },
-      heartbeat: {
-        target: "last",
-      },
+    const resolved = resolveHeartbeatTarget({
+      sessionId: "sess-heartbeat-imessage-direct",
+      updatedAt: 1,
+      lastChannel: "imessage",
+      lastTo: "chat-guid-unknown-shape",
+      chatType: "direct",
     });
 
     expect(resolved.channel).toBe("imessage");
@@ -480,21 +474,16 @@ describe("resolveSessionDeliveryTarget", () => {
   });
 
   it("blocks session chatType direct hints when directPolicy is block", () => {
-    const cfg: OpenClawConfig = {};
-    const resolved = resolveHeartbeatDeliveryTarget({
-      cfg,
-      entry: {
+    const resolved = resolveHeartbeatTarget(
+      {
         sessionId: "sess-heartbeat-imessage-direct",
         updatedAt: 1,
         lastChannel: "imessage",
         lastTo: "chat-guid-unknown-shape",
         chatType: "direct",
       },
-      heartbeat: {
-        target: "last",
-        directPolicy: "block",
-      },
-    });
+      "block",
+    );
 
     expect(resolved.channel).toBe("none");
     expect(resolved.reason).toBe("dm-blocked");

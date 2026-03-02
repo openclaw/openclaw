@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import { createConfigIO } from "./io.js";
 import { normalizeTalkSection } from "./talk.js";
 
@@ -16,33 +17,6 @@ async function withTempConfig(
     await run(configPath);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
-  }
-}
-
-async function withEnv(
-  updates: Record<string, string | undefined>,
-  run: () => Promise<void>,
-): Promise<void> {
-  const previous = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(updates)) {
-    previous.set(key, process.env[key]);
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-
-  try {
-    await run();
-  } finally {
-    for (const [key, value] of previous.entries()) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
   }
 }
 
@@ -104,7 +78,7 @@ describe("talk normalization", () => {
   });
 
   it("merges ELEVENLABS_API_KEY into normalized defaults for legacy configs", async () => {
-    await withEnv({ ELEVENLABS_API_KEY: "env-eleven-key" }, async () => {
+    await withEnvAsync({ ELEVENLABS_API_KEY: "env-eleven-key" }, async () => {
       await withTempConfig(
         {
           talk: {
@@ -124,7 +98,7 @@ describe("talk normalization", () => {
   });
 
   it("does not apply ELEVENLABS_API_KEY when active provider is not elevenlabs", async () => {
-    await withEnv({ ELEVENLABS_API_KEY: "env-eleven-key" }, async () => {
+    await withEnvAsync({ ELEVENLABS_API_KEY: "env-eleven-key" }, async () => {
       await withTempConfig(
         {
           talk: {

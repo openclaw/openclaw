@@ -26,8 +26,8 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-agent-acp-" });
 }
 
-function mockConfig(home: string, storePath: string) {
-  loadConfigSpy.mockReturnValue({
+function createAcpEnabledConfig(home: string, storePath: string): OpenClawConfig {
+  return {
     acp: {
       enabled: true,
       backend: "acpx",
@@ -42,7 +42,11 @@ function mockConfig(home: string, storePath: string) {
       },
     },
     session: { store: storePath, mainKey: "main" },
-  } satisfies OpenClawConfig);
+  };
+}
+
+function mockConfig(home: string, storePath: string) {
+  loadConfigSpy.mockReturnValue(createAcpEnabledConfig(home, storePath));
 }
 
 function mockConfigWithAcpOverrides(
@@ -50,23 +54,12 @@ function mockConfigWithAcpOverrides(
   storePath: string,
   acpOverrides: Partial<NonNullable<OpenClawConfig["acp"]>>,
 ) {
-  loadConfigSpy.mockReturnValue({
-    acp: {
-      enabled: true,
-      backend: "acpx",
-      allowedAgents: ["codex"],
-      dispatch: { enabled: true },
-      ...acpOverrides,
-    },
-    agents: {
-      defaults: {
-        model: { primary: "openai/gpt-5.3-codex" },
-        models: { "openai/gpt-5.3-codex": {} },
-        workspace: path.join(home, "openclaw"),
-      },
-    },
-    session: { store: storePath, mainKey: "main" },
-  } satisfies OpenClawConfig);
+  const cfg = createAcpEnabledConfig(home, storePath);
+  cfg.acp = {
+    ...cfg.acp,
+    ...acpOverrides,
+  };
+  loadConfigSpy.mockReturnValue(cfg);
 }
 
 function writeAcpSessionStore(storePath: string) {

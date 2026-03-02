@@ -616,14 +616,24 @@ export function buildSafeShellCommand(params: { command: string; platform?: stri
       return { ok: true, rendered: argv.map((token) => shellEscapeSingleArg(token)).join(" ") };
     },
   });
-  if (!rebuilt.ok) {
-    return { ok: false, reason: rebuilt.reason };
-  }
-  return { ok: true, command: rebuilt.command };
+  return finalizeRebuiltShellCommand(rebuilt);
 }
 
 function renderQuotedArgv(argv: string[]): string {
   return argv.map((token) => shellEscapeSingleArg(token)).join(" ");
+}
+
+function finalizeRebuiltShellCommand(
+  rebuilt: ReturnType<typeof rebuildShellCommandFromSource>,
+  expectedSegmentCount?: number,
+): { ok: boolean; command?: string; reason?: string } {
+  if (!rebuilt.ok) {
+    return { ok: false, reason: rebuilt.reason };
+  }
+  if (typeof expectedSegmentCount === "number" && rebuilt.segmentCount !== expectedSegmentCount) {
+    return { ok: false, reason: "segment count mismatch" };
+  }
+  return { ok: true, command: rebuilt.command };
 }
 
 export function resolvePlannedSegmentArgv(segment: ExecCommandSegment): string[] | null {
@@ -688,13 +698,7 @@ export function buildSafeBinsShellCommand(params: {
       return { ok: true, rendered };
     },
   });
-  if (!rebuilt.ok) {
-    return { ok: false, reason: rebuilt.reason };
-  }
-  if (rebuilt.segmentCount !== params.segments.length) {
-    return { ok: false, reason: "segment count mismatch" };
-  }
-  return { ok: true, command: rebuilt.command };
+  return finalizeRebuiltShellCommand(rebuilt, params.segments.length);
 }
 
 export function buildEnforcedShellCommand(params: {
@@ -717,13 +721,7 @@ export function buildEnforcedShellCommand(params: {
       return { ok: true, rendered: renderQuotedArgv(argv) };
     },
   });
-  if (!rebuilt.ok) {
-    return { ok: false, reason: rebuilt.reason };
-  }
-  if (rebuilt.segmentCount !== params.segments.length) {
-    return { ok: false, reason: "segment count mismatch" };
-  }
-  return { ok: true, command: rebuilt.command };
+  return finalizeRebuiltShellCommand(rebuilt, params.segments.length);
 }
 
 /**

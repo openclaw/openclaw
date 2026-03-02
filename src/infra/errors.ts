@@ -14,6 +14,43 @@ export function extractErrorCode(err: unknown): string | undefined {
   return undefined;
 }
 
+export function readErrorName(err: unknown): string {
+  if (!err || typeof err !== "object") {
+    return "";
+  }
+  const name = (err as { name?: unknown }).name;
+  return typeof name === "string" ? name : "";
+}
+
+export function collectErrorGraphCandidates(
+  err: unknown,
+  resolveNested?: (current: Record<string, unknown>) => Iterable<unknown>,
+): unknown[] {
+  const queue: unknown[] = [err];
+  const seen = new Set<unknown>();
+  const candidates: unknown[] = [];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current == null || seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    candidates.push(current);
+
+    if (!current || typeof current !== "object" || !resolveNested) {
+      continue;
+    }
+    for (const nested of resolveNested(current as Record<string, unknown>)) {
+      if (nested != null && !seen.has(nested)) {
+        queue.push(nested);
+      }
+    }
+  }
+
+  return candidates;
+}
+
 /**
  * Type guard for NodeJS.ErrnoException (any error with a `code` property).
  */

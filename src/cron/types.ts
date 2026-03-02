@@ -1,4 +1,5 @@
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { CronJobBase } from "./types-shared.js";
 
 export type CronSchedule =
   | { kind: "at"; at: string }
@@ -138,23 +139,14 @@ export type CronJobState = {
   lastDelivered?: boolean;
 };
 
-export type CronJob = {
-  id: string;
-  agentId?: string;
-  /** Origin session namespace for reminder delivery and wake routing. */
-  sessionKey?: string;
-  name: string;
-  description?: string;
-  enabled: boolean;
-  deleteAfterRun?: boolean;
-  createdAtMs: number;
-  updatedAtMs: number;
-  schedule: CronSchedule;
-  sessionTarget: CronSessionTarget;
-  wakeMode: CronWakeMode;
-  payload: CronPayload;
-  delivery?: CronDelivery;
-  failureAlert?: CronFailureAlert | false;
+export type CronJob = CronJobBase<
+  CronSchedule,
+  CronSessionTarget,
+  CronWakeMode,
+  CronPayload,
+  CronDelivery,
+  CronFailureAlert | false
+> & {
   state: CronJobState;
 };
 

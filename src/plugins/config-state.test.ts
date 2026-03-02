@@ -50,11 +50,9 @@ describe("normalizePluginsConfig", () => {
 });
 
 describe("resolveEffectiveEnableState", () => {
-  it("enables bundled channels when channels.<id>.enabled=true", () => {
-    const normalized = normalizePluginsConfig({
-      enabled: true,
-    });
-    const state = resolveEffectiveEnableState({
+  function resolveBundledTelegramState(config: Parameters<typeof normalizePluginsConfig>[0]) {
+    const normalized = normalizePluginsConfig(config);
+    return resolveEffectiveEnableState({
       id: "telegram",
       origin: "bundled",
       config: normalized,
@@ -65,28 +63,22 @@ describe("resolveEffectiveEnableState", () => {
           },
         },
       },
+    });
+  }
+
+  it("enables bundled channels when channels.<id>.enabled=true", () => {
+    const state = resolveBundledTelegramState({
+      enabled: true,
     });
     expect(state).toEqual({ enabled: true });
   });
 
   it("keeps explicit plugin-level disable authoritative", () => {
-    const normalized = normalizePluginsConfig({
+    const state = resolveBundledTelegramState({
       enabled: true,
       entries: {
         telegram: {
           enabled: false,
-        },
-      },
-    });
-    const state = resolveEffectiveEnableState({
-      id: "telegram",
-      origin: "bundled",
-      config: normalized,
-      rootConfig: {
-        channels: {
-          telegram: {
-            enabled: true,
-          },
         },
       },
     });
