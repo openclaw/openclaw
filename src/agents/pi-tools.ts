@@ -144,6 +144,28 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
   };
 }
 
+function resolveExecSkillEnvDefaults(cfg?: OpenClawConfig): Record<string, string> | undefined {
+  const entries = cfg?.skills?.entries;
+  if (!entries) {
+    return undefined;
+  }
+  const resolved: Record<string, string> = {};
+  for (const skillConfig of Object.values(entries)) {
+    if (!skillConfig || skillConfig.enabled === false || !skillConfig.env) {
+      continue;
+    }
+    for (const [rawKey, rawValue] of Object.entries(skillConfig.env)) {
+      const key = rawKey.trim();
+      if (!key) {
+        continue;
+      }
+      const value = String(rawValue);
+      resolved[key] = value;
+    }
+  }
+  return Object.keys(resolved).length > 0 ? resolved : undefined;
+}
+
 export function resolveToolLoopDetectionConfig(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
@@ -395,6 +417,7 @@ export function createOpenClawCodingTools(options?: {
     timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSec,
     approvalRunningNoticeMs:
       options?.exec?.approvalRunningNoticeMs ?? execConfig.approvalRunningNoticeMs,
+    env: options?.exec?.env ?? resolveExecSkillEnvDefaults(options?.config),
     notifyOnExit: options?.exec?.notifyOnExit ?? execConfig.notifyOnExit,
     notifyOnExitEmptySuccess:
       options?.exec?.notifyOnExitEmptySuccess ?? execConfig.notifyOnExitEmptySuccess,

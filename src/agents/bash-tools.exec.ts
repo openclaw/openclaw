@@ -362,25 +362,36 @@ export function createExecTool(
 
       const inheritedBaseEnv = coerceEnv(process.env);
       const baseEnv = host === "sandbox" ? inheritedBaseEnv : sanitizeHostBaseEnv(inheritedBaseEnv);
+      const defaultEnv = coerceEnv(defaults?.env);
+      const requestedEnv = params.env ? coerceEnv(params.env) : undefined;
 
       // Logic: Sandbox gets raw env. Host (gateway/node) must pass validation.
       // We validate BEFORE merging to prevent any dangerous vars from entering the stream.
-      if (host !== "sandbox" && params.env) {
-        validateHostEnv(params.env);
+      if (host !== "sandbox" && Object.keys(defaultEnv).length > 0) {
+        validateHostEnv(defaultEnv);
+      }
+      if (host !== "sandbox" && requestedEnv) {
+        validateHostEnv(requestedEnv);
       }
 
-      const mergedEnv = params.env ? { ...baseEnv, ...params.env } : baseEnv;
+      const mergedEnv =
+        Object.keys(defaultEnv).length > 0 || requestedEnv
+          ? { ...baseEnv, ...defaultEnv, ...requestedEnv }
+          : baseEnv;
 
       const env = sandbox
         ? buildSandboxEnv({
             defaultPath: DEFAULT_PATH,
-            paramsEnv: params.env,
+            paramsEnv:
+              Object.keys(defaultEnv).length > 0 || requestedEnv
+                ? { ...defaultEnv, ...requestedEnv }
+                : undefined,
             sandboxEnv: sandbox.env,
             containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
           })
         : mergedEnv;
 
-      if (!sandbox && host === "gateway" && !params.env?.PATH) {
+      if (!sandbox && host === "gateway" && !requestedEnv?.PATH) {
         const shellPath = getShellPathFromLoginShell({
           env: process.env,
           timeoutMs: resolveShellEnvFallbackTimeoutMs(process.env),
@@ -403,7 +414,7 @@ export function createExecTool(
           command: params.command,
           workdir,
           env,
-          requestedEnv: params.env,
+          requestedEnv,
           requestedNode: params.node?.trim(),
           boundNode: defaults?.node?.trim(),
           sessionKey: defaults?.sessionKey,

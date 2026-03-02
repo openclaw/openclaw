@@ -169,6 +169,43 @@ describe("exec PATH login shell merge", () => {
 });
 
 describe("exec host env validation", () => {
+  it("applies default env values from exec tool defaults", async () => {
+    if (isWin) {
+      return;
+    }
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      env: { GOG_KEYRING_PASSWORD: "from-defaults" },
+    });
+
+    const result = await tool.execute("call-default-env", {
+      command: 'printf "%s" "${GOG_KEYRING_PASSWORD:-}"',
+    });
+    const output = normalizeText(result.content.find((c) => c.type === "text")?.text);
+    expect(output).toBe("from-defaults");
+  });
+
+  it("lets request env override default exec env values", async () => {
+    if (isWin) {
+      return;
+    }
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      env: { GOG_KEYRING_PASSWORD: "from-defaults" },
+    });
+
+    const result = await tool.execute("call-default-env-override", {
+      command: 'printf "%s" "${GOG_KEYRING_PASSWORD:-}"',
+      env: { GOG_KEYRING_PASSWORD: "from-request" },
+    });
+    const output = normalizeText(result.content.find((c) => c.type === "text")?.text);
+    expect(output).toBe("from-request");
+  });
+
   it("blocks LD_/DYLD_ env vars on host execution", async () => {
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
 
