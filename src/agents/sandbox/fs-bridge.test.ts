@@ -211,6 +211,32 @@ describe("sandbox fs bridge shell compatibility", () => {
     });
   });
 
+  it("accepts container cwd for relative mkdirp paths", async () => {
+    await withTempDir("openclaw-fs-bridge-mkdirp-cwd-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
+
+      await expect(
+        bridge.mkdirp({
+          filePath: "memory/kemik",
+          cwd: "/workspace",
+        }),
+      ).resolves.toBeUndefined();
+
+      const mkdirCall = findCallByScriptFragment('mkdir -p -- "$1"');
+      expect(mkdirCall).toBeDefined();
+      const mkdirPath = mkdirCall ? getDockerPathArg(mkdirCall[0]) : "";
+      expect(mkdirPath).toBe("/workspace/memory/kemik");
+    });
+  });
+
   it("rejects mkdirp when target exists as a file", async () => {
     await withTempDir("openclaw-fs-bridge-mkdirp-file-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");

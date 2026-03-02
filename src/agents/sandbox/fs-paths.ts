@@ -130,7 +130,11 @@ export function resolveSandboxFsPathWithMounts(params: {
     }
   }
 
-  const hostResolved = resolveSandboxInputPath(input, params.cwd);
+  const resolvedHostCwd = resolveHostCwdWithMounts({
+    cwd: params.cwd,
+    mountsByContainer,
+  });
+  const hostResolved = resolveSandboxInputPath(input, resolvedHostCwd);
   const hostMount = findMountByHostPath(mountsByHost, hostResolved);
   if (hostMount) {
     const relHost = path.relative(hostMount.hostRoot, hostResolved);
@@ -152,7 +156,7 @@ export function resolveSandboxFsPathWithMounts(params: {
   // Preserve legacy error wording for out-of-sandbox paths.
   resolveSandboxPath({
     filePath: input,
-    cwd: params.cwd,
+    cwd: resolvedHostCwd,
     root: params.defaultWorkspaceRoot,
   });
   throw new Error(`Path escapes sandbox root (${params.defaultWorkspaceRoot}): ${input}`);
@@ -236,6 +240,22 @@ function isPathInsideHost(root: string, target: string): boolean {
 
 function toHostSegments(relativePosix: string): string[] {
   return relativePosix.split("/").filter(Boolean);
+}
+
+function resolveHostCwdWithMounts(params: {
+  cwd: string;
+  mountsByContainer: SandboxFsMount[];
+}): string {
+  const normalizedCwd = normalizePosixInput(params.cwd);
+  if (!path.posix.isAbsolute(normalizedCwd)) {
+    return params.cwd;
+  }
+  const mount = findMountByContainerPath(params.mountsByContainer, normalizedCwd);
+  if (!mount) {
+    return params.cwd;
+  }
+  const relative = path.posix.relative(mount.containerRoot, normalizedCwd);
+  return relative ? path.resolve(mount.hostRoot, ...toHostSegments(relative)) : mount.hostRoot;
 }
 
 function toDisplayRelative(params: {
