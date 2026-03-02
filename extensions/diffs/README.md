@@ -117,7 +117,7 @@ After:
 This is version two.
 ```
 
-Render a PNG:
+Render a file (PNG or PDF):
 
 ```text
 Use the `diffs` tool in `file` mode for this before and after input. After it returns `details.filePath`, use the `message` tool with `path` or `filePath` to send me the rendered diff image.
@@ -165,4 +165,5 @@ diff --git a/src/example.ts b/src/example.ts
 - The viewer is hosted locally through the gateway under `/plugins/diffs/...`.
 - Artifacts are ephemeral and stored in the local temp directory.
 - PNG/PDF rendering requires a Chromium-compatible browser. Set `browser.executablePath` if auto-detection is not enough.
+- If your delivery channel compresses images heavily (for example Telegram or WhatsApp), prefer `fileFormat: "pdf"` to preserve readability.
 - Diff rendering is powered by [Diffs](https://diffs.com).

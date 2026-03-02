@@ -206,6 +206,42 @@ describe("diffs tool", () => {
     expect((result?.details as Record<string, unknown>).fileMaxWidth).toBe(1100);
   });
 
+  it("accepts deprecated format alias for fileFormat", async () => {
+    const screenshotter = {
+      screenshotHtml: vi.fn(
+        async ({
+          outputPath,
+          image,
+        }: {
+          outputPath: string;
+          image: { format: string; qualityPreset: string; scale: number; maxWidth: number };
+        }) => {
+          expect(image.format).toBe("pdf");
+          await fs.mkdir(path.dirname(outputPath), { recursive: true });
+          await fs.writeFile(outputPath, Buffer.from("%PDF-1.7"));
+          return outputPath;
+        },
+      ),
+    };
+
+    const tool = createDiffsTool({
+      api: createApi(),
+      store,
+      defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
+      screenshotter,
+    });
+
+    const result = await tool.execute?.("tool-2format", {
+      before: "one\n",
+      after: "two\n",
+      mode: "file",
+      format: "pdf",
+    });
+
+    expect((result?.details as Record<string, unknown>).fileFormat).toBe("pdf");
+    expect((result?.details as Record<string, unknown>).filePath).toMatch(/preview\.pdf$/);
+  });
+
   it("honors defaults.mode=file when mode is omitted", async () => {
     const screenshotter = {
       screenshotHtml: vi.fn(async ({ outputPath }: { outputPath: string }) => {

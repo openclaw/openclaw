@@ -145,6 +145,7 @@ Compatibility note: `defaults.format` is accepted as an alias for `defaults.file
 - `mode: "file"` uses a faster file-only render path and does not create a viewer URL.
 - File quality presets include hard pixel caps to prevent runaway renders on very large diffs.
 - PNG or PDF rendering requires a Chromium-compatible browser. If auto-detection is not enough, set `browser.executablePath`.
+- If your channel compresses images aggressively (for example Telegram or WhatsApp), prefer `fileFormat: "pdf"` to preserve diff readability.
 - Diff rendering is powered by [Diffs](https://diffs.com).
 
 ## Related docs

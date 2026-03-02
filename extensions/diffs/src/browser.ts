@@ -8,6 +8,7 @@ import { VIEWER_ASSET_PREFIX, getServedViewerAsset } from "./viewer-assets.js";
 
 const DEFAULT_BROWSER_IDLE_MS = 30_000;
 const SHARED_BROWSER_KEY = "__default__";
+const IMAGE_SIZE_LIMIT_ERROR = "Diff frame did not render within image size limits.";
 
 export type DiffScreenshotter = {
   screenshotHtml(params: {
@@ -237,8 +238,11 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
         });
         return params.outputPath;
       }
-      throw new Error("Diff frame did not render within image size limits.");
+      throw new Error(IMAGE_SIZE_LIMIT_ERROR);
     } catch (error) {
+      if (error instanceof Error && error.message === IMAGE_SIZE_LIMIT_ERROR) {
+        throw error;
+      }
       const reason = error instanceof Error ? error.message : String(error);
       throw new Error(
         `Diff PNG/PDF rendering requires a Chromium-compatible browser. Set browser.executablePath or install Chrome/Chromium. ${reason}`,
