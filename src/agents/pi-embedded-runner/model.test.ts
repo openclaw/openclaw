@@ -379,4 +379,25 @@ describe("resolveModel", () => {
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: google-antigravity/some-model");
   });
+
+  it("builds an openai passthrough fallback for unknown models when OPENAI_BASE_URL is set", () => {
+    const previous = process.env.OPENAI_BASE_URL;
+    process.env.OPENAI_BASE_URL = "https://api.deepseek.com/v1";
+    try {
+      const result = resolveModel("openai", "deepseek-chat", "/tmp/agent");
+      expect(result.error).toBeUndefined();
+      expect(result.model).toMatchObject({
+        provider: "openai",
+        id: "deepseek-chat",
+        api: "openai-completions",
+        baseUrl: "https://api.deepseek.com/v1",
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENAI_BASE_URL;
+      } else {
+        process.env.OPENAI_BASE_URL = previous;
+      }
+    }
+  });
 });

@@ -192,6 +192,50 @@ export function inferUniqueProviderFromConfiguredModels(params: {
   return providers.values().next().value;
 }
 
+function inferUniqueProviderFromConfiguredProviders(cfg: OpenClawConfig): string | undefined {
+  const providers = cfg.models?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  const normalized = new Set<string>();
+  for (const key of Object.keys(providers)) {
+    const trimmed = key.trim();
+    if (!trimmed) {
+      continue;
+    }
+    normalized.add(normalizeProviderId(trimmed));
+    if (normalized.size > 1) {
+      return undefined;
+    }
+  }
+  if (normalized.size !== 1) {
+    return undefined;
+  }
+  return normalized.values().next().value;
+}
+
+function inferUniqueProviderFromAuthProfiles(cfg: OpenClawConfig): string | undefined {
+  const profiles = cfg.auth?.profiles;
+  if (!profiles) {
+    return undefined;
+  }
+  const normalized = new Set<string>();
+  for (const profile of Object.values(profiles)) {
+    const provider = typeof profile?.provider === "string" ? profile.provider.trim() : "";
+    if (!provider) {
+      continue;
+    }
+    normalized.add(normalizeProviderId(provider));
+    if (normalized.size > 1) {
+      return undefined;
+    }
+  }
+  if (normalized.size !== 1) {
+    return undefined;
+  }
+  return normalized.values().next().value;
+}
+
 export function resolveAllowlistModelKey(raw: string, defaultProvider: string): string | null {
   const parsed = parseModelRef(raw, defaultProvider);
   if (!parsed) {
@@ -289,11 +333,21 @@ export function resolveConfiguredModelRef(params: {
         return aliasMatch.ref;
       }
 
-      // Default to anthropic if no provider is specified, but warn as this is deprecated.
+      const inferredProvider =
+        inferUniqueProviderFromConfiguredModels({
+          cfg: params.cfg,
+          model: trimmed,
+        }) ??
+        inferUniqueProviderFromConfiguredProviders(params.cfg) ??
+        inferUniqueProviderFromAuthProfiles(params.cfg);
+      const fallbackProvider = inferredProvider ?? "anthropic";
+
+      // Default to anthropic (or a uniquely inferred configured provider) if no provider
+      // is specified, but warn as this is deprecated.
       log.warn(
-        `Model "${trimmed}" specified without provider. Falling back to "anthropic/${trimmed}". Please use "anthropic/${trimmed}" in your config.`,
+        `Model "${trimmed}" specified without provider. Falling back to "${fallbackProvider}/${trimmed}". Please use "${fallbackProvider}/${trimmed}" in your config.`,
       );
-      return { provider: "anthropic", model: trimmed };
+      return { provider: fallbackProvider, model: trimmed };
     }
 
     const resolved = resolveModelRefFromString({

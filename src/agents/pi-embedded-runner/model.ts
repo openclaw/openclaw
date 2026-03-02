@@ -7,7 +7,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { normalizeModelCompat } from "../model-compat.js";
 import { resolveForwardCompatModel } from "../model-forward-compat.js";
-import { normalizeProviderId } from "../model-selection.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 
 type InlineModelEntry = ModelDefinitionConfig & {
@@ -37,6 +37,16 @@ export function buildInlineProviderModels(
       api: model.api ?? entry?.api,
     }));
   });
+}
+
+function resolveOpenAIPassthroughBaseUrl(cfg?: OpenClawConfig): string | undefined {
+  const configured = findNormalizedProviderValue(cfg?.models?.providers, "openai");
+  const configuredBaseUrl = configured?.baseUrl?.trim();
+  if (configuredBaseUrl) {
+    return configuredBaseUrl;
+  }
+  const envBaseUrl = process.env.OPENAI_BASE_URL?.trim();
+  return envBaseUrl || undefined;
 }
 
 export function resolveModel(
@@ -93,6 +103,24 @@ export function resolveModel(
         maxTokens: 8192,
       } as Model<Api>);
       return { model: fallbackModel, authStorage, modelRegistry };
+    }
+    if (normalizedProvider === "openai") {
+      const passthroughBaseUrl = resolveOpenAIPassthroughBaseUrl(cfg);
+      if (passthroughBaseUrl) {
+        const fallbackModel: Model<Api> = normalizeModelCompat({
+          id: modelId,
+          name: modelId,
+          api: "openai-completions",
+          provider,
+          baseUrl: passthroughBaseUrl,
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: DEFAULT_CONTEXT_TOKENS,
+          maxTokens: DEFAULT_CONTEXT_TOKENS,
+        } as Model<Api>);
+        return { model: fallbackModel, authStorage, modelRegistry };
+      }
     }
     const providerCfg = providers[provider];
     if (providerCfg || modelId.startsWith("mock-")) {

@@ -472,6 +472,78 @@ describe("model-selection", () => {
       });
       expect(result).toEqual({ provider: "openai", model: "gpt-4" });
     });
+
+    it("prefers a uniquely configured provider from models.providers when provider is missing", () => {
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.deepseek.com/v1",
+                models: [],
+              },
+            },
+          },
+          agents: {
+            defaults: {
+              model: { primary: "deepseek-chat" },
+            },
+          },
+        } as OpenClawConfig;
+
+        const result = resolveConfiguredModelRef({
+          cfg,
+          defaultProvider: "anthropic",
+          defaultModel: "claude-sonnet-4-5",
+        });
+
+        expect(result).toEqual({ provider: "openai", model: "deepseek-chat" });
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Falling back to "openai/deepseek-chat"'),
+        );
+      } finally {
+        setLoggerOverride(null);
+        resetLogger();
+      }
+    });
+
+    it("prefers a uniquely configured auth profile provider when provider is missing", () => {
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = {
+          auth: {
+            profiles: {
+              "openai:default": {
+                provider: "openai",
+                mode: "api_key",
+              },
+            },
+          },
+          agents: {
+            defaults: {
+              model: { primary: "deepseek-chat" },
+            },
+          },
+        } as OpenClawConfig;
+
+        const result = resolveConfiguredModelRef({
+          cfg,
+          defaultProvider: "anthropic",
+          defaultModel: "claude-sonnet-4-5",
+        });
+
+        expect(result).toEqual({ provider: "openai", model: "deepseek-chat" });
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Falling back to "openai/deepseek-chat"'),
+        );
+      } finally {
+        setLoggerOverride(null);
+        resetLogger();
+      }
+    });
   });
 
   describe("resolveThinkingDefault", () => {
