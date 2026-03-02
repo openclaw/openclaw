@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { findBundledPluginByNpmSpec, resolveBundledPluginSources } from "./bundled-sources.js";
+import {
+  findBundledPluginByNpmSpec,
+  findBundledPluginByPluginId,
+  resolveBundledPluginSources,
+} from "./bundled-sources.js";
 
 const discoverOpenClawPluginsMock = vi.fn();
 const loadPluginManifestMock = vi.fn();
@@ -92,6 +96,28 @@ describe("bundled plugin sources", () => {
 
     expect(resolved?.pluginId).toBe("feishu");
     expect(resolved?.localPath).toBe("/app/extensions/feishu");
+    expect(missing).toBeUndefined();
+  });
+
+  it("finds bundled source by plugin id", () => {
+    discoverOpenClawPluginsMock.mockReturnValue({
+      candidates: [
+        {
+          origin: "bundled",
+          rootDir: "/app/extensions/diffs",
+          packageName: "@openclaw/diffs",
+          packageManifest: { install: { npmSpec: "@openclaw/diffs" } },
+        },
+      ],
+      diagnostics: [],
+    });
+    loadPluginManifestMock.mockReturnValue({ ok: true, manifest: { id: "diffs" } });
+
+    const resolved = findBundledPluginByPluginId({ pluginId: "diffs" });
+    const missing = findBundledPluginByPluginId({ pluginId: "not-found" });
+
+    expect(resolved?.pluginId).toBe("diffs");
+    expect(resolved?.localPath).toBe("/app/extensions/diffs");
     expect(missing).toBeUndefined();
   });
 });

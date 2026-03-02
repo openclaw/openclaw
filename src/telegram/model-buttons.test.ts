@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildModelSelectionCallbackData,
   buildModelsKeyboard,
-  buildProviderKeyboard,
   buildBrowseProvidersButton,
+  buildProviderKeyboard,
   calculateTotalPages,
   getModelsPageSize,
   parseModelCallbackData,
+  resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
 
@@ -49,6 +51,79 @@ describe("parseModelCallbackData", () => {
     for (const input of invalid) {
       expect(parseModelCallbackData(input), input).toBeNull();
     }
+  });
+});
+
+describe("resolveModelSelection", () => {
+  it("returns explicit provider selections unchanged", () => {
+    const result = resolveModelSelection({
+      callback: { type: "select", provider: "openai", model: "gpt-4.1" },
+      providers: ["openai", "anthropic"],
+      byProvider: new Map([
+        ["openai", new Set(["gpt-4.1"])],
+        ["anthropic", new Set(["claude-sonnet-4-5"])],
+      ]),
+    });
+    expect(result).toEqual({ kind: "resolved", provider: "openai", model: "gpt-4.1" });
+  });
+
+  it("resolves compact callbacks when exactly one provider matches", () => {
+    const result = resolveModelSelection({
+      callback: { type: "select", model: "shared" },
+      providers: ["openai", "anthropic"],
+      byProvider: new Map([
+        ["openai", new Set(["shared"])],
+        ["anthropic", new Set(["other"])],
+      ]),
+    });
+    expect(result).toEqual({ kind: "resolved", provider: "openai", model: "shared" });
+  });
+
+  it("returns ambiguous result when zero or multiple providers match", () => {
+    const sharedByBoth = resolveModelSelection({
+      callback: { type: "select", model: "shared" },
+      providers: ["openai", "anthropic"],
+      byProvider: new Map([
+        ["openai", new Set(["shared"])],
+        ["anthropic", new Set(["shared"])],
+      ]),
+    });
+    expect(sharedByBoth).toEqual({
+      kind: "ambiguous",
+      model: "shared",
+      matchingProviders: ["openai", "anthropic"],
+    });
+
+    const missingEverywhere = resolveModelSelection({
+      callback: { type: "select", model: "missing" },
+      providers: ["openai", "anthropic"],
+      byProvider: new Map([
+        ["openai", new Set(["gpt-4.1"])],
+        ["anthropic", new Set(["claude-sonnet-4-5"])],
+      ]),
+    });
+    expect(missingEverywhere).toEqual({
+      kind: "ambiguous",
+      model: "missing",
+      matchingProviders: [],
+    });
+  });
+});
+
+describe("buildModelSelectionCallbackData", () => {
+  it("uses standard callback when under limit and compact callback when needed", () => {
+    expect(buildModelSelectionCallbackData({ provider: "openai", model: "gpt-4.1" })).toBe(
+      "mdl_sel_openai/gpt-4.1",
+    );
+    const longModel = "us.anthropic.claude-3-5-sonnet-20240620-v1:0";
+    expect(buildModelSelectionCallbackData({ provider: "amazon-bedrock", model: longModel })).toBe(
+      `mdl_sel/${longModel}`,
+    );
+  });
+
+  it("returns null when even compact callback exceeds Telegram limit", () => {
+    const tooLongModel = "x".repeat(80);
+    expect(buildModelSelectionCallbackData({ provider: "openai", model: tooLongModel })).toBeNull();
   });
 });
 
