@@ -168,6 +168,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
       expect.objectContaining({
         url: "https://uploads.slack.test/upload",
         proxy: "env",
+        dangerouslyAllowEnvProxyWithoutPinnedDns: true,
         auditContext: "slack-upload-file",
       }),
     );
