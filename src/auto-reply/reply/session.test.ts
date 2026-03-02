@@ -1359,6 +1359,98 @@ describe("initSessionState stale threadId fallback", () => {
   });
 });
 
+describe("initSessionState dmScope delivery migration", () => {
+  it("retires stale main-session delivery route when dmScope uses per-channel DM keys", async () => {
+    const storePath = await createStorePath("dm-scope-retire-main-route-");
+    await saveSessionStore(storePath, {
+      "agent:main:main": {
+        sessionId: "legacy-main",
+        updatedAt: Date.now(),
+        lastChannel: "telegram",
+        lastTo: "6101296751",
+        lastAccountId: "default",
+        deliveryContext: {
+          channel: "telegram",
+          to: "6101296751",
+          accountId: "default",
+        },
+      },
+    });
+    const cfg = {
+      session: { store: storePath, dmScope: "per-channel-peer" },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: "agent:main:telegram:direct:6101296751",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "6101296751",
+        AccountId: "default",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionKey).toBe("agent:main:telegram:direct:6101296751");
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted["agent:main:main"]?.sessionId).toBe("legacy-main");
+    expect(persisted["agent:main:main"]?.deliveryContext).toBeUndefined();
+    expect(persisted["agent:main:main"]?.lastChannel).toBeUndefined();
+    expect(persisted["agent:main:main"]?.lastTo).toBeUndefined();
+    expect(persisted["agent:main:telegram:direct:6101296751"]?.deliveryContext?.to).toBe(
+      "6101296751",
+    );
+  });
+
+  it("keeps legacy main-session delivery route when current DM target does not match", async () => {
+    const storePath = await createStorePath("dm-scope-keep-main-route-");
+    await saveSessionStore(storePath, {
+      "agent:main:main": {
+        sessionId: "legacy-main",
+        updatedAt: Date.now(),
+        lastChannel: "telegram",
+        lastTo: "1111",
+        lastAccountId: "default",
+        deliveryContext: {
+          channel: "telegram",
+          to: "1111",
+          accountId: "default",
+        },
+      },
+    });
+    const cfg = {
+      session: { store: storePath, dmScope: "per-channel-peer" },
+    } as OpenClawConfig;
+
+    await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: "agent:main:telegram:direct:6101296751",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "6101296751",
+        AccountId: "default",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted["agent:main:main"]?.deliveryContext).toEqual({
+      channel: "telegram",
+      to: "1111",
+      accountId: "default",
+    });
+    expect(persisted["agent:main:main"]?.lastTo).toBe("1111");
+  });
+});
+
 describe("initSessionState internal channel routing preservation", () => {
   it("keeps persisted external lastChannel when OriginatingChannel is internal webchat", async () => {
     const storePath = await createStorePath("preserve-external-channel-");
