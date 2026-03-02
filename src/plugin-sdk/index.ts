@@ -80,6 +80,7 @@ export type {
   AcpRuntimeEvent,
   AcpRuntimeHandle,
   AcpRuntimePromptMode,
+  AcpSessionUpdateTag,
   AcpRuntimeSessionMode,
   AcpRuntimeStatus,
   AcpRuntimeTurnInput,
@@ -128,6 +129,11 @@ export {
   resolveWebhookTargets,
 } from "./webhook-targets.js";
 export type { WebhookTargetMatchResult } from "./webhook-targets.js";
+export {
+  applyBasicWebhookRequestGuards,
+  isJsonContentType,
+  readJsonWebhookBodyOrReject,
+} from "./webhook-request-guards.js";
 export type { AgentMediaPayload } from "./agent-media-payload.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export {
@@ -235,6 +241,22 @@ export { createLoggerBackedRuntime } from "./runtime.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
 export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
 export { buildRandomTempFilePath, withTempDownloadPath } from "./temp-path.js";
+export {
+  applyWindowsSpawnProgramPolicy,
+  materializeWindowsSpawnProgram,
+  resolveWindowsExecutablePath,
+  resolveWindowsSpawnProgramCandidate,
+  resolveWindowsSpawnProgram,
+} from "./windows-spawn.js";
+export type {
+  ResolveWindowsSpawnProgramCandidateParams,
+  ResolveWindowsSpawnProgramParams,
+  WindowsSpawnCandidateResolution,
+  WindowsSpawnInvocation,
+  WindowsSpawnProgramCandidate,
+  WindowsSpawnProgram,
+  WindowsSpawnResolution,
+} from "./windows-spawn.js";
 export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 export {
   runPluginCommandWithTimeout,
@@ -285,6 +307,19 @@ export {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "../infra/http-body.js";
+export {
+  WEBHOOK_ANOMALY_COUNTER_DEFAULTS,
+  WEBHOOK_ANOMALY_STATUS_CODES,
+  WEBHOOK_RATE_LIMIT_DEFAULTS,
+  createBoundedCounter,
+  createFixedWindowRateLimiter,
+  createWebhookAnomalyTracker,
+} from "./webhook-memory-guards.js";
+export type {
+  BoundedCounter,
+  FixedWindowRateLimiter,
+  WebhookAnomalyTracker,
+} from "./webhook-memory-guards.js";
 
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 export {

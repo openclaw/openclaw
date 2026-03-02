@@ -154,10 +154,15 @@ export type DiscordThreadBindingsConfig = {
    */
   enabled?: boolean;
   /**
-   * Auto-unfocus TTL for thread-bound sessions in hours.
-   * Set to 0 to disable TTL. Default: 24.
+   * Inactivity window for thread-bound sessions in hours.
+   * Session auto-unfocuses after this amount of idle time. Set to 0 to disable. Default: 24.
    */
-  ttlHours?: number;
+  idleHours?: number;
+  /**
+   * Optional hard max age for thread-bound sessions in hours.
+   * Session auto-unfocuses once this age is reached even if active. Set to 0 to disable. Default: 0.
+   */
+  maxAgeHours?: number;
   /**
    * Allow `sessions_spawn({ thread: true })` to auto-create + bind Discord
    * threads for subagent sessions. Default: false (opt-in).

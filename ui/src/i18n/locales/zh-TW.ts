@@ -110,6 +110,9 @@ export const zh_TW: TranslationMap = {
     refreshTitle: "刷新聊天數據",
     thinkingToggle: "切換助手思考/工作輸出",
     focusToggle: "切換專注模式 (隱藏側邊欄 + 頁面頁眉)",
+    hideCronSessions: "隱藏定時任務會話",
+    showCronSessions: "顯示定時任務會話",
+    showCronSessionsHidden: "顯示定時任務會話 (已隱藏 {count} 個)",
     onboardingDisabled: "引導期間禁用",
   },
   languages: {
@@ -117,5 +120,6 @@ export const zh_TW: TranslationMap = {
     zhCN: "简体中文 (簡體中文)",
     zhTW: "繁體中文 (繁體中文)",
     ptBR: "Português (巴西葡萄牙語)",
+    de: "Deutsch (德語)",
   },
 };
