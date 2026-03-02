@@ -1174,7 +1174,10 @@ export function startHeartbeatRunner(opts: {
         continue;
       }
       if (res.status === "skipped" && res.reason === "requests-in-flight") {
-        advanceAgentSchedule(agent, now);
+        // Short retry instead of advancing by full interval — the heartbeat wasn't
+        // actually executed, so don't penalize the schedule.
+        const retryMs = Math.min(5 * 60_000, agent.intervalMs);
+        agent.nextDueMs = now + retryMs;
         scheduleNext();
         return res;
       }
