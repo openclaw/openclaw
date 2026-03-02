@@ -1,6 +1,7 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isSensitiveConfigPath, type ConfigUiHints } from "./schema.hints.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
+import { isSecretRef } from "./types.secrets.js";
 
 const log = createSubsystemLogger("config/redaction");
 const ENV_VAR_PLACEHOLDER_PATTERN = /^\$\{[^}]*\}$/;
@@ -175,8 +176,14 @@ function redactObjectWithLookup(
             values.push(value);
           } else if (typeof value === "object" && value !== null) {
             if (hints[candidate]?.sensitive === true && !Array.isArray(value)) {
-              collectSensitiveStrings(value, values);
-              result[key] = REDACTED_SENTINEL;
+              // SecretRef objects only carry locator metadata (source/provider/id),
+              // not secret material. Keep them visible and editable in raw mode.
+              if (isSecretRef(value)) {
+                result[key] = value;
+              } else {
+                collectSensitiveStrings(value, values);
+                result[key] = REDACTED_SENTINEL;
+              }
             } else {
               result[key] = redactObjectWithLookup(value, lookup, candidate, values, hints);
             }
@@ -264,10 +271,13 @@ function redactObjectGuessing(
         isWholeObjectSensitivePath(dotPath) &&
         value &&
         typeof value === "object" &&
-        !Array.isArray(value)
+        !Array.isArray(value) &&
+        !isSecretRef(value)
       ) {
         collectSensitiveStrings(value, values);
         result[key] = REDACTED_SENTINEL;
+      } else if (value && typeof value === "object" && isSecretRef(value)) {
+        result[key] = value;
       } else if (typeof value === "object" && value !== null) {
         result[key] = redactObjectGuessing(value, dotPath, values, hints);
       } else {

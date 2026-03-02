@@ -130,7 +130,7 @@ describe("redactConfigSnapshot", () => {
     expect(channels.googlechat.serviceAccount).toBe(REDACTED_SENTINEL);
   });
 
-  it("redacts object-valued apiKey refs in model providers", () => {
+  it("keeps object-valued apiKey secret refs visible in model providers", () => {
     const snapshot = makeSnapshot({
       models: {
         providers: {
@@ -145,11 +145,35 @@ describe("redactConfigSnapshot", () => {
     const result = redactConfigSnapshot(snapshot);
     const models = result.config.models as Record<string, Record<string, Record<string, unknown>>>;
     expect(models.providers.openai.apiKey).toEqual({
-      source: REDACTED_SENTINEL,
-      provider: REDACTED_SENTINEL,
-      id: REDACTED_SENTINEL,
+      source: "env",
+      provider: "default",
+      id: "OPENAI_API_KEY",
     });
     expect(models.providers.openai.baseUrl).toBe("https://api.openai.com");
+  });
+
+  it("does not globally over-redact raw text from secret ref metadata values", () => {
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          },
+        },
+      },
+      env: {
+        MODE: "env",
+      },
+    };
+    const raw = JSON.stringify(config, null, 2);
+    const snapshot = makeSnapshot(config, raw);
+
+    const result = redactConfigSnapshot(snapshot, mainSchemaHints);
+
+    expect(result.raw).toContain('"MODE": "env"');
+    expect(result.raw).toContain('"provider": "default"');
+    expect(result.raw).toContain('"source": "env"');
+    expect(result.raw).not.toContain('"__OPENCLAW_REDACTED__": {');
   });
 
   it("preserves non-sensitive fields", () => {
