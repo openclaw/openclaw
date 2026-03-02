@@ -58,6 +58,13 @@ export type ModelProviderConfig = {
   models: ModelDefinitionConfig[];
 };
 
+export type BedrockModelCostConfig = {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+};
+
 export type BedrockDiscoveryConfig = {
   enabled?: boolean;
   region?: string;
@@ -65,6 +72,8 @@ export type BedrockDiscoveryConfig = {
   refreshInterval?: number;
   defaultContextWindow?: number;
   defaultMaxTokens?: number;
+  /** Per-model cost overrides keyed by model ID (e.g. "us.anthropic.claude-sonnet-4-6"). */
+  costs?: Record<string, BedrockModelCostConfig>;
 };
 
 export type ModelsConfig = {

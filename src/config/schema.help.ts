@@ -678,6 +678,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Fallback context-window value applied to discovered models when provider metadata lacks explicit limits. Use realistic defaults to avoid oversized prompts that exceed true provider constraints.",
   "models.bedrockDiscovery.defaultMaxTokens":
     "Fallback max-token value applied to discovered models without explicit output token limits. Use conservative defaults to reduce truncation surprises and unexpected token spend.",
+  "models.bedrockDiscovery.costs":
+    'Per-model cost overrides for auto-discovered Bedrock models, keyed by exact model ID (e.g. "us.anthropic.claude-sonnet-4-6"). Values are cost-per-million-tokens for input, output, cacheRead, and cacheWrite. Omitting a field defaults it to zero. This is a pure metadata overlay — it does not affect model selection or request routing.',
   auth: "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
   "channels.slack.allowBots":
     "Allow bot-authored messages to trigger Slack replies (default: false).",

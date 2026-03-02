@@ -39,12 +39,22 @@ function normalizeProviderFilter(filter?: string[]): string[] {
   return Array.from(normalized).toSorted();
 }
 
+function normalizeCostsKey(costs?: Record<string, unknown>): string {
+  if (!costs || Object.keys(costs).length === 0) {
+    return "";
+  }
+  // Sort top-level model IDs for a stable, deterministic key
+  const sortedEntries = Object.entries(costs).toSorted(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify(sortedEntries);
+}
+
 function buildCacheKey(params: {
   region: string;
   providerFilter: string[];
   refreshIntervalSeconds: number;
   defaultContextWindow: number;
   defaultMaxTokens: number;
+  costsKey: string;
 }): string {
   return JSON.stringify(params);
 }
@@ -124,9 +134,29 @@ function shouldIncludeSummary(summary: BedrockModelSummary, filter: string[]): b
   return true;
 }
 
+function resolveCostForModel(
+  modelId: string,
+  costs?: BedrockDiscoveryConfig["costs"],
+): typeof DEFAULT_COST {
+  if (!costs) {
+    return DEFAULT_COST;
+  }
+  const override = costs[modelId];
+  if (!override) {
+    return DEFAULT_COST;
+  }
+  return {
+    input: override.input ?? DEFAULT_COST.input,
+    output: override.output ?? DEFAULT_COST.output,
+    cacheRead: override.cacheRead ?? DEFAULT_COST.cacheRead,
+    cacheWrite: override.cacheWrite ?? DEFAULT_COST.cacheWrite,
+  };
+}
+
 function toModelDefinition(
   summary: BedrockModelSummary,
   defaults: { contextWindow: number; maxTokens: number },
+  costs?: BedrockDiscoveryConfig["costs"],
 ): ModelDefinitionConfig {
   const id = summary.modelId?.trim() ?? "";
   return {
@@ -134,7 +164,7 @@ function toModelDefinition(
     name: summary.modelName?.trim() || id,
     reasoning: inferReasoningSupport(summary),
     input: mapInputModalities(summary),
-    cost: DEFAULT_COST,
+    cost: resolveCostForModel(id, costs),
     contextWindow: defaults.contextWindow,
     maxTokens: defaults.maxTokens,
   };
@@ -158,12 +188,14 @@ export async function discoverBedrockModels(params: {
   const providerFilter = normalizeProviderFilter(params.config?.providerFilter);
   const defaultContextWindow = resolveDefaultContextWindow(params.config);
   const defaultMaxTokens = resolveDefaultMaxTokens(params.config);
+  const costsKey = normalizeCostsKey(params.config?.costs);
   const cacheKey = buildCacheKey({
     region: params.region,
     providerFilter,
     refreshIntervalSeconds,
     defaultContextWindow,
     defaultMaxTokens,
+    costsKey,
   });
   const now = params.now?.() ?? Date.now();
 
@@ -188,10 +220,11 @@ export async function discoverBedrockModels(params: {
         continue;
       }
       discovered.push(
-        toModelDefinition(summary, {
-          contextWindow: defaultContextWindow,
-          maxTokens: defaultMaxTokens,
-        }),
+        toModelDefinition(
+          summary,
+          { contextWindow: defaultContextWindow, maxTokens: defaultMaxTokens },
+          params.config?.costs,
+        ),
       );
     }
     return discovered.toSorted((a, b) => a.name.localeCompare(b.name));
