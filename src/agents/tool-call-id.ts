@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
-export type ToolCallIdMode = "strict" | "strict9";
+export type ToolCallIdMode = "strict" | "strict9" | "lenonly";
 
 const STRICT9_LEN = 9;
 const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
@@ -23,6 +23,10 @@ export function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"):
       return "defaultid";
     }
     return "defaulttoolid";
+  }
+
+  if (mode === "lenonly") {
+    return id.length > 40 ? id.slice(0, 40) : id;
   }
 
   if (mode === "strict9") {
@@ -90,7 +94,7 @@ export function isValidCloudCodeAssistToolId(id: string, mode: ToolCallIdMode = 
     return /^[a-zA-Z0-9]{9}$/.test(id);
   }
   // Strictly alphanumeric for providers with tighter tool ID constraints
-  return /^[a-zA-Z0-9]+$/.test(id);
+  return mode === "lenonly" ? id.length <= 40 : /^[a-zA-Z0-9]+$/.test(id);
 }
 
 function shortHash(text: string, length = 8): string {
