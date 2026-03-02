@@ -51,6 +51,7 @@ export type ProcessGatewayAllowlistParams = {
   scopeKey?: string;
   warnings: string[];
   notifySessionKey?: string;
+  wakeOnExit?: boolean;
   approvalRunningNoticeMs: number;
   maxOutput: number;
   pendingMaxOutput: number;
@@ -189,6 +190,7 @@ export async function processGatewayAllowlist(
             sessionKey: params.notifySessionKey,
             contextKey,
             agentId: params.agentId,
+            wakeOnExit: params.wakeOnExit === true,
           },
         );
         return;
@@ -243,6 +245,7 @@ export async function processGatewayAllowlist(
             sessionKey: params.notifySessionKey,
             contextKey,
             agentId: params.agentId,
+            wakeOnExit: params.wakeOnExit === true,
           },
         );
         return;
@@ -277,6 +280,7 @@ export async function processGatewayAllowlist(
             sessionKey: params.notifySessionKey,
             contextKey,
             agentId: params.agentId,
+            wakeOnExit: params.wakeOnExit === true,
           },
         );
         return;
@@ -289,7 +293,12 @@ export async function processGatewayAllowlist(
         runningTimer = setTimeout(() => {
           emitExecSystemEvent(
             `Exec running (gateway id=${approvalId}, session=${run?.session.id}, >${noticeSeconds}s): ${params.command}`,
-            { sessionKey: params.notifySessionKey, contextKey, agentId: params.agentId },
+            {
+              sessionKey: params.notifySessionKey,
+              contextKey,
+              agentId: params.agentId,
+              wakeOnExit: params.wakeOnExit === true,
+            },
           );
         }, params.approvalRunningNoticeMs);
       }
@@ -309,6 +318,7 @@ export async function processGatewayAllowlist(
         sessionKey: params.notifySessionKey,
         contextKey,
         agentId: params.agentId,
+        wakeOnExit: params.wakeOnExit === true,
       });
     })();
 

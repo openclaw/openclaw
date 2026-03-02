@@ -29,6 +29,8 @@ export async function triggerSessionEventRun(params: {
   }
 
   const delivery = deliveryContextFromSession(entry);
+  // Follow-up: internal webchat sessions are currently non-routable in route-reply,
+  // so event-driven runs may not produce outbound replies on webchat-bound sessions.
   const originatingChannel = delivery?.channel
     ? (normalizeChannelId(delivery.channel) ?? delivery.channel)
     : undefined;

@@ -135,6 +135,12 @@ export const execSchema = Type.Object({
       description: "Node id/name for host=node.",
     }),
   ),
+  wakeOnExit: Type.Optional(
+    Type.Boolean({
+      description:
+        "When true, trigger an immediate session event run after enqueueing a background exec completion event (default false). Implies notifyOnExit=true.",
+    }),
+  ),
 });
 
 export type ExecProcessOutcome = {
@@ -249,7 +255,9 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   if (!queued) {
     return;
   }
-  requestExecEventWake({ sessionKey, agentId: session.agentId });
+  if (session.wakeOnExit === true) {
+    requestExecEventWake({ sessionKey, agentId: session.agentId });
+  }
 }
 
 export function createApprovalSlug(id: string) {
@@ -268,7 +276,7 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
 
 export function emitExecSystemEvent(
   text: string,
-  opts: { sessionKey?: string; contextKey?: string; agentId?: string },
+  opts: { sessionKey?: string; contextKey?: string; agentId?: string; wakeOnExit?: boolean },
 ) {
   const sessionKey = opts.sessionKey?.trim();
   if (!sessionKey) {
@@ -278,7 +286,9 @@ export function emitExecSystemEvent(
   if (!queued) {
     return;
   }
-  requestExecEventWake({ sessionKey, agentId: opts.agentId });
+  if (opts.wakeOnExit === true) {
+    requestExecEventWake({ sessionKey, agentId: opts.agentId });
+  }
 }
 
 export async function runExecProcess(opts: {
@@ -295,6 +305,7 @@ export async function runExecProcess(opts: {
   maxOutput: number;
   pendingMaxOutput: number;
   notifyOnExit: boolean;
+  wakeOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   agentId?: string;
   scopeKey?: string;
@@ -314,6 +325,7 @@ export async function runExecProcess(opts: {
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
     notifyOnExit: opts.notifyOnExit,
+    wakeOnExit: opts.wakeOnExit === true,
     notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
     exitNotified: false,
     child: undefined,

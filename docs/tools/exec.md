@@ -26,6 +26,7 @@ Background sessions are scoped per agent; `process` only sees sessions from the 
 - `ask` (`off | on-miss | always`): approval prompts for `gateway`/`node`
 - `node` (string): node id/name for `host=node`
 - `elevated` (bool): request elevated mode (gateway host); `security=full` is only forced when elevated resolves to `full`
+- `wakeOnExit` (bool, default `false`): when background completion is enqueued as a system event, trigger an immediate session event run
 
 Notes:
 
@@ -49,7 +50,7 @@ Notes:
 
 ## Config
 
-- `tools.exec.notifyOnExit` (default: true): when true, backgrounded exec sessions enqueue a system event and request a heartbeat on exit.
+- `tools.exec.notifyOnExit` (default: true): when true, backgrounded exec sessions enqueue a system event on exit.
 - `tools.exec.approvalRunningNoticeMs` (default: 10000): emit a single “running” notice when an approval-gated exec runs longer than this (0 disables).
 - `tools.exec.host` (default: `sandbox`)
 - `tools.exec.security` (default: `deny` for sandbox, `allowlist` for gateway + node when unset)

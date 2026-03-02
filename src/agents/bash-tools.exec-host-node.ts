@@ -47,6 +47,7 @@ export type ExecuteNodeHostCommandParams = {
   approvalRunningNoticeMs: number;
   warnings: string[];
   notifySessionKey?: string;
+  wakeOnExit?: boolean;
   trustedSafeBinDirs?: ReadonlySet<string>;
 };
 
@@ -177,6 +178,7 @@ export async function executeNodeHostCommand(
         timeoutMs: typeof params.timeoutSec === "number" ? params.timeoutSec * 1000 : undefined,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
+        wakeOnExit: params.wakeOnExit === true ? true : undefined,
         approved: approvedByAsk,
         approvalDecision: approvalDecision ?? undefined,
         runId: runId ?? undefined,
@@ -229,7 +231,12 @@ export async function executeNodeHostCommand(
       } catch {
         emitExecSystemEvent(
           `Exec denied (node=${nodeId} id=${approvalId}, approval-request-failed): ${params.command}`,
-          { sessionKey: params.notifySessionKey, contextKey, agentId: params.agentId },
+          {
+            sessionKey: params.notifySessionKey,
+            contextKey,
+            agentId: params.agentId,
+            wakeOnExit: params.wakeOnExit === true,
+          },
         );
         return;
       }
@@ -266,6 +273,7 @@ export async function executeNodeHostCommand(
             sessionKey: params.notifySessionKey,
             contextKey,
             agentId: params.agentId,
+            wakeOnExit: params.wakeOnExit === true,
           },
         );
         return;
@@ -276,7 +284,12 @@ export async function executeNodeHostCommand(
         runningTimer = setTimeout(() => {
           emitExecSystemEvent(
             `Exec running (node=${nodeId} id=${approvalId}, >${noticeSeconds}s): ${params.command}`,
-            { sessionKey: params.notifySessionKey, contextKey, agentId: params.agentId },
+            {
+              sessionKey: params.notifySessionKey,
+              contextKey,
+              agentId: params.agentId,
+              wakeOnExit: params.wakeOnExit === true,
+            },
           );
         }, params.approvalRunningNoticeMs);
       }
@@ -294,6 +307,7 @@ export async function executeNodeHostCommand(
             sessionKey: params.notifySessionKey,
             contextKey,
             agentId: params.agentId,
+            wakeOnExit: params.wakeOnExit === true,
           },
         );
       } finally {

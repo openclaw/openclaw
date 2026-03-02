@@ -111,6 +111,7 @@ describe("node exec events", () => {
         sessionKey: "agent:main:main",
         runId: "run-1",
         command: "ls -la",
+        wakeOnExit: true,
       }),
     });
 
@@ -134,6 +135,7 @@ describe("node exec events", () => {
         exitCode: 0,
         timedOut: false,
         output: "done",
+        wakeOnExit: true,
       }),
     });
 
@@ -161,6 +163,7 @@ describe("node exec events", () => {
         exitCode: 0,
         timedOut: false,
         output: "done",
+        wakeOnExit: true,
       }),
     });
 
@@ -190,6 +193,7 @@ describe("node exec events", () => {
         timedOut: false,
         output: "done",
         sessionKey: "global",
+        wakeOnExit: true,
       }),
     });
 
@@ -222,6 +226,26 @@ describe("node exec events", () => {
     expect(requestSessionEventRunMock).not.toHaveBeenCalled();
   });
 
+  it("enqueues exec events without waking when wakeOnExit is false", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        runId: "run-no-wake",
+        exitCode: 0,
+        timedOut: false,
+        output: "done",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec finished (node=node-2 id=run-no-wake, code 0)\ndone",
+      { sessionKey: "node-node-2", contextKey: "exec:run-no-wake" },
+    );
+    expect(requestSessionEventRunMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+
   it("truncates long exec.finished output in system events", async () => {
     const ctx = buildCtx();
     await handleNodeEvent(ctx, "node-2", {
@@ -231,6 +255,7 @@ describe("node exec events", () => {
         exitCode: 0,
         timedOut: false,
         output: "x".repeat(600),
+        wakeOnExit: true,
       }),
     });
 
@@ -255,6 +280,7 @@ describe("node exec events", () => {
         runId: "run-3",
         command: "rm -rf /",
         reason: "allowlist-miss",
+        wakeOnExit: true,
       }),
     });
 
@@ -308,6 +334,34 @@ describe("node exec events", () => {
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
     expect(requestSessionEventRunMock).not.toHaveBeenCalled();
+  });
+
+  it("allows exec.finished notifications when wakeOnExit is true even if notifyOnExit is false", async () => {
+    loadConfigMock.mockReturnValueOnce({
+      session: { mainKey: "agent:main:main" },
+      tools: { exec: { notifyOnExit: false } },
+    } as ReturnType<typeof loadConfig>);
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        runId: "run-force-notify",
+        exitCode: 0,
+        timedOut: false,
+        output: "done",
+        wakeOnExit: true,
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec finished (node=node-2 id=run-force-notify, code 0)\ndone",
+      { sessionKey: "node-node-2", contextKey: "exec:run-force-notify" },
+    );
+    expect(requestSessionEventRunMock).toHaveBeenCalledWith({
+      source: "exec-event",
+      sessionKey: "node-node-2",
+    });
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 
   it("suppresses exec.denied when notifyOnExit is false", async () => {

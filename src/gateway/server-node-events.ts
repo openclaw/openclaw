@@ -530,11 +530,13 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         return;
       }
       const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
+      const wakeOnExit = obj.wakeOnExit === true;
 
       // Respect tools.exec.notifyOnExit setting (default: true)
-      // When false, skip system event notifications for node exec events.
+      // When false, skip system event notifications for node exec events unless
+      // this run explicitly requested wakeOnExit (which implies notifyOnExit).
       const cfg = loadConfig();
-      const notifyOnExit = cfg.tools?.exec?.notifyOnExit !== false;
+      const notifyOnExit = cfg.tools?.exec?.notifyOnExit !== false || wakeOnExit;
       if (!notifyOnExit) {
         return;
       }
@@ -577,7 +579,9 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         sessionKey,
         contextKey: runId ? `exec:${runId}` : "exec",
       });
-      if (queued) {
+      if (queued && wakeOnExit) {
+        // Known limitation: runs originating from internal webchat sessions may not emit
+        // routable outbound replies because webchat is not supported by route-reply.
         requestSessionEventRun({ source: "exec-event", sessionKey });
       }
       return;
