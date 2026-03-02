@@ -251,6 +251,7 @@ export function buildServiceEnvironment(params: {
     PATH: sharedEnv.minimalPath,
     ...sharedEnv.proxyEnv,
     NODE_EXTRA_CA_CERTS: sharedEnv.nodeCaCerts,
+    NODE_USE_SYSTEM_CA: sharedEnv.nodeUseSystemCa,
     OPENCLAW_PROFILE: profile,
     OPENCLAW_STATE_DIR: sharedEnv.stateDir,
     OPENCLAW_CONFIG_PATH: sharedEnv.configPath,
@@ -279,6 +280,7 @@ export function buildNodeServiceEnvironment(params: {
     PATH: sharedEnv.minimalPath,
     ...sharedEnv.proxyEnv,
     NODE_EXTRA_CA_CERTS: sharedEnv.nodeCaCerts,
+    NODE_USE_SYSTEM_CA: sharedEnv.nodeUseSystemCa,
     OPENCLAW_STATE_DIR: sharedEnv.stateDir,
     OPENCLAW_CONFIG_PATH: sharedEnv.configPath,
     OPENCLAW_GATEWAY_TOKEN: gatewayToken,
@@ -303,6 +305,7 @@ function resolveSharedServiceEnvironmentFields(
   minimalPath: string;
   proxyEnv: Record<string, string | undefined>;
   nodeCaCerts: string | undefined;
+  nodeUseSystemCa: string | undefined;
 } {
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;
@@ -314,6 +317,7 @@ function resolveSharedServiceEnvironmentFields(
   // works correctly when running as a LaunchAgent without extra user configuration.
   const nodeCaCerts =
     env.NODE_EXTRA_CA_CERTS ?? (platform === "darwin" ? "/etc/ssl/cert.pem" : undefined);
+  const nodeUseSystemCa = env.NODE_USE_SYSTEM_CA ?? (platform === "darwin" ? "1" : undefined);
   return {
     stateDir,
     configPath,
@@ -321,5 +325,6 @@ function resolveSharedServiceEnvironmentFields(
     minimalPath: buildMinimalServicePath({ env }),
     proxyEnv,
     nodeCaCerts,
+    nodeUseSystemCa,
   };
 }
