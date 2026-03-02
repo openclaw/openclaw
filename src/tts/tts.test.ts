@@ -101,7 +101,15 @@ function getFetchRequestBody(fetchMock: { mock: { calls: unknown[][] } }, callIn
 async function readReadable(stream: NodeJS.ReadableStream): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of stream) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array));
+    if (Buffer.isBuffer(chunk)) {
+      chunks.push(chunk);
+      continue;
+    }
+    if (typeof chunk === "string") {
+      chunks.push(Buffer.from(chunk));
+      continue;
+    }
+    chunks.push(Buffer.from(chunk));
   }
   return Buffer.concat(chunks);
 }
@@ -1003,7 +1011,7 @@ describe("tts", () => {
     });
 
     it("tears down upstream body when prefix sniff detects a mismatch", async () => {
-      const cancelSpy = vi.fn(async () => {});
+      const cancelSpy = vi.fn(async (_reason?: unknown) => {});
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(
@@ -1034,9 +1042,12 @@ describe("tts", () => {
         "returned wav but opus was requested",
       );
       expect(cancelSpy).toHaveBeenCalledTimes(1);
-      const reason = cancelSpy.mock.calls[0]?.[0];
+      const reason = cancelSpy.mock.calls.at(0)?.[0];
       expect(reason).toBeInstanceOf(Error);
-      expect((reason as Error).message).toContain("returned wav but opus was requested");
+      if (!(reason instanceof Error)) {
+        throw new Error("Expected stream cancel reason to be an Error");
+      }
+      expect(reason.message).toContain("returned wav but opus was requested");
     });
   });
 
