@@ -3,7 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { HooksConfigResolved } from "./hooks.js";
-import { canonicalizePathVariant } from "./security-path.js";
+import { canonicalizePathVariant, isProtectedPluginRoutePath } from "./security-path.js";
 import { createGatewayHttpServer, createHooksRequestHandler } from "./server-http.js";
 import { withTempConfig } from "./test-temp-config.js";
 
@@ -243,7 +243,7 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
-  test("requires gateway auth for /api/channels/* plugin routes and allows authenticated pass-through", async () => {
+  test("requires gateway auth for protected plugin route space and allows authenticated pass-through", async () => {
     const resolvedAuth: ResolvedGatewayAuth = {
       mode: "token",
       token: "test-token",
@@ -287,6 +287,8 @@ describe("gateway plugin HTTP auth boundary", () => {
           openResponsesEnabled: false,
           handleHooksRequest: async () => false,
           handlePluginRequest,
+          shouldEnforcePluginGatewayAuth: (requestPath) =>
+            isProtectedPluginRoutePath(requestPath) || requestPath === "/plugin/public",
           resolvedAuth,
         });
 
@@ -328,10 +330,168 @@ describe("gateway plugin HTTP auth boundary", () => {
           createRequest({ path: "/plugin/public" }),
           unauthenticatedPublic.res,
         );
-        expect(unauthenticatedPublic.res.statusCode).toBe(200);
-        expect(unauthenticatedPublic.getBody()).toContain('"route":"public"');
+        expect(unauthenticatedPublic.res.statusCode).toBe(401);
+        expect(unauthenticatedPublic.getBody()).toContain("Unauthorized");
 
-        expect(handlePluginRequest).toHaveBeenCalledTimes(2);
+        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+      },
+    });
+  });
+
+  test("keeps wildcard plugin handlers ungated when auth enforcement predicate excludes their paths", async () => {
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "token",
+      token: "test-token",
+      password: undefined,
+      allowTailscale: false,
+    };
+
+    await withTempConfig({
+      cfg: { gateway: { trustedProxies: [] } },
+      prefix: "openclaw-plugin-http-auth-wildcard-handler-test-",
+      run: async () => {
+        const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+          const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+          if (pathname === "/plugin/routed") {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json; charset=utf-8");
+            res.end(JSON.stringify({ ok: true, route: "routed" }));
+            return true;
+          }
+          if (pathname === "/googlechat") {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json; charset=utf-8");
+            res.end(JSON.stringify({ ok: true, route: "wildcard-handler" }));
+            return true;
+          }
+          return false;
+        });
+
+        const server = createGatewayHttpServer({
+          canvasHost: null,
+          clients: new Set(),
+          controlUiEnabled: false,
+          controlUiBasePath: "/__control__",
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          handleHooksRequest: async () => false,
+          handlePluginRequest,
+          shouldEnforcePluginGatewayAuth: (requestPath) =>
+            requestPath.startsWith("/api/channels") || requestPath === "/plugin/routed",
+          resolvedAuth,
+        });
+
+        const unauthenticatedRouted = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/plugin/routed" }),
+          unauthenticatedRouted.res,
+        );
+        expect(unauthenticatedRouted.res.statusCode).toBe(401);
+        expect(unauthenticatedRouted.getBody()).toContain("Unauthorized");
+
+        const unauthenticatedWildcard = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/googlechat" }),
+          unauthenticatedWildcard.res,
+        );
+        expect(unauthenticatedWildcard.res.statusCode).toBe(200);
+        expect(unauthenticatedWildcard.getBody()).toContain('"route":"wildcard-handler"');
+
+        const authenticatedRouted = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/plugin/routed",
+            authorization: "Bearer test-token",
+          }),
+          authenticatedRouted.res,
+        );
+        expect(authenticatedRouted.res.statusCode).toBe(200);
+        expect(authenticatedRouted.getBody()).toContain('"route":"routed"');
+      },
+    });
+  });
+
+  test("uses /api/channels auth by default while keeping wildcard handlers ungated with no predicate", async () => {
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "token",
+      token: "test-token",
+      password: undefined,
+      allowTailscale: false,
+    };
+
+    await withTempConfig({
+      cfg: { gateway: { trustedProxies: [] } },
+      prefix: "openclaw-plugin-http-auth-wildcard-default-test-",
+      run: async () => {
+        const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+          const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+          if (pathname === "/api/channels/nostr/default/profile") {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json; charset=utf-8");
+            res.end(JSON.stringify({ ok: true, route: "channel-default" }));
+            return true;
+          }
+          if (pathname === "/googlechat") {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json; charset=utf-8");
+            res.end(JSON.stringify({ ok: true, route: "wildcard-default" }));
+            return true;
+          }
+          return false;
+        });
+
+        const server = createGatewayHttpServer({
+          canvasHost: null,
+          clients: new Set(),
+          controlUiEnabled: false,
+          controlUiBasePath: "/__control__",
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          handleHooksRequest: async () => false,
+          handlePluginRequest,
+          resolvedAuth,
+        });
+
+        const unauthenticated = createResponse();
+        await dispatchRequest(server, createRequest({ path: "/googlechat" }), unauthenticated.res);
+        expect(unauthenticated.res.statusCode).toBe(200);
+        expect(unauthenticated.getBody()).toContain('"route":"wildcard-default"');
+
+        const unauthenticatedChannel = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/api/channels/nostr/default/profile" }),
+          unauthenticatedChannel.res,
+        );
+        expect(unauthenticatedChannel.res.statusCode).toBe(401);
+        expect(unauthenticatedChannel.getBody()).toContain("Unauthorized");
+
+        const authenticated = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/googlechat",
+            authorization: "Bearer test-token",
+          }),
+          authenticated.res,
+        );
+        expect(authenticated.res.statusCode).toBe(200);
+        expect(authenticated.getBody()).toContain('"route":"wildcard-default"');
+
+        const authenticatedChannel = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/api/channels/nostr/default/profile",
+            authorization: "Bearer test-token",
+          }),
+          authenticatedChannel.res,
+        );
+        expect(authenticatedChannel.res.statusCode).toBe(200);
+        expect(authenticatedChannel.getBody()).toContain('"route":"channel-default"');
       },
     });
   });
@@ -369,6 +529,7 @@ describe("gateway plugin HTTP auth boundary", () => {
           openResponsesEnabled: false,
           handleHooksRequest: async () => false,
           handlePluginRequest,
+          shouldEnforcePluginGatewayAuth: isProtectedPluginRoutePath,
           resolvedAuth,
         });
 
@@ -418,6 +579,7 @@ describe("gateway plugin HTTP auth boundary", () => {
           openResponsesEnabled: false,
           handleHooksRequest: async () => false,
           handlePluginRequest,
+          shouldEnforcePluginGatewayAuth: isProtectedPluginRoutePath,
           resolvedAuth,
         });
 
