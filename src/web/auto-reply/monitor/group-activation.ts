@@ -9,6 +9,7 @@ import {
   resolveGroupSessionKey,
   resolveStorePath,
 } from "../../../config/sessions.js";
+import { resolveAccountEntry } from "../../../routing/account-lookup.js";
 
 export function resolveGroupPolicyFor(
   cfg: ReturnType<typeof loadConfig>,
@@ -27,13 +28,15 @@ export function resolveGroupPolicyFor(
         accounts?: Record<string, { groupAllowFrom?: string[]; allowFrom?: string[] }>;
       }
     | undefined;
-  const accountCfg = accountId ? whatsappCfg?.accounts?.[accountId] : undefined;
-  const hasGroupAllowFrom = Boolean(
-    accountCfg?.groupAllowFrom?.length ||
-    accountCfg?.allowFrom?.length ||
-    whatsappCfg?.groupAllowFrom?.length ||
-    whatsappCfg?.allowFrom?.length,
-  );
+  const accountCfg = accountId ? resolveAccountEntry(whatsappCfg?.accounts, accountId) : undefined;
+  // If the account explicitly defines groupAllowFrom or allowFrom (even as []),
+  // use only the account-level values — do not fall back to root, since the
+  // account may be intentionally clearing inherited root lists.
+  const hasAccountOverride =
+    accountCfg && ("groupAllowFrom" in accountCfg || "allowFrom" in accountCfg);
+  const hasGroupAllowFrom = hasAccountOverride
+    ? Boolean(accountCfg.groupAllowFrom?.length || accountCfg.allowFrom?.length)
+    : Boolean(whatsappCfg?.groupAllowFrom?.length || whatsappCfg?.allowFrom?.length);
   return resolveChannelGroupPolicy({
     cfg,
     channel: "whatsapp",
