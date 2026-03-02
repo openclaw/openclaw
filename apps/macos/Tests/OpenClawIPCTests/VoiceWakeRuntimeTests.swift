@@ -49,7 +49,7 @@ import Testing
 
     @Test func gateRequiresGapBetweenTriggerAndCommand() {
         let transcript = "hey openclaw do thing"
-        let segments = makeSegments(
+        let segments = makeWakeWordSegments(
             transcript: transcript,
             words: [
                 ("hey", 0.0, 0.1),
@@ -63,7 +63,7 @@ import Testing
 
     @Test func gateAcceptsGapAndExtractsCommand() {
         let transcript = "hey openclaw do thing"
-        let segments = makeSegments(
+        let segments = makeWakeWordSegments(
             transcript: transcript,
             words: [
                 ("hey", 0.0, 0.1),
@@ -74,18 +74,4 @@ import Testing
         let config = WakeWordGateConfig(triggers: ["openclaw"], minPostTriggerGap: 0.3)
         #expect(WakeWordGate.match(transcript: transcript, segments: segments, config: config)?.command == "do thing")
     }
-}
-
-private func makeSegments(
-    transcript: String,
-    words: [(String, TimeInterval, TimeInterval)])
--> [WakeWordSegment] {
-    var searchStart = transcript.startIndex
-    var output: [WakeWordSegment] = []
-    for (word, start, duration) in words {
-        let range = transcript.range(of: word, range: searchStart..<transcript.endIndex)
-        output.append(WakeWordSegment(text: word, start: start, duration: duration, range: range))
-        if let range { searchStart = range.upperBound }
-    }
-    return output
 }
