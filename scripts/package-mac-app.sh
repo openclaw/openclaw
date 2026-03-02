@@ -16,7 +16,11 @@ GIT_BUILD_NUMBER=$(cd "$ROOT_DIR" && git rev-list --count HEAD 2>/dev/null || ec
 APP_VERSION="${APP_VERSION:-$PKG_VERSION}"
 APP_BUILD="${APP_BUILD:-}"
 BUILD_CONFIG="${BUILD_CONFIG:-debug}"
-BUILD_ARCHS_VALUE="${BUILD_ARCHS:-$(uname -m)}"
+if [[ "${BUILD_CONFIG}" == "release" ]]; then
+  BUILD_ARCHS_VALUE="${BUILD_ARCHS:-all}"
+else
+  BUILD_ARCHS_VALUE="${BUILD_ARCHS:-$(uname -m)}"
+fi
 if [[ "${BUILD_ARCHS_VALUE}" == "all" ]]; then
   BUILD_ARCHS_VALUE="arm64 x86_64"
 fi
