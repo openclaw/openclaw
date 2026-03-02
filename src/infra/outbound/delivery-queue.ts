@@ -102,7 +102,9 @@ function resolveDeliveryMaxAgeMs(cfg: OpenClawConfig): number {
 
 function resolveExpireAction(cfg: OpenClawConfig): "fail" | "deliver" {
   const action = cfg.messages?.delivery?.expireAction;
-  return action === "deliver" ? "deliver" : "fail";
+  // Default to "deliver" so that a long gateway restart doesn't permanently
+  // drop queued messages. Operators can opt into "fail" explicitly.
+  return action === "fail" ? "fail" : "deliver";
 }
 
 export async function ensureQueueDir(stateDir?: string): Promise<string> {
@@ -519,6 +521,7 @@ export async function recoverPendingDeliveries(opts: {
         .prepare(
           `SELECT COUNT(*) AS cnt FROM message_outbox
             WHERE status IN ('queued','failed_retryable')
+              AND (dispatch_kind IS NULL OR dispatch_kind = 'final')
               AND next_attempt_at <= ?
               AND queued_at >= ?
               AND last_attempt_at IS NULL
