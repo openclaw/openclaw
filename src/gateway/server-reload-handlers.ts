@@ -17,6 +17,7 @@ import {
 import { setCommandLaneConcurrency, getTotalQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload.js";
+import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { resolveHooksConfig } from "./hooks.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
@@ -26,6 +27,7 @@ type GatewayHotReloadState = {
   heartbeatRunner: HeartbeatRunner;
   cronState: GatewayCronState;
   browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> | null;
+  channelHealthMonitor: { stop: () => void } | null;
 };
 
 export function createGatewayReloadHandlers(params: {
@@ -35,6 +37,7 @@ export function createGatewayReloadHandlers(params: {
   setState: (state: GatewayHotReloadState) => void;
   startChannel: (name: ChannelKind) => Promise<void>;
   stopChannel: (name: ChannelKind) => Promise<void>;
+  getChannelManager: () => { getRuntimeSnapshot: () => unknown };
   logHooks: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -44,6 +47,7 @@ export function createGatewayReloadHandlers(params: {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   logCron: { error: (msg: string) => void };
   logReload: { info: (msg: string) => void; warn: (msg: string) => void };
+  logHealth: { info: (msg: string) => void };
 }) {
   const applyHotReload = async (
     plan: GatewayReloadPlan,
@@ -98,6 +102,27 @@ export function createGatewayReloadHandlers(params: {
         onSkipped: () =>
           params.logHooks.info("skipping gmail watcher restart (OPENCLAW_SKIP_GMAIL_WATCHER=1)"),
       });
+    }
+
+    if (plan.restartHealthMonitor) {
+      const healthCheckMinutes = nextConfig.gateway?.channelHealthCheckMinutes;
+      const healthCheckDisabled = healthCheckMinutes === 0;
+      
+      if (state.channelHealthMonitor) {
+        state.channelHealthMonitor.stop();
+        params.logHealth.info("health-monitor: stopped");
+      }
+      
+      if (healthCheckDisabled) {
+        nextState.channelHealthMonitor = null;
+        params.logHealth.info("health-monitor: disabled (channelHealthCheckMinutes=0)");
+      } else {
+        nextState.channelHealthMonitor = startChannelHealthMonitor({
+          channelManager: params.getChannelManager() as Parameters<typeof startChannelHealthMonitor>[0]["channelManager"],
+          checkIntervalMs: (healthCheckMinutes ?? 5) * 60_000,
+        });
+        params.logHealth.info(`health-monitor: restarted (interval: ${healthCheckMinutes ?? 5}m)`);
+      }
     }
 
     if (plan.restartChannels.size > 0) {

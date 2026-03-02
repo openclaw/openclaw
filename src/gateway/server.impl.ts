@@ -832,6 +832,7 @@ export async function startGatewayServer(
             heartbeatRunner,
             cronState,
             browserControl,
+            channelHealthMonitor,
           }),
           setState: (nextState) => {
             hooksConfig = nextState.hooksConfig;
@@ -840,14 +841,17 @@ export async function startGatewayServer(
             cron = cronState.cron;
             cronStorePath = cronState.storePath;
             browserControl = nextState.browserControl;
+            channelHealthMonitor = nextState.channelHealthMonitor;
           },
           startChannel,
           stopChannel,
+          getChannelManager: () => channelManager,
           logHooks,
           logBrowser,
           logChannels,
           logCron,
           logReload,
+          logHealth,
         });
 
         return startGatewayConfigReloader({
