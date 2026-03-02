@@ -142,6 +142,7 @@ export function createSessionsSpawnTool(opts?: {
             agentAccountId: opts?.agentAccountId,
             agentTo: opts?.agentTo,
             agentThreadId: opts?.agentThreadId,
+            requesterAgentIdOverride: opts?.requesterAgentIdOverride,
           },
         );
         return jsonResult(result);

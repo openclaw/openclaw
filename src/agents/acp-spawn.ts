@@ -53,6 +53,10 @@ export type SpawnAcpContext = {
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
+  /** Override the requester agent ID for sandbox checks in cron/hook contexts where
+   *  agentSessionKey is not agent-scoped and would otherwise fall back to the default agent.
+   *  Mirrors requesterAgentIdOverride in SpawnSubagentContext. */
+  requesterAgentIdOverride?: string;
 };
 
 export type SpawnAcpResult = {
@@ -267,9 +271,15 @@ export async function spawnAcpDirect(
   // Sandbox inheritance guard: mirror the subagent spawn check so sandboxed
   // sessions cannot escape their isolation boundary via the ACP runtime path.
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
+  // When the requester session key is non-agent-scoped (cron/hook contexts), agentId resolution
+  // falls back to the config default agent which may be wrong.  Use requesterAgentIdOverride to
+  // construct a proper agent-scoped key so sandbox config is looked up for the correct agent.
+  const requesterKeyForSandbox = ctx.requesterAgentIdOverride
+    ? `agent:${normalizeAgentId(ctx.requesterAgentIdOverride)}:main:0`
+    : ctx.agentSessionKey;
   const requesterRuntime = resolveSandboxRuntimeStatus({
     cfg,
-    sessionKey: ctx.agentSessionKey,
+    sessionKey: requesterKeyForSandbox,
   });
   const childRuntime = resolveSandboxRuntimeStatus({
     cfg,

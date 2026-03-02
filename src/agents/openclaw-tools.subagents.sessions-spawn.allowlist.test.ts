@@ -246,6 +246,10 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
           },
         },
         list: [
+          // "main" must be listed explicitly so resolveDefaultAgentId returns "main"
+          // rather than "research"; otherwise the requester sandbox check uses research's
+          // mode:"off" config and never fires the sandboxed-requester guard.
+          { id: "main" },
           {
             id: "research",
             sandbox: {
