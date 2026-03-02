@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import { applyConfigEnvVars } from "../config/env-vars.js";
 import { isRecord } from "../utils.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
@@ -116,6 +117,12 @@ export async function ensureOpenClawModelsJson(
 ): Promise<{ agentDir: string; wrote: boolean }> {
   const cfg = config ?? loadConfig();
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveOpenClawAgentDir();
+
+  // Ensure config env vars (e.g. AWS_PROFILE, AWS_ACCESS_KEY_ID) are
+  // available in process.env before implicit provider discovery.  Some
+  // callers (agent runner, tools) pass config objects that haven't gone
+  // through the full loadConfig() pipeline which applies these.
+  applyConfigEnvVars(cfg);
 
   const explicitProviders = cfg.models?.providers ?? {};
   const implicitProviders = await resolveImplicitProviders({ agentDir, explicitProviders });
