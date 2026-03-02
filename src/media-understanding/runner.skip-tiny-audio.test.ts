@@ -12,182 +12,184 @@ import {
   runCapability,
 } from "./runner.js";
 
+async function withAudioFixture(params: {
+  filePrefix: string;
+  extension: string;
+  mediaType: string;
+  fileContents: Buffer;
+  run: (params: {
+    ctx: MsgContext;
+    media: ReturnType<typeof normalizeMediaAttachments>;
+    cache: ReturnType<typeof createMediaAttachmentCache>;
+  }) => Promise<void>;
+}) {
+  const originalPath = process.env.PATH;
+  process.env.PATH = "/usr/bin:/bin";
+
+  const tmpPath = path.join(
+    os.tmpdir(),
+    `${params.filePrefix}-${Date.now().toString()}.${params.extension}`,
+  );
+  await fs.writeFile(tmpPath, params.fileContents);
+
+  const ctx: MsgContext = { MediaPath: tmpPath, MediaType: params.mediaType };
+  const media = normalizeMediaAttachments(ctx);
+  const cache = createMediaAttachmentCache(media, {
+    localPathRoots: [path.dirname(tmpPath)],
+  });
+
+  try {
+    await params.run({ ctx, media, cache });
+  } finally {
+    process.env.PATH = originalPath;
+    await cache.cleanup();
+    await fs.unlink(tmpPath).catch(() => {});
+  }
+}
+
 describe("runCapability skips tiny audio files", () => {
   it("skips audio transcription when file is smaller than MIN_AUDIO_FILE_BYTES", async () => {
-    const originalPath = process.env.PATH;
-    process.env.PATH = "/usr/bin:/bin";
-
-    // Create a tiny audio file (well below the 1KB threshold)
-    const tmpPath = path.join(os.tmpdir(), `openclaw-tiny-audio-${Date.now()}.wav`);
-    const tinyBuffer = Buffer.alloc(100); // 100 bytes, way below 1024
-    await fs.writeFile(tmpPath, tinyBuffer);
-
-    const ctx: MsgContext = { MediaPath: tmpPath, MediaType: "audio/wav" };
-    const media = normalizeMediaAttachments(ctx);
-    const cache = createMediaAttachmentCache(media, {
-      localPathRoots: [path.dirname(tmpPath)],
-    });
-
-    let transcribeCalled = false;
-    const providerRegistry = buildProviderRegistry({
-      openai: {
-        id: "openai",
-        capabilities: ["audio"],
-        transcribeAudio: async (req) => {
-          transcribeCalled = true;
-          return { text: "should not happen", model: req.model };
-        },
-      },
-    });
-
-    const cfg = {
-      models: {
-        providers: {
+    await withAudioFixture({
+      filePrefix: "openclaw-tiny-audio",
+      extension: "wav",
+      mediaType: "audio/wav",
+      fileContents: Buffer.alloc(100), // 100 bytes, way below 1024
+      run: async ({ ctx, media, cache }) => {
+        let transcribeCalled = false;
+        const providerRegistry = buildProviderRegistry({
           openai: {
-            apiKey: "test-key",
-            models: [],
+            id: "openai",
+            capabilities: ["audio"],
+            transcribeAudio: async (req) => {
+              transcribeCalled = true;
+              return { text: "should not happen", model: req.model };
+            },
           },
-        },
+        });
+
+        const cfg = {
+          models: {
+            providers: {
+              openai: {
+                apiKey: "test-key",
+                models: [],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig;
+
+        const result = await runCapability({
+          capability: "audio",
+          cfg,
+          ctx,
+          attachments: cache,
+          media,
+          providerRegistry,
+        });
+
+        // The provider should never be called
+        expect(transcribeCalled).toBe(false);
+
+        // The result should indicate the attachment was skipped
+        expect(result.outputs).toHaveLength(0);
+        expect(result.decision.outcome).toBe("skipped");
+        expect(result.decision.attachments).toHaveLength(1);
+        expect(result.decision.attachments[0].attempts).toHaveLength(1);
+        expect(result.decision.attachments[0].attempts[0].outcome).toBe("skipped");
+        expect(result.decision.attachments[0].attempts[0].reason).toContain("tooSmall");
       },
-    } as unknown as OpenClawConfig;
-
-    try {
-      const result = await runCapability({
-        capability: "audio",
-        cfg,
-        ctx,
-        attachments: cache,
-        media,
-        providerRegistry,
-      });
-
-      // The provider should never be called
-      expect(transcribeCalled).toBe(false);
-
-      // The result should indicate the attachment was skipped
-      expect(result.outputs).toHaveLength(0);
-      expect(result.decision.outcome).toBe("skipped");
-      expect(result.decision.attachments).toHaveLength(1);
-      expect(result.decision.attachments[0].attempts).toHaveLength(1);
-      expect(result.decision.attachments[0].attempts[0].outcome).toBe("skipped");
-      expect(result.decision.attachments[0].attempts[0].reason).toContain("tooSmall");
-    } finally {
-      process.env.PATH = originalPath;
-      await cache.cleanup();
-      await fs.unlink(tmpPath).catch(() => {});
-    }
+    });
   });
 
   it("skips audio transcription for empty (0-byte) files", async () => {
-    const originalPath = process.env.PATH;
-    process.env.PATH = "/usr/bin:/bin";
-
-    const tmpPath = path.join(os.tmpdir(), `openclaw-empty-audio-${Date.now()}.ogg`);
-    await fs.writeFile(tmpPath, Buffer.alloc(0));
-
-    const ctx: MsgContext = { MediaPath: tmpPath, MediaType: "audio/ogg" };
-    const media = normalizeMediaAttachments(ctx);
-    const cache = createMediaAttachmentCache(media, {
-      localPathRoots: [path.dirname(tmpPath)],
-    });
-
-    let transcribeCalled = false;
-    const providerRegistry = buildProviderRegistry({
-      openai: {
-        id: "openai",
-        capabilities: ["audio"],
-        transcribeAudio: async () => {
-          transcribeCalled = true;
-          return { text: "nope", model: "whisper-1" };
-        },
-      },
-    });
-
-    const cfg = {
-      models: {
-        providers: {
+    await withAudioFixture({
+      filePrefix: "openclaw-empty-audio",
+      extension: "ogg",
+      mediaType: "audio/ogg",
+      fileContents: Buffer.alloc(0),
+      run: async ({ ctx, media, cache }) => {
+        let transcribeCalled = false;
+        const providerRegistry = buildProviderRegistry({
           openai: {
-            apiKey: "test-key",
-            models: [],
+            id: "openai",
+            capabilities: ["audio"],
+            transcribeAudio: async () => {
+              transcribeCalled = true;
+              return { text: "nope", model: "whisper-1" };
+            },
           },
-        },
+        });
+
+        const cfg = {
+          models: {
+            providers: {
+              openai: {
+                apiKey: "test-key",
+                models: [],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig;
+
+        const result = await runCapability({
+          capability: "audio",
+          cfg,
+          ctx,
+          attachments: cache,
+          media,
+          providerRegistry,
+        });
+
+        expect(transcribeCalled).toBe(false);
+        expect(result.outputs).toHaveLength(0);
       },
-    } as unknown as OpenClawConfig;
-
-    try {
-      const result = await runCapability({
-        capability: "audio",
-        cfg,
-        ctx,
-        attachments: cache,
-        media,
-        providerRegistry,
-      });
-
-      expect(transcribeCalled).toBe(false);
-      expect(result.outputs).toHaveLength(0);
-    } finally {
-      process.env.PATH = originalPath;
-      await cache.cleanup();
-      await fs.unlink(tmpPath).catch(() => {});
-    }
+    });
   });
 
   it("proceeds with transcription when file meets minimum size", async () => {
-    const originalPath = process.env.PATH;
-    process.env.PATH = "/usr/bin:/bin";
-
-    const tmpPath = path.join(os.tmpdir(), `openclaw-ok-audio-${Date.now()}.wav`);
-    const okBuffer = Buffer.alloc(MIN_AUDIO_FILE_BYTES + 100);
-    await fs.writeFile(tmpPath, okBuffer);
-
-    const ctx: MsgContext = { MediaPath: tmpPath, MediaType: "audio/wav" };
-    const media = normalizeMediaAttachments(ctx);
-    const cache = createMediaAttachmentCache(media, {
-      localPathRoots: [path.dirname(tmpPath)],
-    });
-
-    let transcribeCalled = false;
-    const providerRegistry = buildProviderRegistry({
-      openai: {
-        id: "openai",
-        capabilities: ["audio"],
-        transcribeAudio: async (req) => {
-          transcribeCalled = true;
-          return { text: "hello world", model: req.model };
-        },
-      },
-    });
-
-    const cfg = {
-      models: {
-        providers: {
+    await withAudioFixture({
+      filePrefix: "openclaw-ok-audio",
+      extension: "wav",
+      mediaType: "audio/wav",
+      fileContents: Buffer.alloc(MIN_AUDIO_FILE_BYTES + 100),
+      run: async ({ ctx, media, cache }) => {
+        let transcribeCalled = false;
+        const providerRegistry = buildProviderRegistry({
           openai: {
-            apiKey: "test-key",
-            models: [],
+            id: "openai",
+            capabilities: ["audio"],
+            transcribeAudio: async (req) => {
+              transcribeCalled = true;
+              return { text: "hello world", model: req.model };
+            },
           },
-        },
+        });
+
+        const cfg = {
+          models: {
+            providers: {
+              openai: {
+                apiKey: "test-key",
+                models: [],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig;
+
+        const result = await runCapability({
+          capability: "audio",
+          cfg,
+          ctx,
+          attachments: cache,
+          media,
+          providerRegistry,
+        });
+
+        expect(transcribeCalled).toBe(true);
+        expect(result.outputs).toHaveLength(1);
+        expect(result.outputs[0].text).toBe("hello world");
+        expect(result.decision.outcome).toBe("success");
       },
-    } as unknown as OpenClawConfig;
-
-    try {
-      const result = await runCapability({
-        capability: "audio",
-        cfg,
-        ctx,
-        attachments: cache,
-        media,
-        providerRegistry,
-      });
-
-      expect(transcribeCalled).toBe(true);
-      expect(result.outputs).toHaveLength(1);
-      expect(result.outputs[0].text).toBe("hello world");
-      expect(result.decision.outcome).toBe("success");
-    } finally {
-      process.env.PATH = originalPath;
-      await cache.cleanup();
-      await fs.unlink(tmpPath).catch(() => {});
-    }
+    });
   });
 });
