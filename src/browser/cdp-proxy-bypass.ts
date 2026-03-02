@@ -51,26 +51,39 @@ export function hasProxyEnv(): boolean {
 }
 
 /**
- * Run an async function with NO_PROXY temporarily extended to include
- * localhost and 127.0.0.1. Restores the original value afterwards.
+ * Reentrant-safe NO_PROXY extension for CDP localhost connections.
  *
- * Used for third-party code (e.g. Playwright) that reads env vars
- * internally and doesn't accept an explicit agent.
+ * Uses a reference counter so concurrent async callers share the same
+ * env-var mutation window. The env vars are set on first entry and
+ * restored on last exit, avoiding the snapshot/restore race that would
+ * permanently leak NO_PROXY when calls overlap.
  */
+let noProxyRefCount = 0;
+let savedNoProxy: string | undefined;
+let savedNoProxyLower: string | undefined;
+
+const LOOPBACK_ENTRIES = "localhost,127.0.0.1,[::1]";
+
+function noProxyAlreadyCoversLocalhost(): boolean {
+  const current = process.env.NO_PROXY || process.env.no_proxy || "";
+  return (
+    current.includes("localhost") && current.includes("127.0.0.1") && current.includes("[::1]")
+  );
+}
+
 export async function withNoProxyForLocalhost<T>(fn: () => Promise<T>): Promise<T> {
   if (!hasProxyEnv()) {
     return fn();
   }
 
-  const origNoProxy = process.env.NO_PROXY;
-  const origNoProxyLower = process.env.no_proxy;
-  const loopbackEntries = "localhost,127.0.0.1,[::1]";
+  const isFirst = noProxyRefCount === 0;
+  noProxyRefCount++;
 
-  const current = origNoProxy || origNoProxyLower || "";
-  const alreadyCoversLocalhost = current.includes("localhost") && current.includes("127.0.0.1");
-
-  if (!alreadyCoversLocalhost) {
-    const extended = current ? `${current},${loopbackEntries}` : loopbackEntries;
+  if (isFirst && !noProxyAlreadyCoversLocalhost()) {
+    savedNoProxy = process.env.NO_PROXY;
+    savedNoProxyLower = process.env.no_proxy;
+    const current = savedNoProxy || savedNoProxyLower || "";
+    const extended = current ? `${current},${LOOPBACK_ENTRIES}` : LOOPBACK_ENTRIES;
     process.env.NO_PROXY = extended;
     process.env.no_proxy = extended;
   }
@@ -78,15 +91,20 @@ export async function withNoProxyForLocalhost<T>(fn: () => Promise<T>): Promise<
   try {
     return await fn();
   } finally {
-    if (origNoProxy !== undefined) {
-      process.env.NO_PROXY = origNoProxy;
-    } else {
-      delete process.env.NO_PROXY;
-    }
-    if (origNoProxyLower !== undefined) {
-      process.env.no_proxy = origNoProxyLower;
-    } else {
-      delete process.env.no_proxy;
+    noProxyRefCount--;
+    if (noProxyRefCount === 0 && isFirst) {
+      if (savedNoProxy !== undefined) {
+        process.env.NO_PROXY = savedNoProxy;
+      } else {
+        delete process.env.NO_PROXY;
+      }
+      if (savedNoProxyLower !== undefined) {
+        process.env.no_proxy = savedNoProxyLower;
+      } else {
+        delete process.env.no_proxy;
+      }
+      savedNoProxy = undefined;
+      savedNoProxyLower = undefined;
     }
   }
 }
