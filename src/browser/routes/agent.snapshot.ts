@@ -240,7 +240,7 @@ export function registerBrowserAgentSnapshotRoutes(
     const refsModeRaw = toStringOrEmpty(req.query.refs).trim();
     const refsMode: "aria" | "role" | undefined =
       refsModeRaw === "aria" ? "aria" : refsModeRaw === "role" ? "role" : undefined;
-    const interactive = interactiveRaw ?? (mode === "efficient" ? true : undefined);
+    const interactive = interactiveRaw ?? undefined;
     const compact = compactRaw ?? (mode === "efficient" ? true : undefined);
     const depth =
       depthRaw ?? (mode === "efficient" ? DEFAULT_AI_SNAPSHOT_EFFICIENT_DEPTH : undefined);
@@ -295,6 +295,19 @@ export function registerBrowserAgentSnapshotRoutes(
                 }
                 throw err;
               });
+        // Truncate role snapshot to maxChars (snapshotAiViaPlaywright does this internally)
+        if (
+          wantsRoleSnapshot &&
+          typeof resolvedMaxChars === "number" &&
+          snap.snapshot.length > resolvedMaxChars
+        ) {
+          const hint =
+            mode === "efficient"
+              ? `Increase maxChars for more detail.`
+              : `Try mode="efficient" for a compact view, or increase maxChars.`;
+          snap.snapshot = `${snap.snapshot.slice(0, resolvedMaxChars)}\n\n[...TRUNCATED - page too large. ${hint}]`;
+          (snap as Record<string, unknown>).truncated = true;
+        }
         if (labels) {
           const labeled = await pw.screenshotWithLabelsViaPlaywright({
             cdpUrl: profileCtx.profile.cdpUrl,
