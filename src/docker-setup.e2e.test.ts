@@ -307,10 +307,22 @@ describe("docker-setup.sh", () => {
       const log = await readFile(activeSandbox.logPath, "utf8");
       const gatewayStarts = log
         .split("\n")
-        .filter((line) => line.includes("compose") && line.includes(" up -d openclaw-gateway"));
-      expect(gatewayStarts).toHaveLength(1);
-      expect(log).toContain("config set agents.defaults.sandbox.mode non-main");
+        .filter(
+          (line) =>
+            line.includes("compose") &&
+            line.includes(" up -d") &&
+            line.includes("openclaw-gateway"),
+        );
+      expect(gatewayStarts).toHaveLength(2);
+      expect(log).toContain(
+        "run --rm --no-deps openclaw-cli config set agents.defaults.sandbox.mode non-main",
+      );
       expect(log).toContain("config set agents.defaults.sandbox.mode off");
+      const forceRecreateLine = log
+        .split("\n")
+        .find((line) => line.includes("up -d --force-recreate openclaw-gateway"));
+      expect(forceRecreateLine).toBeDefined();
+      expect(forceRecreateLine).not.toContain("docker-compose.sandbox.yml");
       await expect(
         stat(join(activeSandbox.rootDir, "docker-compose.sandbox.yml")),
       ).rejects.toThrow();
