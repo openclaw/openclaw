@@ -1,0 +1,35 @@
+{
+  "name": "@openclaw/telegram-userbot",
+  "version": "2026.3.2",
+  "private": true,
+  "description": "OpenClaw Telegram Userbot channel plugin (MTProto via GramJS)",
+  "type": "module",
+  "dependencies": {
+    "big-integer": "^1.6.52",
+    "telegram": "^2.26.22"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "telegram-userbot",
+      "label": "Telegram (User)",
+      "selectionLabel": "Telegram (User Account / MTProto)",
+      "detailLabel": "Telegram Userbot",
+      "docsPath": "/channels/telegram-userbot",
+      "docsLabel": "telegram-userbot",
+      "blurb": "Connect your own Telegram account via MTProto. Full user capabilities.",
+      "systemImage": "person.crop.circle",
+      "order": 46
+    },
+    "install": {
+      "npmSpec": "@openclaw/telegram-userbot",
+      "localPath": "extensions/telegram-userbot",
+      "defaultChoice": "npm"
+    }
+  }
+}
