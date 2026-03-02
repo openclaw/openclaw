@@ -19,6 +19,7 @@ describe("secret ref resolver", () => {
   let execProtocolV2ScriptPath = "";
   let execMissingIdScriptPath = "";
   let execInvalidJsonScriptPath = "";
+  let execClosedStdinScriptPath = "";
 
   const createCaseDir = async (label: string): Promise<string> => {
     const dir = path.join(fixtureRoot, `${label}-${caseId++}`);
@@ -66,6 +67,17 @@ describe("secret ref resolver", () => {
     await writeSecureFile(
       execInvalidJsonScriptPath,
       ["#!/bin/sh", "printf 'not-json'"].join("\n"),
+      0o700,
+    );
+
+    execClosedStdinScriptPath = path.join(sharedExecDir, "resolver-closed-stdin.sh");
+    await writeSecureFile(
+      execClosedStdinScriptPath,
+      [
+        "#!/bin/sh",
+        "exec 0<&-",
+        'printf \'{"protocolVersion":1,"values":{"openai/api-key":"value:openai/api-key"}}\'',
+      ].join("\n"),
       0o700,
     );
   });
@@ -172,6 +184,31 @@ describe("secret ref resolver", () => {
       },
     );
     expect(value).toBe("plain-secret");
+  });
+
+  it("handles exec providers that close stdin early", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const value = await resolveSecretRefString(
+      { source: "exec", provider: "execmain", id: "openai/api-key" },
+      {
+        config: {
+          secrets: {
+            providers: {
+              execmain: {
+                source: "exec",
+                command: execClosedStdinScriptPath,
+                passEnv: ["PATH"],
+              },
+            },
+          },
+        },
+      },
+    );
+
+    expect(value).toBe("value:openai/api-key");
   });
 
   it("rejects symlink command paths unless allowSymlinkCommand is enabled", async () => {

@@ -405,7 +405,36 @@ async function runExecResolver(params: {
       });
     });
 
-    child.stdin?.end(params.input);
+    const stdin = child.stdin;
+    if (!stdin) {
+      return;
+    }
+    stdin.on("error", (error) => {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (code === "EPIPE" || code === "ERR_STREAM_DESTROYED") {
+        return;
+      }
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimers();
+      reject(error);
+    });
+    try {
+      stdin.end(params.input);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (code === "EPIPE" || code === "ERR_STREAM_DESTROYED") {
+        return;
+      }
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimers();
+      reject(error);
+    }
   });
 }
 
