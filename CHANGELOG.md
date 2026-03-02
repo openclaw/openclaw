@@ -2068,6 +2068,12 @@ Docs: https://docs.openclaw.ai
 
 ## 2026.1.29
 
+### 🔒 Security Fixes
+- **High**: Fixed a one-click remote code execution vulnerability in the browser relay server (CVE-2026-25253, CVSS 8.8). Attackers could trick users into visiting a malicious webpage to steal locally stored API keys and credentials. Fixes include:
+  - Added Origin header validation to restrict WebSocket access sources
+  - Added proactive authentication mechanism to the `/cdp` endpoint
+  - All users are advised to upgrade to this version and verify their configuration by referring to `docs/security/browser-relay-security.md`
+  
 ### Changes
 
 - Rebrand: rename the npm package/CLI to `openclaw`, add a `openclaw` compatibility shim, and move extensions to the `@openclaw/*` scope.
