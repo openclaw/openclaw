@@ -38,7 +38,10 @@ import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
-import { readStoreAllowFromForDmPolicy } from "../../security/dm-policy-shared.js";
+import {
+  readStoreAllowFromForDmPolicy,
+  resolvePinnedMainDmOwnerFromAllowlist,
+} from "../../security/dm-policy-shared.js";
 import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
 import {
   createDiscordFormModal,
@@ -861,6 +864,17 @@ async function dispatchDiscordComponentEvent(params: {
     sender: { id: interactionCtx.user.id, name: interactionCtx.user.username, tag: senderTag },
     allowNameMatching,
   });
+  const pinnedMainDmOwner = interactionCtx.isDirectMessage
+    ? resolvePinnedMainDmOwnerFromAllowlist({
+        dmScope: ctx.cfg.session?.dmScope,
+        allowFrom: channelConfig?.users ?? guildInfo?.users,
+        normalizeEntry: (entry) => {
+          const normalized = normalizeDiscordAllowList([entry], ["discord:", "user:", "pk:"]);
+          const candidate = normalized?.[0];
+          return candidate && /^\d+$/.test(candidate) ? candidate : undefined;
+        },
+      })
+    : null;
   const commandAuthorized = resolveComponentCommandAuthorized({
     ctx,
     interactionCtx,
@@ -929,6 +943,17 @@ async function dispatchDiscordComponentEvent(params: {
           channel: "discord",
           to: `user:${interactionCtx.userId}`,
           accountId,
+          mainDmOwnerPin: pinnedMainDmOwner
+            ? {
+                ownerRecipient: pinnedMainDmOwner,
+                senderRecipient: interactionCtx.userId,
+                onSkip: ({ ownerRecipient, senderRecipient }) => {
+                  logVerbose(
+                    `discord: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                  );
+                },
+              }
+            : undefined,
         }
       : undefined,
     onRecordError: (err) => {

@@ -48,6 +48,17 @@ type PackageManifest = PluginPackageManifest & {
 const MISSING_EXTENSIONS_ERROR =
   'package.json missing openclaw.extensions; update the plugin package to include openclaw.extensions (for example ["./dist/index.js"]). See https://docs.openclaw.ai/help/troubleshooting#plugin-install-fails-with-missing-openclaw-extensions';
 
+export const PLUGIN_INSTALL_ERROR_CODE = {
+  INVALID_NPM_SPEC: "invalid_npm_spec",
+  MISSING_OPENCLAW_EXTENSIONS: "missing_openclaw_extensions",
+  EMPTY_OPENCLAW_EXTENSIONS: "empty_openclaw_extensions",
+  NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
+  PLUGIN_ID_MISMATCH: "plugin_id_mismatch",
+} as const;
+
+export type PluginInstallErrorCode =
+  (typeof PLUGIN_INSTALL_ERROR_CODE)[keyof typeof PLUGIN_INSTALL_ERROR_CODE];
+
 export type InstallPluginResult =
   | {
       ok: true;
@@ -59,7 +70,7 @@ export type InstallPluginResult =
       npmResolution?: NpmSpecResolution;
       integrityDrift?: NpmIntegrityDrift;
     }
-  | { ok: false; error: string };
+  | { ok: false; error: string; code?: PluginInstallErrorCode };
 
 export type PluginNpmIntegrityDriftParams = {
   spec: string;
@@ -86,15 +97,43 @@ function validatePluginId(pluginId: string): string | null {
   return null;
 }
 
-function ensureOpenClawExtensions(params: { manifest: PackageManifest }): string[] {
+function ensureOpenClawExtensions(params: { manifest: PackageManifest }):
+  | {
+      ok: true;
+      entries: string[];
+    }
+  | {
+      ok: false;
+      error: string;
+      code: PluginInstallErrorCode;
+    } {
   const resolved = resolvePackageExtensionEntries(params.manifest);
   if (resolved.status === "missing") {
-    throw new Error(MISSING_EXTENSIONS_ERROR);
+    return {
+      ok: false,
+      error: MISSING_EXTENSIONS_ERROR,
+      code: PLUGIN_INSTALL_ERROR_CODE.MISSING_OPENCLAW_EXTENSIONS,
+    };
   }
   if (resolved.status === "empty") {
-    throw new Error("package.json openclaw.extensions is empty");
+    return {
+      ok: false,
+      error: "package.json openclaw.extensions is empty",
+      code: PLUGIN_INSTALL_ERROR_CODE.EMPTY_OPENCLAW_EXTENSIONS,
+    };
   }
-  return resolved.entries;
+  return {
+    ok: true,
+    entries: resolved.entries,
+  };
+}
+
+function isNpmPackageNotFoundMessage(error: string): boolean {
+  const normalized = error.trim();
+  if (normalized.startsWith("Package not found on npm:")) {
+    return true;
+  }
+  return /E404|404 not found|not in this registry/i.test(normalized);
 }
 
 function buildFileInstallResult(pluginId: string, targetFile: string): InstallPluginResult {
@@ -150,14 +189,17 @@ async function installPluginFromPackageDir(params: {
     return { ok: false, error: `invalid package.json: ${String(err)}` };
   }
 
-  let extensions: string[];
-  try {
-    extensions = ensureOpenClawExtensions({
-      manifest,
-    });
-  } catch (err) {
-    return { ok: false, error: String(err) };
+  const extensionsResult = ensureOpenClawExtensions({
+    manifest,
+  });
+  if (!extensionsResult.ok) {
+    return {
+      ok: false,
+      error: extensionsResult.error,
+      code: extensionsResult.code,
+    };
   }
+  const extensions = extensionsResult.entries;
 
   const pkgName = typeof manifest.name === "string" ? manifest.name : "";
   const npmPluginId = pkgName ? unscopedPackageName(pkgName) : "plugin";
@@ -181,6 +223,7 @@ async function installPluginFromPackageDir(params: {
     return {
       ok: false,
       error: `plugin id mismatch: expected ${params.expectedPluginId}, got ${pluginId}`,
+      code: PLUGIN_INSTALL_ERROR_CODE.PLUGIN_ID_MISMATCH,
     };
   }
 
@@ -436,7 +479,11 @@ export async function installPluginFromNpmSpec(params: {
   const spec = params.spec.trim();
   const specError = validateRegistryNpmSpec(spec);
   if (specError) {
-    return { ok: false, error: specError };
+    return {
+      ok: false,
+      error: specError,
+      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_NPM_SPEC,
+    };
   }
 
   logger.info?.(`Downloading ${spec}…`);
@@ -459,7 +506,15 @@ export async function installPluginFromNpmSpec(params: {
       expectedPluginId,
     },
   });
-  return finalizeNpmSpecArchiveInstall(flowResult);
+  const finalized = finalizeNpmSpecArchiveInstall(flowResult);
+  if (!finalized.ok && isNpmPackageNotFoundMessage(finalized.error)) {
+    return {
+      ok: false,
+      error: finalized.error,
+      code: PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND,
+    };
+  }
+  return finalized;
 }
 
 export async function installPluginFromPath(params: {
