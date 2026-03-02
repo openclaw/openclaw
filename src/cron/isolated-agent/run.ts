@@ -338,7 +338,6 @@ export async function runCronIsolatedAgentTurn(params: {
     to: deliveryPlan.to,
     accountId: deliveryPlan.accountId,
     sessionKey: params.job.sessionKey,
-    accountId: deliveryPlan.accountId,
   });
 
   const { formattedTime, timeLine } = resolveCronStyleNow(params.cfg, now);
