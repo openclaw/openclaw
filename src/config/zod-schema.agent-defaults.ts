@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { parseByteSize } from "../cli/parse-bytes.js";
+import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
   HeartbeatSchema,
   AgentSandboxSchema,
@@ -96,14 +96,9 @@ export const AgentDefaultsSchema = z
             forceFlushTranscriptBytes: z
               .union([
                 z.number().int().nonnegative(),
-                z.string().refine((value) => {
-                  try {
-                    parseByteSize(value.trim(), { defaultUnit: "b" });
-                    return true;
-                  } catch {
-                    return false;
-                  }
-                }, "Expected byte size string like 2mb"),
+                z
+                  .string()
+                  .refine(isValidNonNegativeByteSizeString, "Expected byte size string like 2mb"),
               ])
               .optional(),
             prompt: z.string().optional(),

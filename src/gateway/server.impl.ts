@@ -372,7 +372,7 @@ export async function startGatewayServer(
   ).config;
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   if (diagnosticsEnabled) {
-    startDiagnosticHeartbeat(cfgAtStart);
+    startDiagnosticHeartbeat();
   }
   setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
   setPreRestartDeferralCheck(
