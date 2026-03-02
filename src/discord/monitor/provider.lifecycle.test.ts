@@ -3,6 +3,8 @@ import type { Client } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime.js";
 
+type WaitForDiscordGatewayStop = typeof import("../monitor.gateway.js").waitForDiscordGatewayStop;
+
 const {
   attachDiscordGatewayLoggingMock,
   getDiscordGatewayEmitterMock,
@@ -16,7 +18,7 @@ const {
   return {
     attachDiscordGatewayLoggingMock: vi.fn(() => stopGatewayLoggingMock),
     getDiscordGatewayEmitterMock,
-    waitForDiscordGatewayStopMock: vi.fn(() => Promise.resolve()),
+    waitForDiscordGatewayStopMock: vi.fn<WaitForDiscordGatewayStop>(() => Promise.resolve()),
     registerGatewayMock: vi.fn(),
     unregisterGatewayMock: vi.fn(),
     stopGatewayLoggingMock,
