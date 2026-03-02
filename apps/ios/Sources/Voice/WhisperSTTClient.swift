@@ -136,6 +136,6 @@ enum WhisperSTTError: LocalizedError {
 private extension Data {
     mutating func appendLittleEndian<T: FixedWidthInteger>(_ value: T) {
         var v = value.littleEndian
-        withUnsafeBytes(of: &v) { append(contentsOf: $0) }
+        Swift.withUnsafeBytes(of: &v) { self.append(contentsOf: $0) }
     }
 }
