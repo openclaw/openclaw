@@ -255,6 +255,12 @@ You can also force compaction summarization to run on a different model than the
 
 This is useful to keep your main session on a high-quality model while compaction uses a faster/cheaper model.
 
+You can also force compaction to use a different thinking level than the session default:
+
+- `agents.defaults.compaction.thinking: "off" | "low" | "medium" | "high" | ...`
+
+When `model` is set and `thinking` is not, compaction defaults to `off` to keep compaction fast.
+
 Why: leave enough headroom for multi-turn “housekeeping” (like memory writes) before compaction becomes unavoidable.
 
 Implementation: `ensurePiCompactionReserveTokens()` in `src/agents/pi-settings.ts`

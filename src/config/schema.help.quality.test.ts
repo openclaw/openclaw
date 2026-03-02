@@ -365,6 +365,7 @@ const TARGET_KEYS = [
   "agents.defaults.compaction",
   "agents.defaults.compaction.mode",
   "agents.defaults.compaction.model",
+  "agents.defaults.compaction.thinking",
   "agents.defaults.compaction.reserveTokens",
   "agents.defaults.compaction.keepRecentTokens",
   "agents.defaults.compaction.reserveTokensFloor",

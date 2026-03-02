@@ -28,6 +28,12 @@ If you want compaction to always run on a specific (often faster/cheaper) model,
 - `agents.defaults.compaction.model: "provider/model"`
 
 When set, compaction summarization uses that model instead of the session's active model.
+
+If you also want to force compaction to use a specific thinking level, set:
+
+- `agents.defaults.compaction.thinking: "off" | "low" | "medium" | "high" | ...`
+
+When `model` is set and `thinking` is not, compaction defaults to `off` to keep compaction fast.
 Compaction summarization preserves opaque identifiers by default (`identifierPolicy: "strict"`). You can override this with `identifierPolicy: "off"` or provide custom text with `identifierPolicy: "custom"` and `identifierInstructions`.
 
 ## Auto-compaction (default on)

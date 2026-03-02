@@ -931,6 +931,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Compaction strategy mode: "default" uses baseline behavior, while "safeguard" applies stricter guardrails to preserve recent context. Keep "default" unless you observe aggressive history loss near limit boundaries.',
   "agents.defaults.compaction.model":
     "Optional model override (provider/model) used for compaction summarization. Use a fast/cheap model to avoid slow compaction turns (for example, on chat surfaces with strict listener timeouts). Defaults to the session's active model.",
+  "agents.defaults.compaction.thinking":
+    "Optional thinking level override used for compaction summarization. When compaction.model is set and this key is not set, compaction defaults to thinking=off to keep compaction fast.",
   "agents.defaults.compaction.reserveTokens":
     "Token headroom reserved for reply generation and tool output after compaction runs. Use higher reserves for verbose/tool-heavy sessions, and lower reserves when maximizing retained history matters more.",
   "agents.defaults.compaction.keepRecentTokens":

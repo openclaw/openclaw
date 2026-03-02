@@ -415,6 +415,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction": "Compaction",
   "agents.defaults.compaction.mode": "Compaction Mode",
   "agents.defaults.compaction.model": "Compaction Model Override",
+  "agents.defaults.compaction.thinking": "Compaction Thinking Override",
   "agents.defaults.compaction.reserveTokens": "Compaction Reserve Tokens",
   "agents.defaults.compaction.keepRecentTokens": "Compaction Keep Recent Tokens",
   "agents.defaults.compaction.reserveTokensFloor": "Compaction Reserve Token Floor",

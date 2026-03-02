@@ -977,6 +977,8 @@ Periodic heartbeat runs.
         mode: "safeguard", // default | safeguard
         // Optional model override used for compaction summarization.
         model: "google/gemini-3-flash-preview",
+        // Optional thinking override for compaction summarization.
+        thinking: "off",
         reserveTokensFloor: 24000,
         identifierPolicy: "strict", // strict | off | custom
         identifierInstructions: "Preserve deployment IDs, ticket IDs, and host:port pairs exactly.", // used when identifierPolicy=custom
@@ -994,6 +996,7 @@ Periodic heartbeat runs.
 
 - `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
 - `model`: optional `provider/model` override used for compaction summarization. Defaults to the session's active model.
+- `thinking`: optional thinking override used for compaction summarization. Defaults to the session's thinking; when `model` is set and `thinking` is not, compaction defaults to `off`.
 - `identifierPolicy`: `strict` (default), `off`, or `custom`. `strict` prepends built-in opaque identifier retention guidance during compaction summarization.
 - `identifierInstructions`: optional custom identifier-preservation text used when `identifierPolicy=custom`.
 - `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Skipped when workspace is read-only.

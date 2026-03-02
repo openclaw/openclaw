@@ -7,7 +7,7 @@ export function splitModelRef(ref?: string): { provider?: string; model?: string
     return { provider: undefined, model: undefined };
   }
   const [provider, model] = trimmed.split("/", 2);
-  if (model) {
+  if (provider && model) {
     return { provider, model };
   }
   return { provider: undefined, model: trimmed };

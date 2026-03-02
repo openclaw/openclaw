@@ -32,7 +32,6 @@ import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../d
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
-import { splitModelRef } from "../model-ref.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
 import {
@@ -58,6 +57,10 @@ import {
   type SkillSnapshot,
 } from "../skills.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
+import {
+  resolveCompactionModelOverride,
+  resolveCompactionThinkLevel,
+} from "./compaction-overrides.js";
 import {
   compactWithSafetyTimeout,
   EMBEDDED_COMPACTION_TIMEOUT_MS,
@@ -257,35 +260,35 @@ export async function compactEmbeddedPiSessionDirect(
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const prevCwd = process.cwd();
 
-  let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
-  let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+  const defaultProvider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
+  const defaultModelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
 
-  const originalProvider = provider;
-  const originalModelId = modelId;
-  const compactionModelOverride = params.config?.agents?.defaults?.compaction?.model;
-  let authProfileId = params.authProfileId;
+  const resolvedModelOverride = resolveCompactionModelOverride({
+    provider: defaultProvider,
+    modelId: defaultModelId,
+    authProfileId: params.authProfileId,
+    cfg: params.config,
+  });
 
-  if (typeof compactionModelOverride === "string" && compactionModelOverride.trim()) {
-    const { provider: overrideProvider, model: overrideModel } =
-      splitModelRef(compactionModelOverride);
-    if (overrideProvider && overrideModel && overrideProvider.trim() && overrideModel.trim()) {
-      provider = overrideProvider.trim();
-      modelId = overrideModel.trim();
-      // Avoid applying an auth-profile id chosen for a different provider.
-      if (provider !== originalProvider) {
-        authProfileId = undefined;
-      }
-      if (provider !== originalProvider || modelId !== originalModelId) {
-        log.debug(
-          `[compaction] using model override ${provider}/${modelId} (was ${originalProvider}/${originalModelId})`,
-        );
-      }
-    } else {
-      log.warn(
-        `[compaction] invalid agents.defaults.compaction.model=${JSON.stringify(compactionModelOverride)} (expected provider/model)`,
-      );
-    }
+  let provider = resolvedModelOverride.provider;
+  let modelId = resolvedModelOverride.modelId;
+  const authProfileId = resolvedModelOverride.authProfileId;
+
+  if (resolvedModelOverride.overrideApplied) {
+    log.debug(
+      `[compaction] using model override ${provider}/${modelId} (was ${resolvedModelOverride.originalProvider}/${resolvedModelOverride.originalModelId})`,
+    );
+  } else if (resolvedModelOverride.overrideInvalid) {
+    log.warn(
+      `[compaction] invalid agents.defaults.compaction.model=${JSON.stringify(resolvedModelOverride.overrideRaw)} (expected provider/model)`,
+    );
   }
+
+  const resolvedThinkLevel = resolveCompactionThinkLevel({
+    thinkLevel: params.thinkLevel,
+    cfg: params.config,
+    modelOverrideApplied: resolvedModelOverride.overrideApplied,
+  });
 
   const fail = (reason: string): EmbeddedPiCompactResult => {
     log.warn(
@@ -607,7 +610,7 @@ export async function compactEmbeddedPiSessionDirect(
         authStorage,
         modelRegistry,
         model,
-        thinkingLevel: mapThinkingLevel(params.thinkLevel),
+        thinkingLevel: mapThinkingLevel(resolvedThinkLevel),
         tools: builtInTools,
         customTools,
         sessionManager,

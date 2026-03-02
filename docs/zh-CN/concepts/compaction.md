@@ -36,6 +36,12 @@ x-i18n:
 
 设置后，压缩摘要会使用该模型，而不是会话当前的主模型。
 
+如果你还希望压缩固定使用某个 thinking 等级，可以设置：
+
+- `agents.defaults.compaction.thinking: "off" | "low" | "medium" | "high" | ...`
+
+当设置了 `model` 但未设置 `thinking` 时，压缩默认使用 `off` 以提高速度。
+
 ## 自动压缩（默认开启）
 
 当会话接近或超过模型的上下文窗口时，OpenClaw 会触发自动压缩，并可能使用压缩后的上下文重试原始请求。
