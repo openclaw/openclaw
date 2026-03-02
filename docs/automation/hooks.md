@@ -595,7 +595,7 @@ Injects additional bootstrap files (for example monorepo-local `AGENTS.md` / `TO
 - Paths are resolved relative to workspace.
 - Files must stay inside workspace (realpath-checked).
 - Only recognized bootstrap basenames are loaded.
-- Subagent allowlist is preserved (`AGENTS.md` and `TOOLS.md` only).
+- Subagent allowlist is preserved (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, and `USER.md`).
 
 **Enable**:
 

@@ -484,8 +484,12 @@ export async function acquireSessionWriteLock(params: {
       const nowMs = Date.now();
       const inspected = inspectLockPayload(payload, staleMs, nowMs);
 
-      // Check if lock is too old to even attempt acquisition - prevent deadlock
-      if (inspected.ageMs !== null && inspected.ageMs > LOCK_ACQUISITION_REJECT_THRESHOLD_MS) {
+      // Check if lock is too old to even attempt acquisition - but allow reclaim if PID is dead (orphaned)
+      if (
+        inspected.ageMs !== null &&
+        inspected.ageMs > LOCK_ACQUISITION_REJECT_THRESHOLD_MS &&
+        inspected.pidAlive
+      ) {
         const owner = typeof payload?.pid === "number" ? `pid=${payload.pid}` : "unknown";
         throw new Error(
           `session file locked by ${owner} for ${Math.round(inspected.ageMs / 1000)}s (rejecting acquisition, threshold: ${LOCK_ACQUISITION_REJECT_THRESHOLD_MS}ms): ${lockPath}`,
