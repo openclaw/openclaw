@@ -9,9 +9,9 @@ export type RouteSpec = {
 
 const routeHealth: RouteSpec = {
   match: (path) => path[0] === "health",
-  // Health output uses channel plugin metadata for account fallback/log details.
-  // Keep routed behavior aligned with non-routed command execution.
-  loadPlugins: true,
+  // `health --json` only relays gateway RPC output and does not need local plugin metadata.
+  // Keep plugin preload for text output where channel diagnostics/logSelfId are rendered.
+  loadPlugins: (argv) => !hasFlag(argv, "--json"),
   run: async (argv) => {
     const json = hasFlag(argv, "--json");
     const verbose = getVerboseFlag(argv, { includeDebug: true });
