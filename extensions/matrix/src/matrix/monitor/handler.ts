@@ -645,6 +645,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             roomId,
             accountId: route.accountId ?? undefined,
             threadId: threadTarget ?? null,
+            replyToId: threadTarget ? undefined : messageId,
             throttleMs: streamThrottleMs,
             log: logVerboseMessage,
             warn: logVerboseMessage,
@@ -660,6 +661,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           deliver: async (payload) => {
             const finalText = typeof payload.text === "string" ? payload.text.trim() : "";
             const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+            // Drain any in-flight draft sends before reading getEventId() — the first
+            // send may still be in-flight, making eventId null even though a message
+            // will land shortly. Without this, we'd skip the in-place edit and fall
+            // through to deliverMatrixReplies, then the late draft send arrives after.
+            if (draftStream && !draftFinalized) {
+              await draftStream.stop();
+            }
             const streamEventId = draftStream?.getEventId();
             // Finalize the draft stream in-place: edit the existing message to the
             // final text (no cursor) instead of sending a duplicate new message.
@@ -671,7 +679,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               streamEventId &&
               !draftFinalized
             ) {
-              await draftStream.stop();
               try {
                 await editMessageMatrix(roomId, streamEventId, finalText, {
                   client,
@@ -698,6 +705,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               accountId: route.accountId,
               tableMode,
             });
+            // Mark draft as handled so the outer finalize() doesn't send a stray
+            // duplicate when deliver fell through for media, error, or missing draft.
+            if (draftStream) {
+              draftFinalized = true;
+              draftStream.forceNewMessage();
+            }
             didSendReply = true;
           },
           onError: (err, info) => {

@@ -271,6 +271,7 @@ describe("createMatrixRoomMessageHandler streaming behaviour", () => {
       expect.objectContaining({
         roomId: "!room:example.org",
         throttleMs: 500,
+        replyToId: "$event1",
       }),
     );
   });
@@ -378,8 +379,11 @@ describe("createMatrixRoomMessageHandler streaming behaviour", () => {
     const handler = createMatrixRoomMessageHandler(params);
     await handler("!room:example.org", buildRoomMessageEvent());
 
+    // stop() is called to drain any in-flight sends before checking getEventId()
+    expect(draftStreamMock.stop).toHaveBeenCalledTimes(1);
+    // forceNewMessage() called after fallback delivery to prevent outer finalize
+    expect(draftStreamMock.forceNewMessage).toHaveBeenCalledTimes(1);
     // finalize() must NOT be called when no draft event exists — prevents duplicate messages
     expect(draftStreamMock.finalize).not.toHaveBeenCalled();
-    expect(draftStreamMock.stop).not.toHaveBeenCalled();
   });
 });
