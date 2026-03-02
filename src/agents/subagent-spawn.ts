@@ -26,6 +26,8 @@ import {
 
 export const SUBAGENT_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnSubagentMode = (typeof SUBAGENT_SPAWN_MODES)[number];
+export const SUBAGENT_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
+export type SpawnSubagentSandboxMode = (typeof SUBAGENT_SPAWN_SANDBOX_MODES)[number];
 
 export type SpawnSubagentParams = {
   task: string;
@@ -37,6 +39,7 @@ export type SpawnSubagentParams = {
   thread?: boolean;
   mode?: SpawnSubagentMode;
   cleanup?: "delete" | "keep";
+  sandbox?: SpawnSubagentSandboxMode;
   expectsCompletionMessage?: boolean;
 };
 
@@ -174,6 +177,7 @@ export async function spawnSubagentDirect(
   const modelOverride = params.model;
   const thinkingOverrideRaw = params.thinking;
   const requestThreadBinding = params.thread === true;
+  const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
   const spawnMode = resolveSpawnMode({
     requestedMode: params.mode,
     threadRequested: requestThreadBinding,
@@ -278,11 +282,18 @@ export async function spawnSubagentDirect(
     cfg,
     sessionKey: childSessionKey,
   });
-  if (requesterRuntime.sandboxed && !childRuntime.sandboxed) {
+  if (!childRuntime.sandboxed && (requesterRuntime.sandboxed || sandboxMode === "require")) {
+    if (requesterRuntime.sandboxed) {
+      return {
+        status: "forbidden",
+        error:
+          "Sandboxed sessions cannot spawn unsandboxed subagents. Set a sandboxed target agent or use the same agent runtime.",
+      };
+    }
     return {
       status: "forbidden",
       error:
-        "Sandboxed sessions cannot spawn unsandboxed subagents. Set a sandboxed target agent or use the same agent runtime.",
+        'sessions_spawn sandbox="require" needs a sandboxed target runtime. Pick a sandboxed agentId or use sandbox="inherit".',
     };
   }
   const childDepth = callerDepth + 1;
