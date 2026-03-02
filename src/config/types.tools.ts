@@ -269,6 +269,13 @@ export type FsToolsConfig = {
    * Default: false (unrestricted, matches legacy behavior).
    */
   workspaceOnly?: boolean;
+  /**
+   * Directories that are read-only (can read but cannot write/edit).
+   * Useful for exposing reference materials without allowing modifications.
+   * Paths support glob patterns.
+   * Default: undefined.
+   */
+  readOnlyPaths?: string[];
 };
 
 export type AgentToolsConfig = {
