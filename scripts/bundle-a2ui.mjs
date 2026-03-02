@@ -112,10 +112,13 @@ function hasRolldown() {
       shell: useShell,
     });
     if (!result.error) {
-      return result.status === 0;
+      if (result.status === 0) {
+        return true;
+      }
+      continue;
     }
     if (result.error.code !== "ENOENT" && result.error.code !== "EINVAL") {
-      return false;
+      continue;
     }
   }
   return false;
