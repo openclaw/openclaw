@@ -267,11 +267,31 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     });
     if (!guarded.ok) {
       if (guarded.reason !== "path") {
-        throw guarded.error instanceof Error
-          ? guarded.error
-          : new Error(
-              `Sandbox boundary checks failed; cannot ${options.action}: ${target.containerPath}`,
-            );
+        // mkdirp may legally target an already-existing directory. Keep a
+        // directory-only fallback so boundary checks remain strict for files
+        // while avoiding false negatives from file-oriented open validation.
+        if (options.allowedType === "directory") {
+          try {
+            const st = fs.statSync(target.hostPath);
+            if (!st.isDirectory()) {
+              throw new Error(
+                `Sandbox boundary checks failed; cannot ${options.action}: ${target.containerPath}`,
+              );
+            }
+          } catch {
+            throw guarded.error instanceof Error
+              ? guarded.error
+              : new Error(
+                  `Sandbox boundary checks failed; cannot ${options.action}: ${target.containerPath}`,
+                );
+          }
+        } else {
+          throw guarded.error instanceof Error
+            ? guarded.error
+            : new Error(
+                `Sandbox boundary checks failed; cannot ${options.action}: ${target.containerPath}`,
+              );
+        }
       }
     } else {
       fs.closeSync(guarded.fd);
