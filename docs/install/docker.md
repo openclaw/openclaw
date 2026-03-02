@@ -403,12 +403,11 @@ curl -fsS http://127.0.0.1:18789/readyz
 
 Aliases: `/health` and `/ready`.
 
-The Docker image also includes a `HEALTHCHECK` that probes `GET /healthz`:
-
-```bash
-docker inspect --format '{{json .Config.Healthcheck}}' openclaw:local
-docker ps --format 'table {{.Names}}\t{{.Status}}'
-```
+The Docker image includes a built-in `HEALTHCHECK` that pings `/healthz` in the
+background. In plain terms: Docker keeps checking if OpenClaw is still
+responsive. If checks keep failing, Docker marks the container as `unhealthy`,
+and orchestration systems (Docker Compose restart policy, Swarm, Kubernetes,
+etc.) can automatically restart or replace it.
 
 Authenticated deep health snapshot (gateway + channels):
 
