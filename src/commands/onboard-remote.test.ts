@@ -42,6 +42,21 @@ function createSelectPrompter(
 describe("promptRemoteGatewayConfig", () => {
   const envSnapshot = captureEnv(["OPENCLAW_ALLOW_INSECURE_PRIVATE_WS"]);
 
+  async function runRemotePrompt(params: {
+    text: WizardPrompter["text"];
+    selectResponses: Partial<Record<string, string>>;
+    confirm: boolean;
+  }) {
+    const cfg = {} as OpenClawConfig;
+    const prompter = createPrompter({
+      confirm: vi.fn(async () => params.confirm),
+      select: createSelectPrompter(params.selectResponses),
+      text: params.text,
+    });
+    const next = await promptRemoteGatewayConfig(cfg, prompter);
+    return { next, prompter };
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     envSnapshot.restore();
@@ -61,12 +76,6 @@ describe("promptRemoteGatewayConfig", () => {
       },
     ]);
 
-    const select = createSelectPrompter({
-      "Select gateway": "0",
-      "Connection method": "direct",
-      "Gateway auth": "token",
-    });
-
     const text: WizardPrompter["text"] = vi.fn(async (params) => {
       if (params.message === "Gateway WebSocket URL") {
         expect(params.initialValue).toBe("wss://gateway.tailnet.ts.net:18789");
@@ -79,14 +88,15 @@ describe("promptRemoteGatewayConfig", () => {
       return "";
     }) as WizardPrompter["text"];
 
-    const cfg = {} as OpenClawConfig;
-    const prompter = createPrompter({
-      confirm: vi.fn(async () => true),
-      select,
+    const { next, prompter } = await runRemotePrompt({
       text,
+      confirm: true,
+      selectResponses: {
+        "Select gateway": "0",
+        "Connection method": "direct",
+        "Gateway auth": "token",
+      },
     });
-
-    const next = await promptRemoteGatewayConfig(cfg, prompter);
 
     expect(next.gateway?.mode).toBe("remote");
     expect(next.gateway?.remote?.url).toBe("wss://gateway.tailnet.ts.net:18789");
@@ -111,16 +121,11 @@ describe("promptRemoteGatewayConfig", () => {
       return "";
     }) as WizardPrompter["text"];
 
-    const select = createSelectPrompter({ "Gateway auth": "off" });
-
-    const cfg = {} as OpenClawConfig;
-    const prompter = createPrompter({
-      confirm: vi.fn(async () => false),
-      select,
+    const { next } = await runRemotePrompt({
       text,
+      confirm: false,
+      selectResponses: { "Gateway auth": "off" },
     });
-
-    const next = await promptRemoteGatewayConfig(cfg, prompter);
 
     expect(next.gateway?.mode).toBe("remote");
     expect(next.gateway?.remote?.url).toBe("wss://remote.example.com:18789");
@@ -138,16 +143,11 @@ describe("promptRemoteGatewayConfig", () => {
       return "";
     }) as WizardPrompter["text"];
 
-    const select = createSelectPrompter({ "Gateway auth": "off" });
-
-    const cfg = {} as OpenClawConfig;
-    const prompter = createPrompter({
-      confirm: vi.fn(async () => false),
-      select,
+    const { next } = await runRemotePrompt({
       text,
+      confirm: false,
+      selectResponses: { "Gateway auth": "off" },
     });
-
-    const next = await promptRemoteGatewayConfig(cfg, prompter);
 
     expect(next.gateway?.remote?.url).toBe("ws://10.0.0.8:18789");
   });
