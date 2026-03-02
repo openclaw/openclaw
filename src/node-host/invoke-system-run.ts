@@ -174,7 +174,7 @@ async function sendSystemRunDenied(
 }
 
 export { formatSystemRunAllowlistMissMessage } from "./exec-policy.js";
-export { buildSystemRunApprovalPlanV2 } from "./invoke-system-run-plan.js";
+export { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 
 async function parseSystemRunPhase(
   opts: HandleSystemRunInvokeOptions,
@@ -300,7 +300,6 @@ async function evaluateSystemRunPolicyPhase(
   const hardenedPaths = hardenApprovedExecutionPaths({
     approvedByAsk: policy.approvedByAsk,
     argv: parsed.argv,
-    shellCommand: parsed.shellCommand,
     cwd: parsed.cwd,
   });
   if (!hardenedPaths.ok) {
