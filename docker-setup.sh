@@ -92,14 +92,6 @@ ensure_control_ui_allowed_origins() {
   echo "Set gateway.controlUi.allowedOrigins to $allowed_origin_json for non-loopback bind."
 }
 
-sync_gateway_mode_and_bind() {
-  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
-    config set gateway.mode local >/dev/null
-  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
-    config set gateway.bind "$OPENCLAW_GATEWAY_BIND" >/dev/null
-  echo "Pinned gateway.mode=local and gateway.bind=$OPENCLAW_GATEWAY_BIND for Docker setup."
-}
-
 contains_disallowed_chars() {
   local value="$1"
   [[ "$value" == *$'\n'* || "$value" == *$'\r'* || "$value" == *$'\t'* ]]
@@ -346,20 +338,25 @@ else
   fi
 fi
 
-echo ""
-echo "==> Onboarding (interactive)"
-echo "Docker setup pins Gateway mode to local."
-echo "Gateway runtime bind comes from OPENCLAW_GATEWAY_BIND (default: lan)."
-echo "Current runtime bind: $OPENCLAW_GATEWAY_BIND"
-echo "Gateway token: $OPENCLAW_GATEWAY_TOKEN"
-echo "Tailscale exposure: Off (use host-level tailnet/Tailscale setup separately)."
-echo "Install Gateway daemon: No (managed by Docker Compose)"
-echo ""
-docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli onboard --mode local --no-install-daemon
+# Fix config dir ownership so the container's node user (uid 1000) can write to it.
+if [[ "$(id -u)" != "1000" ]]; then
+  echo "==> Fixing config directory ownership for container user (node uid 1000)"
+  docker run --rm --user root \
+    -v "$OPENCLAW_CONFIG_DIR:/home/node/.openclaw" \
+    "$IMAGE_NAME" \
+    chown -R node:node /home/node/.openclaw
+fi
 
 echo ""
-echo "==> Docker gateway defaults"
-sync_gateway_mode_and_bind
+echo "==> Onboarding (interactive)"
+echo "When prompted:"
+echo "  - Gateway bind: lan"
+echo "  - Gateway auth: token"
+echo "  - Gateway token: $OPENCLAW_GATEWAY_TOKEN"
+echo "  - Tailscale exposure: Off"
+echo "  - Install Gateway daemon: No"
+echo ""
+docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli onboard --no-install-daemon
 
 echo ""
 echo "==> Control UI origin allowlist"
