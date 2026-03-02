@@ -148,6 +148,21 @@ const TARGET_KEYS = [
   "session.sendPolicy.rules[].match.chatType",
   "session.sendPolicy.rules[].match.keyPrefix",
   "session.sendPolicy.rules[].match.rawKeyPrefix",
+  "session.relayRouting",
+  "session.relayRouting.defaultMode",
+  "session.relayRouting.targets",
+  "session.relayRouting.targets.*.channel",
+  "session.relayRouting.targets.*.to",
+  "session.relayRouting.targets.*.accountId",
+  "session.relayRouting.targets.*.threadId",
+  "session.relayRouting.rules",
+  "session.relayRouting.rules[].mode",
+  "session.relayRouting.rules[].relayTo",
+  "session.relayRouting.rules[].match",
+  "session.relayRouting.rules[].match.channel",
+  "session.relayRouting.rules[].match.chatType",
+  "session.relayRouting.rules[].match.keyPrefix",
+  "session.relayRouting.rules[].match.rawKeyPrefix",
   "session.agentToAgent",
   "session.agentToAgent.maxPingPongTurns",
   "session.threadBindings",
@@ -659,6 +674,24 @@ describe("config help copy quality", () => {
 
     const rawKeyPrefix = FIELD_HELP["session.sendPolicy.rules[].match.rawKeyPrefix"];
     expect(/raw|unnormalized/i.test(rawKeyPrefix)).toBe(true);
+  });
+
+  it("documents session relay-routing target and match semantics", () => {
+    const rules = FIELD_HELP["session.relayRouting.rules"];
+    expect(/first matching rule wins|first match/i.test(rules)).toBe(true);
+
+    const relayTo = FIELD_HELP["session.relayRouting.rules[].relayTo"];
+    expect(/requires|must/i.test(relayTo)).toBe(true);
+    expect(relayTo.includes("session.relayRouting.targets")).toBe(true);
+
+    const keyPrefix = FIELD_HELP["session.relayRouting.rules[].match.keyPrefix"];
+    expect(/stripping|agent:<agentId>/i.test(keyPrefix)).toBe(true);
+
+    const rawKeyPrefix = FIELD_HELP["session.relayRouting.rules[].match.rawKeyPrefix"];
+    expect(/raw|full/i.test(rawKeyPrefix)).toBe(true);
+
+    const chatType = FIELD_HELP["session.relayRouting.rules[].match.chatType"];
+    expect(/direct\/dm|dm/i.test(chatType)).toBe(true);
   });
 
   it("documents session maintenance duration/size examples and deprecations", () => {

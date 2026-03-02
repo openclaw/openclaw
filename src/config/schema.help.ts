@@ -1039,6 +1039,36 @@ export const FIELD_HELP: Record<string, string> = {
     "Matches a normalized session-key prefix after internal key normalization steps in policy consumers. Use this for general prefix controls, and prefer rawKeyPrefix when exact full-key matching is required.",
   "session.sendPolicy.rules[].match.rawKeyPrefix":
     "Matches the raw, unnormalized session-key prefix for exact full-key policy targeting. Use this when normalized keyPrefix is too broad and you need agent-prefixed or transport-specific precision.",
+  "session.relayRouting":
+    "Controls read-only relay routing for inbound sessions using ordered match rules and named relay targets. Use this when messages should resolve to fixed delivery targets while preserving source metadata separately.",
+  "session.relayRouting.defaultMode":
+    'Fallback relay mode when no relay rule matches: "read-write" or "read-only". With read-only default, OpenClaw only resolves a relay target when exactly one target is configured; ambiguous target sets fall back to read-write.',
+  "session.relayRouting.targets":
+    "Named relay target map keyed by target IDs used by read-only relay rules (for example `ops`, `triage`, `audit`). Keep target keys stable so rule relayTo references remain deterministic.",
+  "session.relayRouting.targets.*.channel":
+    "Defines destination channel/provider id for a relay target (for example slack, discord, telegram). Use this to route read-only delivery through the intended channel adapter.",
+  "session.relayRouting.targets.*.to":
+    "Defines destination identifier for a relay target (channel ID, user ID, chat ID, or provider-specific destination key). Use this exact value for read-only delivery routing.",
+  "session.relayRouting.targets.*.accountId":
+    "Optional destination account profile for the relay target when channel adapters support account-scoped delivery. Use this when relay delivery must use a non-default channel account.",
+  "session.relayRouting.targets.*.threadId":
+    "Optional destination thread/topic identifier for relay delivery. Use this when read-only relay should land in a specific thread context within the target channel.",
+  "session.relayRouting.rules":
+    "Ordered relay-routing rules; first matching rule wins. Use specific-to-broad ordering so narrow rules are evaluated before generic catch-alls.",
+  "session.relayRouting.rules[].mode":
+    'Rule decision mode: "read-write" keeps normal reply behavior, while "read-only" relays to a configured target key. Use read-only rules for strict destination control in selected contexts.',
+  "session.relayRouting.rules[].relayTo":
+    "Defines the target key in session.relayRouting.targets used when mode is read-only. Use an existing key; each read-only rule requires relayTo and dangling keys are rejected.",
+  "session.relayRouting.rules[].match":
+    "Optional relay-rule match conditions combining channel, chatType, and key-prefix filters. Keep match criteria explicit so route behavior is predictable during incident debugging.",
+  "session.relayRouting.rules[].match.channel":
+    "Use this to match relay rule evaluation to a specific source channel/provider id before applying mode decisions.",
+  "session.relayRouting.rules[].match.chatType":
+    "Use this to match relay rules by source chat type. Values are normalized with direct/dm equivalence; unknown chat types do not match chatType filters.",
+  "session.relayRouting.rules[].match.keyPrefix":
+    "Matches relay rule by session-key prefix after stripping `agent:<agentId>:` when present. Use this for logical key-prefix routing independent of agent scoping prefixes.",
+  "session.relayRouting.rules[].match.rawKeyPrefix":
+    "Matches relay rule by raw full session-key prefix (including agent prefix). Use this for exact agent-scoped prefix routing with startsWith semantics.",
   "session.agentToAgent":
     "Groups controls for inter-agent session exchanges, including loop prevention limits on reply chaining. Keep defaults unless you run advanced agent-to-agent automation with strict turn caps.",
   "session.agentToAgent.maxPingPongTurns":

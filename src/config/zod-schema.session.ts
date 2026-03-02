@@ -23,6 +23,75 @@ const SessionResetConfigSchema = z
 
 export const SessionSendPolicySchema = createAllowDenyChannelRulesSchema();
 
+const SessionRelayRoutingModeSchema = z.union([z.literal("read-write"), z.literal("read-only")]);
+
+const SessionRelayRoutingMatchSchema = z
+  .object({
+    channel: z.string().optional(),
+    chatType: z
+      .union([
+        z.literal("direct"),
+        z.literal("group"),
+        z.literal("channel"),
+        /** @deprecated Use `direct` instead. Kept for backward compatibility. */
+        z.literal("dm"),
+      ])
+      .optional(),
+    keyPrefix: z.string().optional(),
+    rawKeyPrefix: z.string().optional(),
+  })
+  .strict();
+
+const SessionRelayRoutingTargetSchema = z
+  .object({
+    channel: z.string().min(1),
+    to: z.string().min(1),
+    accountId: z.string().optional(),
+    threadId: z.union([z.string(), z.number()]).optional(),
+  })
+  .strict();
+
+const SessionRelayRoutingRuleSchema = z
+  .object({
+    mode: SessionRelayRoutingModeSchema,
+    relayTo: z.string().optional(),
+    match: SessionRelayRoutingMatchSchema.optional(),
+  })
+  .strict();
+
+const SessionRelayRoutingSchema = z
+  .object({
+    defaultMode: SessionRelayRoutingModeSchema.optional(),
+    targets: z.record(z.string(), SessionRelayRoutingTargetSchema).optional(),
+    rules: z.array(SessionRelayRoutingRuleSchema).optional(),
+  })
+  .strict()
+  .superRefine((val, ctx) => {
+    const targets = val.targets ?? {};
+    for (const [index, rule] of (val.rules ?? []).entries()) {
+      if (rule.mode !== "read-only") {
+        continue;
+      }
+      const relayToRaw = typeof rule.relayTo === "string" ? rule.relayTo : "";
+      if (!relayToRaw.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["rules", index, "relayTo"],
+          message: "read-only relay rule requires relayTo target key",
+        });
+        continue;
+      }
+      if (!Object.hasOwn(targets, relayToRaw)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["rules", index, "relayTo"],
+          message:
+            "read-only relay rule relayTo target key must reference session.relayRouting.targets",
+        });
+      }
+    }
+  });
+
 export const SessionSchema = z
   .object({
     scope: z.union([z.literal("per-sender"), z.literal("global")]).optional(),
@@ -55,6 +124,7 @@ export const SessionSchema = z
     parentForkMaxTokens: z.number().int().nonnegative().optional(),
     mainKey: z.string().optional(),
     sendPolicy: SessionSendPolicySchema.optional(),
+    relayRouting: SessionRelayRoutingSchema.optional(),
     agentToAgent: z
       .object({
         maxPingPongTurns: z.number().int().min(0).max(5).optional(),

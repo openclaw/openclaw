@@ -184,4 +184,80 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
   });
+
+  it("rejects read-only relayRouting rules missing relayTo", () => {
+    const res = validateConfigObject({
+      session: {
+        relayRouting: {
+          rules: [{ mode: "read-only", match: { channel: "discord" } }],
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some((issue) => issue.message.includes("read-only relay rule requires")),
+      ).toBe(true);
+    }
+  });
+
+  it("rejects read-only relayRouting rules with whitespace relayTo", () => {
+    const res = validateConfigObject({
+      session: {
+        relayRouting: {
+          targets: {
+            ops: { channel: "slack", to: "C123" },
+          },
+          rules: [{ mode: "read-only", relayTo: "   " }],
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some((issue) => issue.path === "session.relayRouting.rules.0.relayTo"),
+      ).toBe(true);
+    }
+  });
+
+  it("rejects read-only relayRouting rules with dangling relayTo target keys", () => {
+    const res = validateConfigObject({
+      session: {
+        relayRouting: {
+          targets: {
+            ops: { channel: "slack", to: "C123" },
+          },
+          rules: [{ mode: "read-only", relayTo: "missing" }],
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path === "session.relayRouting.rules.0.relayTo" &&
+            issue.message.includes("must reference session.relayRouting.targets"),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("accepts valid read-only relayRouting rules with existing targets", () => {
+    const res = validateConfigObject({
+      session: {
+        relayRouting: {
+          targets: {
+            ops: { channel: "slack", to: "C123", accountId: "work", threadId: "1717.99" },
+          },
+          rules: [{ mode: "read-only", relayTo: "ops", match: { channel: "discord" } }],
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });
