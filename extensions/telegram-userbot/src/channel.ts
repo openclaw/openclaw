@@ -14,12 +14,14 @@ import {
   resolveTelegramUserbotAccount,
   type ResolvedTelegramUserbotAccount,
 } from "./adapters/config.js";
+import { telegramUserbotDirectoryAdapter } from "./adapters/directory.js";
 import { telegramUserbotMessageActions } from "./adapters/message-actions.js";
 import { telegramUserbotOutboundAdapter } from "./adapters/outbound.js";
 import { telegramUserbotSecurityAdapter } from "./adapters/security.js";
 import { telegramUserbotSetupAdapter } from "./adapters/setup.js";
 import { telegramUserbotStatusAdapter, type TelegramUserbotProbe } from "./adapters/status.js";
 import { telegramUserbotStreamingAdapter } from "./adapters/streaming.js";
+import { telegramUserbotThreadingAdapter } from "./adapters/threading.js";
 import { telegramUserbotMeta, TELEGRAM_USERBOT_CHANNEL_ID } from "./config-schema.js";
 import { ConnectionManager } from "./connection.js";
 
@@ -49,6 +51,7 @@ export const telegramUserbotPlugin: ChannelPlugin<
     edit: true,
     unsend: true,
     reply: true,
+    blockStreaming: true,
   },
 
   reload: { configPrefixes: [`channels.${TELEGRAM_USERBOT_CHANNEL_ID}`] },
@@ -66,6 +69,8 @@ export const telegramUserbotPlugin: ChannelPlugin<
   actions: telegramUserbotMessageActions,
   agentPrompt: telegramUserbotAgentPromptAdapter,
   streaming: telegramUserbotStreamingAdapter,
+  directory: telegramUserbotDirectoryAdapter,
+  threading: telegramUserbotThreadingAdapter,
 
   // -------------------------------------------------------------------------
   // Gateway — manages the MTProto connection lifecycle

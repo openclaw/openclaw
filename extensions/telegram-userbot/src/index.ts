@@ -69,7 +69,9 @@ export { telegramUserbotSecurityAdapter } from "./adapters/security.js";
 export { telegramUserbotOutboundAdapter } from "./adapters/outbound.js";
 export { telegramUserbotMessageActions } from "./adapters/message-actions.js";
 export { telegramUserbotAgentPromptAdapter } from "./adapters/agent-prompt.js";
-export { telegramUserbotStreamingAdapter } from "./adapters/streaming.js";
+export { telegramUserbotStreamingAdapter, sendTypingIndicator } from "./adapters/streaming.js";
+export { telegramUserbotDirectoryAdapter } from "./adapters/directory.js";
+export { telegramUserbotThreadingAdapter } from "./adapters/threading.js";
 
 // Outbound helpers
 export { chunkMessage, sendText, sendMedia, TELEGRAM_TEXT_LIMIT } from "./outbound.js";
