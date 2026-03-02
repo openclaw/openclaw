@@ -200,9 +200,11 @@ Notes:
 
 [Browserbase](https://www.browserbase.com) is a cloud platform for running
 headless browsers. It provides remote CDP endpoints with built-in CAPTCHA
-solving, anti-bot stealth mode, and residential proxies. You can point an
-OpenClaw browser profile at a Browserbase session and authenticate with your
-API key.
+solving, anti-bot stealth mode, and residential proxies.
+
+Unlike Browserless (which exposes a static CDP endpoint), Browserbase requires
+you to **create a session** first via their API — each session returns a unique
+`connectUrl` that you then set as the `cdpUrl` in your OpenClaw profile.
 
 ### Getting started
 
@@ -212,12 +214,25 @@ API key.
 2. **Find your credentials** on the
    [Overview dashboard](https://www.browserbase.com/overview) — copy your
    **API Key** and **Project ID** from the right-hand panel.
-3. **Create a session** using the Browserbase API (or their SDK) and retrieve
-   the CDP connect URL.
+
+### Creating a session
+
+Create a session via the Browserbase API to get a CDP connect URL:
+
+```bash
+curl --request POST \
+  --url "https://api.browserbase.com/v1/sessions" \
+  --header "Content-Type: application/json" \
+  --header "x-bb-api-key: $BROWSERBASE_API_KEY" \
+  --data '{ "projectId": "'$BROWSERBASE_PROJECT_ID'" }'
+```
+
+The response includes a `connectUrl` field — a WebSocket CDP endpoint for that
+session. You must connect within **5 minutes** or the session will time out.
 
 ### Profile setup
 
-Browserbase sessions expose a WebSocket CDP endpoint. Point a profile at it:
+Set the `connectUrl` from the session response as `cdpUrl` in your profile:
 
 ```json5
 {
@@ -228,7 +243,7 @@ Browserbase sessions expose a WebSocket CDP endpoint. Point a profile at it:
     remoteCdpHandshakeTimeoutMs: 5000,
     profiles: {
       browserbase: {
-        cdpUrl: "wss://connect.browserbase.com?apiKey=<BROWSERBASE_API_KEY>",
+        cdpUrl: "<CONNECT_URL_FROM_SESSION_RESPONSE>",
         color: "#F97316",
       },
     },
@@ -236,21 +251,8 @@ Browserbase sessions expose a WebSocket CDP endpoint. Point a profile at it:
 }
 ```
 
-If you create sessions through the Browserbase Sessions API, each session
-returns its own `connectUrl`. You can use that directly:
-
-```json5
-{
-  browser: {
-    profiles: {
-      browserbase: {
-        cdpUrl: "<SESSION_CONNECT_URL>",
-        color: "#F97316",
-      },
-    },
-  },
-}
-```
+Since each session produces a new `connectUrl`, you will need to update the
+`cdpUrl` value each time you create a new session.
 
 ### Environment variables
 
@@ -258,16 +260,12 @@ Store your credentials in environment variables instead of committing them to
 config:
 
 ```bash
-export BROWSERBASE_API_KEY="bb_live_..."
+export BROWSERBASE_API_KEY="your-api-key"
 export BROWSERBASE_PROJECT_ID="your-project-id"
 ```
 
-Then reference them in your profile or create sessions programmatically.
-
 ### Notes
 
-- Replace `<BROWSERBASE_API_KEY>` with your real Browserbase API key (starts
-  with `bb_live_`).
 - The free tier allows one concurrent session and 60 minutes per month. Paid
   plans offer higher concurrency and usage limits.
 - Browserbase sessions include automatic CAPTCHA solving and anti-bot stealth
