@@ -455,7 +455,10 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               "description",
               "deleteAfterRun",
               "agentId",
+              "sessionKey",
+              "sessionTarget",
               "wakeMode",
+              "failureAlert",
               "allowUnsafeExternalContent",
             ]);
             const synthetic: Record<string, unknown> = {};

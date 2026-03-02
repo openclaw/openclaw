@@ -534,4 +534,28 @@ describe("cron tool", () => {
     expect(call.params?.patch?.name).toBe("new-name");
     expect(call.params?.patch?.enabled).toBe(false);
   });
+
+  it("recovers additional flat patch params for update action", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool();
+    await tool.execute("call-update-flat-extra", {
+      action: "update",
+      id: "job-2",
+      sessionTarget: "main",
+      failureAlert: { after: 3, cooldownMs: 60_000 },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: {
+        id?: string;
+        patch?: { sessionTarget?: string; failureAlert?: { after?: number; cooldownMs?: number } };
+      };
+    };
+    expect(call.method).toBe("cron.update");
+    expect(call.params?.id).toBe("job-2");
+    expect(call.params?.patch?.sessionTarget).toBe("main");
+    expect(call.params?.patch?.failureAlert).toEqual({ after: 3, cooldownMs: 60_000 });
+  });
 });
