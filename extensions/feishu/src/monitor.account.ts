@@ -184,11 +184,12 @@ function registerEventHandlers(
     return parsed.content.trim();
   };
   const recordSuppressedMessageIds = async (entries: FeishuMessageEvent[]) => {
+    const finalMessageId = entries.at(-1)?.message.message_id?.trim();
     const suppressedIds = new Set(
       entries
         .slice(0, -1)
         .map((entry) => entry.message.message_id?.trim())
-        .filter((id): id is string => Boolean(id)),
+        .filter((id): id is string => Boolean(id) && (!finalMessageId || id !== finalMessageId)),
     );
     if (suppressedIds.size === 0) {
       return;
