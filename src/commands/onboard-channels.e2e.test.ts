@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelOnboardingAdapter } from "../channels/plugins/onboarding-types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -83,17 +82,16 @@ function createTelegramCfg(botToken: string, enabled?: boolean): OpenClawConfig 
   } as OpenClawConfig;
 }
 
-function patchTelegramAdapter(overrides: Partial<ChannelOnboardingAdapter>) {
-  const getStatus =
-    overrides.getStatus ??
-    vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
-      channel: "telegram",
-      configured: Boolean(cfg.channels?.telegram?.botToken),
-      statusLines: [],
-    }));
+function patchTelegramAdapter(overrides: Parameters<typeof patchChannelOnboardingAdapter>[1]) {
   return patchChannelOnboardingAdapter("telegram", {
     ...overrides,
-    getStatus,
+    getStatus:
+      overrides.getStatus ??
+      vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+        channel: "telegram",
+        configured: Boolean(cfg.channels?.telegram?.botToken),
+        statusLines: [],
+      })),
   });
 }
 

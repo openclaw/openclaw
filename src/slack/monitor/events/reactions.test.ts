@@ -78,20 +78,20 @@ async function executeReactionCase(input: ReactionRunInput = {}) {
 }
 
 describe("registerSlackReactionEvents", () => {
-  const cases: Array<{ name: string; args: ReactionRunInput; expectedCalls: number }> = [
+  const cases: Array<{ name: string; input: ReactionRunInput; expectedCalls: number }> = [
     {
       name: "enqueues DM reaction system events when dmPolicy is open",
-      args: { overrides: { dmPolicy: "open" } },
+      input: { overrides: { dmPolicy: "open" } },
       expectedCalls: 1,
     },
     {
       name: "blocks DM reaction system events when dmPolicy is disabled",
-      args: { overrides: { dmPolicy: "disabled" } },
+      input: { overrides: { dmPolicy: "disabled" } },
       expectedCalls: 0,
     },
     {
       name: "blocks DM reaction system events for unauthorized senders in allowlist mode",
-      args: {
+      input: {
         overrides: { dmPolicy: "allowlist", allowFrom: ["U2"] },
         event: buildReactionEvent({ user: "U1" }),
       },
@@ -99,7 +99,7 @@ describe("registerSlackReactionEvents", () => {
     },
     {
       name: "allows DM reaction system events for authorized senders in allowlist mode",
-      args: {
+      input: {
         overrides: { dmPolicy: "allowlist", allowFrom: ["U1"] },
         event: buildReactionEvent({ user: "U1" }),
       },
@@ -107,8 +107,8 @@ describe("registerSlackReactionEvents", () => {
     },
     {
       name: "enqueues channel reaction events regardless of dmPolicy",
-      args: {
-        handler: "removed" as const,
+      input: {
+        handler: "removed",
         overrides: { dmPolicy: "disabled", channelType: "channel" },
         event: {
           ...buildReactionEvent({ channel: "C1" }),
@@ -119,7 +119,7 @@ describe("registerSlackReactionEvents", () => {
     },
     {
       name: "blocks channel reaction events for users outside channel users allowlist",
-      args: {
+      input: {
         overrides: {
           dmPolicy: "open",
           channelType: "channel",
@@ -131,8 +131,8 @@ describe("registerSlackReactionEvents", () => {
     },
   ];
 
-  it.each(cases)("$name", async ({ args, expectedCalls }) => {
-    await executeReactionCase(args);
+  it.each(cases)("$name", async ({ input, expectedCalls }) => {
+    await executeReactionCase(input);
     expect(reactionQueueMock).toHaveBeenCalledTimes(expectedCalls);
   });
 

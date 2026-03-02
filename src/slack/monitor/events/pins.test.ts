@@ -115,7 +115,6 @@ describe("registerSlackPinEvents", () => {
       expectedCalls: 0,
     },
   ];
-
   it.each(cases)("$name", async ({ args, expectedCalls }) => {
     await runPinCase(args);
     expect(pinEnqueueMock).toHaveBeenCalledTimes(expectedCalls);
