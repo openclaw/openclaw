@@ -63,9 +63,11 @@ function formatDiscordChannelUnresolved(entry: DiscordChannelLogEntry): string {
 }
 
 function formatDiscordUserResolved(entry: DiscordUserLogEntry): string {
-  const base = `${entry.input}→${entry.id}`;
+  const displayName = entry.name?.trim();
+  const target = displayName || entry.id;
+  const base = `${entry.input}→${target}`;
   return formatResolutionLogDetails(base, [
-    entry.name ? `name:${entry.name}` : undefined,
+    displayName && entry.id ? `id:${entry.id}` : undefined,
     entry.guildName ? `guild:${entry.guildName}` : undefined,
     entry.note,
   ]);

@@ -146,89 +146,310 @@ export function resolveBoundaryPathSync(params: ResolveBoundaryPathParams): Reso
   });
 }
 
+type LexicalTraversalState = {
+  segments: string[];
+  allowFinalSymlink: boolean;
+  canonicalCursor: string;
+  lexicalCursor: string;
+  preserveFinalSymlink: boolean;
+};
+
+function createLexicalTraversalState(params: {
+  params: ResolveBoundaryPathParams;
+  rootPath: string;
+  rootCanonicalPath: string;
+  absolutePath: string;
+}): LexicalTraversalState {
+  const relative = path.relative(params.rootPath, params.absolutePath);
+  return {
+    segments: relative.split(path.sep).filter(Boolean),
+    allowFinalSymlink: params.params.policy?.allowFinalSymlinkForUnlink === true,
+    canonicalCursor: params.rootCanonicalPath,
+    lexicalCursor: params.rootPath,
+    preserveFinalSymlink: false,
+  };
+}
+
+function assertLexicalCursorInsideBoundary(params: {
+  params: ResolveBoundaryPathParams;
+  rootCanonicalPath: string;
+  absolutePath: string;
+  candidatePath: string;
+}): void {
+  assertInsideBoundary({
+    boundaryLabel: params.params.boundaryLabel,
+    rootCanonicalPath: params.rootCanonicalPath,
+    candidatePath: params.candidatePath,
+    absolutePath: params.absolutePath,
+  });
+}
+
+function applyMissingSuffixToCanonicalCursor(params: {
+  state: LexicalTraversalState;
+  missingFromIndex: number;
+  rootCanonicalPath: string;
+  params: ResolveBoundaryPathParams;
+  absolutePath: string;
+}): void {
+  const missingSuffix = params.state.segments.slice(params.missingFromIndex);
+  params.state.canonicalCursor = path.resolve(params.state.canonicalCursor, ...missingSuffix);
+  assertLexicalCursorInsideBoundary({
+    params: params.params,
+    rootCanonicalPath: params.rootCanonicalPath,
+    candidatePath: params.state.canonicalCursor,
+    absolutePath: params.absolutePath,
+  });
+}
+
+function advanceCanonicalCursorForSegment(params: {
+  state: LexicalTraversalState;
+  segment: string;
+  rootCanonicalPath: string;
+  params: ResolveBoundaryPathParams;
+  absolutePath: string;
+}): void {
+  params.state.canonicalCursor = path.resolve(params.state.canonicalCursor, params.segment);
+  assertLexicalCursorInsideBoundary({
+    params: params.params,
+    rootCanonicalPath: params.rootCanonicalPath,
+    candidatePath: params.state.canonicalCursor,
+    absolutePath: params.absolutePath,
+  });
+}
+
+function finalizeLexicalResolution(params: {
+  params: ResolveBoundaryPathParams;
+  rootPath: string;
+  rootCanonicalPath: string;
+  absolutePath: string;
+  state: LexicalTraversalState;
+  kind: { exists: boolean; kind: ResolvedBoundaryPathKind };
+}): ResolvedBoundaryPath {
+  assertLexicalCursorInsideBoundary({
+    params: params.params,
+    rootCanonicalPath: params.rootCanonicalPath,
+    candidatePath: params.state.canonicalCursor,
+    absolutePath: params.absolutePath,
+  });
+  return buildResolvedBoundaryPath({
+    absolutePath: params.absolutePath,
+    canonicalPath: params.state.canonicalCursor,
+    rootPath: params.rootPath,
+    rootCanonicalPath: params.rootCanonicalPath,
+    kind: params.kind,
+  });
+}
+
+function handleLexicalLstatFailure(params: {
+  error: unknown;
+  state: LexicalTraversalState;
+  missingFromIndex: number;
+  rootCanonicalPath: string;
+  resolveParams: ResolveBoundaryPathParams;
+  absolutePath: string;
+}): boolean {
+  if (!isNotFoundPathError(params.error)) {
+    return false;
+  }
+  applyMissingSuffixToCanonicalCursor({
+    state: params.state,
+    missingFromIndex: params.missingFromIndex,
+    rootCanonicalPath: params.rootCanonicalPath,
+    params: params.resolveParams,
+    absolutePath: params.absolutePath,
+  });
+  return true;
+}
+
+function handleLexicalStatDisposition(params: {
+  state: LexicalTraversalState;
+  isSymbolicLink: boolean;
+  segment: string;
+  isLast: boolean;
+  rootCanonicalPath: string;
+  resolveParams: ResolveBoundaryPathParams;
+  absolutePath: string;
+}): "continue" | "break" | "resolve-link" {
+  if (!params.isSymbolicLink) {
+    advanceCanonicalCursorForSegment({
+      state: params.state,
+      segment: params.segment,
+      rootCanonicalPath: params.rootCanonicalPath,
+      params: params.resolveParams,
+      absolutePath: params.absolutePath,
+    });
+    return "continue";
+  }
+
+  if (params.state.allowFinalSymlink && params.isLast) {
+    params.state.preserveFinalSymlink = true;
+    advanceCanonicalCursorForSegment({
+      state: params.state,
+      segment: params.segment,
+      rootCanonicalPath: params.rootCanonicalPath,
+      params: params.resolveParams,
+      absolutePath: params.absolutePath,
+    });
+    return "break";
+  }
+
+  return "resolve-link";
+}
+
+function applyResolvedSymlinkHop(params: {
+  state: LexicalTraversalState;
+  linkCanonical: string;
+  rootCanonicalPath: string;
+  boundaryLabel: string;
+}): void {
+  if (!isPathInside(params.rootCanonicalPath, params.linkCanonical)) {
+    throw symlinkEscapeError({
+      boundaryLabel: params.boundaryLabel,
+      rootCanonicalPath: params.rootCanonicalPath,
+      symlinkPath: params.state.lexicalCursor,
+    });
+  }
+  params.state.canonicalCursor = params.linkCanonical;
+  params.state.lexicalCursor = params.linkCanonical;
+}
+
+async function readLexicalStatAsync(params: {
+  state: LexicalTraversalState;
+  missingFromIndex: number;
+  rootCanonicalPath: string;
+  resolveParams: ResolveBoundaryPathParams;
+  absolutePath: string;
+}): Promise<fs.Stats | null> {
+  try {
+    return await fsp.lstat(params.state.lexicalCursor);
+  } catch (error) {
+    if (
+      handleLexicalLstatFailure({
+        error,
+        state: params.state,
+        missingFromIndex: params.missingFromIndex,
+        rootCanonicalPath: params.rootCanonicalPath,
+        resolveParams: params.resolveParams,
+        absolutePath: params.absolutePath,
+      })
+    ) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function readLexicalStatSync(params: {
+  state: LexicalTraversalState;
+  missingFromIndex: number;
+  rootCanonicalPath: string;
+  resolveParams: ResolveBoundaryPathParams;
+  absolutePath: string;
+}): fs.Stats | null {
+  try {
+    return fs.lstatSync(params.state.lexicalCursor);
+  } catch (error) {
+    if (
+      handleLexicalLstatFailure({
+        error,
+        state: params.state,
+        missingFromIndex: params.missingFromIndex,
+        rootCanonicalPath: params.rootCanonicalPath,
+        resolveParams: params.resolveParams,
+        absolutePath: params.absolutePath,
+      })
+    ) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function resolveAndApplySymlinkHopAsync(params: {
+  state: LexicalTraversalState;
+  rootCanonicalPath: string;
+  boundaryLabel: string;
+}): Promise<void> {
+  applyResolvedSymlinkHop({
+    state: params.state,
+    linkCanonical: await resolveSymlinkHopPath(params.state.lexicalCursor),
+    rootCanonicalPath: params.rootCanonicalPath,
+    boundaryLabel: params.boundaryLabel,
+  });
+}
+
+function resolveAndApplySymlinkHopSync(params: {
+  state: LexicalTraversalState;
+  rootCanonicalPath: string;
+  boundaryLabel: string;
+}): void {
+  applyResolvedSymlinkHop({
+    state: params.state,
+    linkCanonical: resolveSymlinkHopPathSync(params.state.lexicalCursor),
+    rootCanonicalPath: params.rootCanonicalPath,
+    boundaryLabel: params.boundaryLabel,
+  });
+}
+
+type LexicalTraversalStep = {
+  idx: number;
+  segment: string;
+  isLast: boolean;
+};
+
+function* iterateLexicalTraversal(state: LexicalTraversalState): Iterable<LexicalTraversalStep> {
+  for (let idx = 0; idx < state.segments.length; idx += 1) {
+    const segment = state.segments[idx] ?? "";
+    const isLast = idx === state.segments.length - 1;
+    state.lexicalCursor = path.join(state.lexicalCursor, segment);
+    yield { idx, segment, isLast };
+  }
+}
+
 async function resolveBoundaryPathLexicalAsync(params: {
   params: ResolveBoundaryPathParams;
   absolutePath: string;
   rootPath: string;
   rootCanonicalPath: string;
 }): Promise<ResolvedBoundaryPath> {
-  const relative = path.relative(params.rootPath, params.absolutePath);
-  const segments = relative.split(path.sep).filter(Boolean);
-  const allowFinalSymlink = params.params.policy?.allowFinalSymlinkForUnlink === true;
-  let canonicalCursor = params.rootCanonicalPath;
-  let lexicalCursor = params.rootPath;
-  let preserveFinalSymlink = false;
+  const state = createLexicalTraversalState(params);
+  const sharedStepParams = {
+    state,
+    rootCanonicalPath: params.rootCanonicalPath,
+    resolveParams: params.params,
+    absolutePath: params.absolutePath,
+  };
 
-  for (let idx = 0; idx < segments.length; idx += 1) {
-    const segment = segments[idx] ?? "";
-    const isLast = idx === segments.length - 1;
-    lexicalCursor = path.join(lexicalCursor, segment);
-
-    let stat: Awaited<ReturnType<typeof fsp.lstat>>;
-    try {
-      stat = await fsp.lstat(lexicalCursor);
-    } catch (error) {
-      if (isNotFoundPathError(error)) {
-        const missingSuffix = segments.slice(idx);
-        canonicalCursor = path.resolve(canonicalCursor, ...missingSuffix);
-        assertInsideBoundary({
-          boundaryLabel: params.params.boundaryLabel,
-          rootCanonicalPath: params.rootCanonicalPath,
-          candidatePath: canonicalCursor,
-          absolutePath: params.absolutePath,
-        });
-        break;
-      }
-      throw error;
-    }
-
-    if (!stat.isSymbolicLink()) {
-      canonicalCursor = path.resolve(canonicalCursor, segment);
-      assertInsideBoundary({
-        boundaryLabel: params.params.boundaryLabel,
-        rootCanonicalPath: params.rootCanonicalPath,
-        candidatePath: canonicalCursor,
-        absolutePath: params.absolutePath,
-      });
-      continue;
-    }
-
-    if (allowFinalSymlink && isLast) {
-      preserveFinalSymlink = true;
-      canonicalCursor = path.resolve(canonicalCursor, segment);
-      assertInsideBoundary({
-        boundaryLabel: params.params.boundaryLabel,
-        rootCanonicalPath: params.rootCanonicalPath,
-        candidatePath: canonicalCursor,
-        absolutePath: params.absolutePath,
-      });
+  for (const { idx, segment, isLast } of iterateLexicalTraversal(state)) {
+    const stat = await readLexicalStatAsync({ ...sharedStepParams, missingFromIndex: idx });
+    if (!stat) {
       break;
     }
 
-    const linkCanonical = await resolveSymlinkHopPath(lexicalCursor);
-    if (!isPathInside(params.rootCanonicalPath, linkCanonical)) {
-      throw symlinkEscapeError({
-        boundaryLabel: params.params.boundaryLabel,
-        rootCanonicalPath: params.rootCanonicalPath,
-        symlinkPath: lexicalCursor,
-      });
+    const disposition = handleLexicalStatDisposition({
+      ...sharedStepParams,
+      isSymbolicLink: stat.isSymbolicLink(),
+      segment,
+      isLast,
+    });
+    if (disposition === "continue") {
+      continue;
     }
-    canonicalCursor = linkCanonical;
-    lexicalCursor = linkCanonical;
+    if (disposition === "break") {
+      break;
+    }
+
+    await resolveAndApplySymlinkHopAsync({
+      state,
+      rootCanonicalPath: params.rootCanonicalPath,
+      boundaryLabel: params.params.boundaryLabel,
+    });
   }
 
-  assertInsideBoundary({
-    boundaryLabel: params.params.boundaryLabel,
-    rootCanonicalPath: params.rootCanonicalPath,
-    candidatePath: canonicalCursor,
-    absolutePath: params.absolutePath,
-  });
-  const kind = await getPathKind(params.absolutePath, preserveFinalSymlink);
-  return buildResolvedBoundaryPath({
-    absolutePath: params.absolutePath,
-    canonicalPath: canonicalCursor,
-    rootPath: params.rootPath,
-    rootCanonicalPath: params.rootCanonicalPath,
+  const kind = await getPathKind(params.absolutePath, state.preserveFinalSymlink);
+  return finalizeLexicalResolution({
+    ...params,
+    state,
     kind,
   });
 }
@@ -239,83 +460,44 @@ function resolveBoundaryPathLexicalSync(params: {
   rootPath: string;
   rootCanonicalPath: string;
 }): ResolvedBoundaryPath {
-  const relative = path.relative(params.rootPath, params.absolutePath);
-  const segments = relative.split(path.sep).filter(Boolean);
-  const allowFinalSymlink = params.params.policy?.allowFinalSymlinkForUnlink === true;
-  let canonicalCursor = params.rootCanonicalPath;
-  let lexicalCursor = params.rootPath;
-  let preserveFinalSymlink = false;
+  const state = createLexicalTraversalState(params);
+  const sharedStepParams = {
+    state,
+    rootCanonicalPath: params.rootCanonicalPath,
+    resolveParams: params.params,
+    absolutePath: params.absolutePath,
+  };
 
-  for (let idx = 0; idx < segments.length; idx += 1) {
-    const segment = segments[idx] ?? "";
-    const isLast = idx === segments.length - 1;
-    lexicalCursor = path.join(lexicalCursor, segment);
-
-    let stat: fs.Stats;
-    try {
-      stat = fs.lstatSync(lexicalCursor);
-    } catch (error) {
-      if (isNotFoundPathError(error)) {
-        const missingSuffix = segments.slice(idx);
-        canonicalCursor = path.resolve(canonicalCursor, ...missingSuffix);
-        assertInsideBoundary({
-          boundaryLabel: params.params.boundaryLabel,
-          rootCanonicalPath: params.rootCanonicalPath,
-          candidatePath: canonicalCursor,
-          absolutePath: params.absolutePath,
-        });
-        break;
-      }
-      throw error;
-    }
-
-    if (!stat.isSymbolicLink()) {
-      canonicalCursor = path.resolve(canonicalCursor, segment);
-      assertInsideBoundary({
-        boundaryLabel: params.params.boundaryLabel,
-        rootCanonicalPath: params.rootCanonicalPath,
-        candidatePath: canonicalCursor,
-        absolutePath: params.absolutePath,
-      });
-      continue;
-    }
-
-    if (allowFinalSymlink && isLast) {
-      preserveFinalSymlink = true;
-      canonicalCursor = path.resolve(canonicalCursor, segment);
-      assertInsideBoundary({
-        boundaryLabel: params.params.boundaryLabel,
-        rootCanonicalPath: params.rootCanonicalPath,
-        candidatePath: canonicalCursor,
-        absolutePath: params.absolutePath,
-      });
+  for (const { idx, segment, isLast } of iterateLexicalTraversal(state)) {
+    const stat = readLexicalStatSync({ ...sharedStepParams, missingFromIndex: idx });
+    if (!stat) {
       break;
     }
 
-    const linkCanonical = resolveSymlinkHopPathSync(lexicalCursor);
-    if (!isPathInside(params.rootCanonicalPath, linkCanonical)) {
-      throw symlinkEscapeError({
-        boundaryLabel: params.params.boundaryLabel,
-        rootCanonicalPath: params.rootCanonicalPath,
-        symlinkPath: lexicalCursor,
-      });
+    const disposition = handleLexicalStatDisposition({
+      ...sharedStepParams,
+      isSymbolicLink: stat.isSymbolicLink(),
+      segment,
+      isLast,
+    });
+    if (disposition === "continue") {
+      continue;
     }
-    canonicalCursor = linkCanonical;
-    lexicalCursor = linkCanonical;
+    if (disposition === "break") {
+      break;
+    }
+
+    resolveAndApplySymlinkHopSync({
+      state,
+      rootCanonicalPath: params.rootCanonicalPath,
+      boundaryLabel: params.params.boundaryLabel,
+    });
   }
 
-  assertInsideBoundary({
-    boundaryLabel: params.params.boundaryLabel,
-    rootCanonicalPath: params.rootCanonicalPath,
-    candidatePath: canonicalCursor,
-    absolutePath: params.absolutePath,
-  });
-  const kind = getPathKindSync(params.absolutePath, preserveFinalSymlink);
-  return buildResolvedBoundaryPath({
-    absolutePath: params.absolutePath,
-    canonicalPath: canonicalCursor,
-    rootPath: params.rootPath,
-    rootCanonicalPath: params.rootCanonicalPath,
+  const kind = getPathKindSync(params.absolutePath, state.preserveFinalSymlink);
+  return finalizeLexicalResolution({
+    ...params,
+    state,
     kind,
   });
 }

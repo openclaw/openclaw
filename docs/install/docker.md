@@ -59,6 +59,8 @@ Optional env vars:
 - `OPENCLAW_DOCKER_APT_PACKAGES` — install extra apt packages during build
 - `OPENCLAW_EXTRA_MOUNTS` — add extra host bind mounts
 - `OPENCLAW_HOME_VOLUME` — persist `/home/node` in a named volume
+- `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` — break-glass: allow trusted private-network
+  `ws://` targets for CLI/onboarding client paths (default is loopback-only)
 
 After it finishes:
 
@@ -392,7 +394,24 @@ to capture a callback on `http://127.0.0.1:1455/auth/callback`. In Docker or
 headless setups that callback can show a browser error. Copy the full redirect
 URL you land on and paste it back into the wizard to finish auth.
 
-### Health check
+### Health checks
+
+Container probe endpoints (no auth required):
+
+```bash
+curl -fsS http://127.0.0.1:18789/healthz
+curl -fsS http://127.0.0.1:18789/readyz
+```
+
+Aliases: `/health` and `/ready`.
+
+The Docker image includes a built-in `HEALTHCHECK` that pings `/healthz` in the
+background. In plain terms: Docker keeps checking if OpenClaw is still
+responsive. If checks keep failing, Docker marks the container as `unhealthy`,
+and orchestration systems (Docker Compose restart policy, Swarm, Kubernetes,
+etc.) can automatically restart or replace it.
+
+Authenticated deep health snapshot (gateway + channels):
 
 ```bash
 docker compose exec openclaw-gateway node dist/index.js health --token "$OPENCLAW_GATEWAY_TOKEN"
