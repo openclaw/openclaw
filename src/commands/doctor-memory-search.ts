@@ -43,8 +43,8 @@ export async function noteMemorySearchHealth(
   // If a specific provider is configured (not "auto"), check only that one.
   if (resolved.provider !== "auto") {
     if (resolved.provider === "local") {
-      if (hasLocalEmbeddings(resolved.local)) {
-        return; // local model file exists
+      if (hasLocalEmbeddings(resolved.local, true)) {
+        return; // local model file exists (or default model will be auto-downloaded)
       }
       note(
         [
@@ -136,8 +136,20 @@ export async function noteMemorySearchHealth(
   );
 }
 
-function hasLocalEmbeddings(local: { modelPath?: string }): boolean {
-  const modelPath = local.modelPath?.trim() || DEFAULT_LOCAL_MODEL;
+/**
+ * Check whether local embeddings are available.
+ *
+ * When `useDefaultFallback` is true (explicit `provider: "local"`), an empty
+ * modelPath is treated as available because the runtime falls back to
+ * DEFAULT_LOCAL_MODEL (an auto-downloaded HuggingFace model).
+ *
+ * When false (provider: "auto"), we only consider local available if the user
+ * explicitly configured a local file path — matching `canAutoSelectLocal()`
+ * in the runtime, which skips local for empty/hf: model paths.
+ */
+function hasLocalEmbeddings(local: { modelPath?: string }, useDefaultFallback = false): boolean {
+  const modelPath =
+    local.modelPath?.trim() || (useDefaultFallback ? DEFAULT_LOCAL_MODEL : undefined);
   if (!modelPath) {
     return false;
   }

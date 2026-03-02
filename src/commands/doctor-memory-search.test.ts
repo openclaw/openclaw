@@ -188,7 +188,7 @@ describe("noteMemorySearchHealth", () => {
     expect(message).not.toContain("openclaw auth add --provider");
   });
 
-  it("does not warn in auto mode when default local model is available (no credentials needed)", async () => {
+  it("warns in auto mode when no local modelPath and no API keys are configured", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "auto",
       local: {},
@@ -197,9 +197,12 @@ describe("noteMemorySearchHealth", () => {
 
     await noteMemorySearchHealth(cfg);
 
-    // The default local model (DEFAULT_LOCAL_MODEL) is an hf: URL that
-    // node-llama-cpp can auto-download, so no warning should be emitted.
-    expect(note).not.toHaveBeenCalled();
+    // In auto mode, canAutoSelectLocal requires an explicit local file path.
+    // DEFAULT_LOCAL_MODEL fallback does NOT apply to auto — only to explicit
+    // provider: "local". So with no local file and no API keys, warn.
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("openclaw configure --section model");
   });
 });
 
