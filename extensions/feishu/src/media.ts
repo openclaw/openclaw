@@ -232,10 +232,17 @@ export async function uploadFileFeishu(params: {
   // See: https://github.com/larksuite/node-sdk/issues/121
   const fileData = typeof file === "string" ? fs.createReadStream(file) : file;
 
+  // URL encode filename to handle Chinese characters and special characters
+  // HTTP multipart/form-data requires 7bit ASCII for Content-Disposition header
+  const safeFileName = encodeURIComponent(fileName)
+    .replace(/'/g, "%27")
+    .replace(/\(/g, "%28")
+    .replace(/\)/g, "%29");
+
   const response = await client.im.file.create({
     data: {
       file_type: fileType,
-      file_name: fileName,
+      file_name: safeFileName,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
       file: fileData as any,
       ...(duration !== undefined && { duration }),
