@@ -440,6 +440,24 @@ export function renderNode(params: {
         });
       }
     }
+
+    const stringVariant = nonNull.find((variant) => schemaType(variant) === "string");
+    const objectVariant = nonNull.find((variant) => schemaType(variant) === "object");
+    if (stringVariant && objectVariant) {
+      const resolvedUnionValue = value ?? schema.default;
+      const useObjectVariant =
+        resolvedUnionValue != null &&
+        typeof resolvedUnionValue === "object" &&
+        !Array.isArray(resolvedUnionValue);
+      const concreteSchema: JsonSchema = {
+        ...schema,
+        ...(useObjectVariant ? objectVariant : stringVariant),
+        anyOf: undefined,
+        oneOf: undefined,
+        allOf: undefined,
+      };
+      return renderNode({ ...params, schema: concreteSchema });
+    }
   }
 
   // Enum - use segmented for small, dropdown for large

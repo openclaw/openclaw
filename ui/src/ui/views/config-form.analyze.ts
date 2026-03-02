@@ -204,5 +204,30 @@ function normalizeUnion(
     };
   }
 
+  if (remaining.length > 0 && literals.length === 0) {
+    const normalizedVariants: JsonSchema[] = [];
+    const unsupported = new Set<string>();
+    for (const entry of remaining) {
+      const res = normalizeSchemaNode(entry, path);
+      if (!res.schema) {
+        return null;
+      }
+      normalizedVariants.push(res.schema);
+      for (const unsupportedPath of res.unsupportedPaths) {
+        unsupported.add(unsupportedPath);
+      }
+    }
+    return {
+      schema: {
+        ...schema,
+        anyOf: schema.anyOf ? normalizedVariants : undefined,
+        oneOf: schema.oneOf ? normalizedVariants : undefined,
+        allOf: undefined,
+        nullable,
+      },
+      unsupportedPaths: Array.from(unsupported),
+    };
+  }
+
   return null;
 }

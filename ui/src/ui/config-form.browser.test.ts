@@ -304,7 +304,7 @@ describe("config form renderer", () => {
     expect(noMatchContainer.textContent).toContain('No settings match "mode tag:security"');
   });
 
-  it("flags unsupported unions", () => {
+  it("supports string-or-object unions", () => {
     const schema = {
       type: "object",
       properties: {
@@ -314,7 +314,89 @@ describe("config form renderer", () => {
       },
     };
     const analysis = analyzeConfigSchema(schema);
-    expect(analysis.unsupportedPaths).toContain("mixed");
+    expect(analysis.unsupportedPaths).not.toContain("mixed");
+  });
+
+  it("renders string-or-object unions for string values", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        mixed: {
+          anyOf: [
+            { type: "string" },
+            {
+              type: "object",
+              properties: {
+                source: { type: "string", enum: ["env", "file"] },
+                name: { type: "string" },
+              },
+              additionalProperties: false,
+            },
+          ],
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { mixed: "sk-test" },
+        onPatch,
+      }),
+      container,
+    );
+
+    const input = container.querySelector<HTMLInputElement>("input.cfg-input");
+    expect(input).not.toBeNull();
+    if (!input) {
+      return;
+    }
+    expect(input.value).toBe("sk-test");
+    input.value = "sk-updated";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["mixed"], "sk-updated");
+  });
+
+  it("renders string-or-object unions for object values", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        mixed: {
+          anyOf: [
+            { type: "string" },
+            {
+              type: "object",
+              properties: {
+                source: { type: "string", enum: ["env", "file"] },
+                name: { type: "string" },
+              },
+              additionalProperties: false,
+            },
+          ],
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { mixed: { source: "env", name: "MY_KEY" } },
+        onPatch,
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Source");
+    expect(container.textContent).toContain("Name");
+    expect(container.textContent).not.toContain("Unsupported schema node");
   });
 
   it("supports nullable types", () => {
