@@ -64,7 +64,11 @@ describe("restart-helper", () => {
       });
       expect(scriptPath.endsWith(".sh")).toBe(true);
       expect(content).toContain("#!/bin/sh");
-      expect(content).toContain("launchctl kickstart -k 'gui/501/ai.openclaw.gateway'");
+      expect(content).toContain("domain='gui/501'");
+      expect(content).toContain("label='ai.openclaw.gateway'");
+      expect(content).toContain('launchctl bootout "$domain/$label" >/dev/null 2>&1 || true');
+      expect(content).toContain('if ! launchctl bootstrap "$domain" "$plist"; then');
+      expect(content).toContain('launchctl kill SIGTERM "$domain/$label" >/dev/null 2>&1 || true');
       expect(content).toContain('rm -f "$0"');
       await cleanupScript(scriptPath);
     });
@@ -77,7 +81,7 @@ describe("restart-helper", () => {
         OPENCLAW_PROFILE: "default",
         OPENCLAW_LAUNCHD_LABEL: "com.custom.openclaw",
       });
-      expect(content).toContain("launchctl kickstart -k 'gui/501/com.custom.openclaw'");
+      expect(content).toContain("label='com.custom.openclaw'");
       await cleanupScript(scriptPath);
     });
 
@@ -124,7 +128,8 @@ describe("restart-helper", () => {
       const { scriptPath, content } = await prepareAndReadScript({
         OPENCLAW_PROFILE: "staging",
       });
-      expect(content).toContain("gui/502/ai.openclaw.staging");
+      expect(content).toContain("domain='gui/502'");
+      expect(content).toContain("label='ai.openclaw.staging'");
       await cleanupScript(scriptPath);
     });
 

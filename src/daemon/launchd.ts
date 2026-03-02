@@ -481,11 +481,8 @@ export async function restartLaunchAgent({
     }
     throw new Error(`launchctl bootstrap failed: ${detail}`);
   }
-
-  const start = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
-  if (start.code !== 0) {
-    throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
-  }
+  // bootstrap+RunAtLoad is the canonical restart for LaunchAgents. A trailing
+  // kickstart can spuriously report "service not found" after successful bootstrap.
   try {
     stdout.write(`${formatLine("Restarted LaunchAgent", `${domain}/${label}`)}\n`);
   } catch (err: unknown) {

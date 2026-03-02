@@ -203,7 +203,7 @@ describe("launchd install", () => {
     expect(plist).toContain(`<integer>${LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS}</integer>`);
   });
 
-  it("restarts LaunchAgent with bootout-bootstrap-kickstart order", async () => {
+  it("restarts LaunchAgent with bootout-bootstrap order", async () => {
     const env = createDefaultLaunchdEnv();
     await restartLaunchAgent({
       env,
@@ -219,15 +219,15 @@ describe("launchd install", () => {
     const bootstrapIndex = state.launchctlCalls.findIndex(
       (c) => c[0] === "bootstrap" && c[1] === domain && c[2] === plistPath,
     );
-    const kickstartIndex = state.launchctlCalls.findIndex(
-      (c) => c[0] === "kickstart" && c[1] === "-k" && c[2] === `${domain}/${label}`,
-    );
 
     expect(bootoutIndex).toBeGreaterThanOrEqual(0);
     expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
-    expect(kickstartIndex).toBeGreaterThanOrEqual(0);
     expect(bootoutIndex).toBeLessThan(bootstrapIndex);
-    expect(bootstrapIndex).toBeLessThan(kickstartIndex);
+    expect(
+      state.launchctlCalls.some(
+        (c) => c[0] === "kickstart" && c[1] === "-k" && c[2] === `${domain}/${label}`,
+      ),
+    ).toBe(false);
   });
 
   it("waits for previous launchd pid to exit before bootstrapping", async () => {

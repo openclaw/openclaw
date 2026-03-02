@@ -86,7 +86,13 @@ rm -f "$0"
 # Standalone restart script — survives parent process termination.
 # Wait briefly to ensure file locks are released after update.
 sleep 1
-launchctl kickstart -k 'gui/${uid}/${escaped}'
+domain='gui/${uid}'
+label='${escaped}'
+plist="$HOME/Library/LaunchAgents/$label.plist"
+launchctl bootout "$domain/$label" >/dev/null 2>&1 || true
+if ! launchctl bootstrap "$domain" "$plist"; then
+  launchctl kill SIGTERM "$domain/$label" >/dev/null 2>&1 || true
+fi
 # Self-cleanup
 rm -f "$0"
 `;
@@ -123,7 +129,7 @@ del "%~f0"
  *
  * The script must outlive the CLI process because the CLI itself is part
  * of the service being restarted — `systemctl restart` / `launchctl
- * kickstart -k` will terminate the current process tree.  Using
+ * bootout` will terminate the current process tree.  Using
  * `spawn({ detached: true })` + `unref()` ensures the script survives
  * the parent's exit.
  *
