@@ -94,12 +94,18 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages).toEqual([]);
   });
 
-  it("processes final from own run and clears state", () => {
+  it("persists streamed text when final event carries no message", () => {
+    const existingMessage = {
+      role: "user",
+      content: [{ type: "text", text: "Hi" }],
+      timestamp: 1,
+    };
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-1",
-      chatStream: "Reply",
+      chatStream: "Here is my reply",
       chatStreamStartedAt: 100,
+      chatMessages: [existingMessage],
     });
     const payload: ChatEventPayload = {
       runId: "run-1",
@@ -110,6 +116,69 @@ describe("handleChatEvent", () => {
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
     expect(state.chatStreamStartedAt).toBe(null);
+    expect(state.chatMessages).toHaveLength(2);
+    expect(state.chatMessages[0]).toEqual(existingMessage);
+    expect(state.chatMessages[1]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Here is my reply" }],
+    });
+  });
+
+  it("does not persist empty or whitespace-only stream on final", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "   ",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+    };
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+    expect(state.chatMessages).toEqual([]);
+  });
+
+  it("does not persist null stream on final with no message", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: null,
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+    };
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([]);
+  });
+
+  it("prefers final payload message over streamed text", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Streamed partial",
+      chatStreamStartedAt: 100,
+    });
+    const finalMsg = {
+      role: "assistant",
+      content: [{ type: "text", text: "Complete reply" }],
+      timestamp: 101,
+    };
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: finalMsg,
+    };
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([finalMsg]);
+    expect(state.chatStream).toBe(null);
   });
 
   it("appends final payload message from own run before clearing stream state", () => {
