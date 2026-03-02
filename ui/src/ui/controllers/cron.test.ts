@@ -7,6 +7,7 @@ import {
   loadCronRuns,
   loadMoreCronRuns,
   normalizeCronFormState,
+  runCronJob,
   startCronEdit,
   startCronClone,
   validateCronForm,
@@ -116,6 +117,83 @@ describe("cron controller", () => {
     expect(addCall?.[1]).toMatchObject({
       name: "webhook job",
       delivery: { mode: "webhook", to: "https://example.invalid/cron" },
+    });
+  });
+
+  it("forwards sessionKey and delivery accountId in cron.add payload", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.add") {
+        return { id: "job-3" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 0, nextWakeAtMs: null };
+      }
+      return {};
+    });
+
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "account-routed",
+        scheduleKind: "cron",
+        cronExpr: "0 * * * *",
+        sessionTarget: "isolated",
+        payloadKind: "agentTurn",
+        payloadText: "run this",
+        sessionKey: "agent:ops:main",
+        deliveryMode: "announce",
+        deliveryAccountId: "ops-bot",
+      },
+    });
+
+    await addCronJob(state);
+
+    const addCall = request.mock.calls.find(([method]) => method === "cron.add");
+    expect(addCall).toBeDefined();
+    expect(addCall?.[1]).toMatchObject({
+      sessionKey: "agent:ops:main",
+      delivery: { mode: "announce", accountId: "ops-bot" },
+    });
+  });
+
+  it("forwards lightContext in cron payload", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.add") {
+        return { id: "job-light" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 0, nextWakeAtMs: null };
+      }
+      return {};
+    });
+
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "light-context job",
+        scheduleKind: "cron",
+        cronExpr: "0 * * * *",
+        sessionTarget: "isolated",
+        payloadKind: "agentTurn",
+        payloadText: "run this",
+        payloadLightContext: true,
+      },
+    });
+
+    await addCronJob(state);
+
+    const addCall = request.mock.calls.find(([method]) => method === "cron.add");
+    expect(addCall).toBeDefined();
+    expect(addCall?.[1]).toMatchObject({
+      payload: { kind: "agentTurn", lightContext: true },
     });
   });
 
@@ -306,12 +384,74 @@ describe("cron controller", () => {
     expect(state.cronEditingJobId).toBeNull();
   });
 
+  it("sends empty delivery.accountId in cron.update to clear persisted account routing", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-clear-account-id" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-clear-account-id" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronEditingJobId: "job-clear-account-id",
+      cronJobs: [
+        {
+          id: "job-clear-account-id",
+          name: "clear account",
+          enabled: true,
+          createdAtMs: 0,
+          updatedAtMs: 0,
+          schedule: { kind: "cron", expr: "0 * * * *" },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "run" },
+          delivery: { mode: "announce", accountId: "ops-bot" },
+          state: {},
+        },
+      ],
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "clear account",
+        scheduleKind: "cron",
+        cronExpr: "0 * * * *",
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payloadKind: "agentTurn",
+        payloadText: "run",
+        deliveryMode: "announce",
+        deliveryAccountId: "   ",
+      },
+    });
+
+    await addCronJob(state);
+
+    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    expect(updateCall).toBeDefined();
+    expect(updateCall?.[1]).toMatchObject({
+      id: "job-clear-account-id",
+      patch: {
+        delivery: {
+          mode: "announce",
+          accountId: "",
+        },
+      },
+    });
+  });
+
   it("maps a cron job into editable form fields", () => {
     const state = createState();
     const job = {
       id: "job-9",
       name: "Weekly report",
       description: "desc",
+      sessionKey: "agent:ops:main",
       enabled: false,
       createdAtMs: 0,
       updatedAtMs: 0,
@@ -319,7 +459,7 @@ describe("cron controller", () => {
       sessionTarget: "isolated" as const,
       wakeMode: "next-heartbeat" as const,
       payload: { kind: "agentTurn" as const, message: "ship it", timeoutSeconds: 45 },
-      delivery: { mode: "announce" as const, channel: "telegram", to: "123" },
+      delivery: { mode: "announce" as const, channel: "telegram", to: "123", accountId: "bot-2" },
       state: {},
     };
 
@@ -328,6 +468,7 @@ describe("cron controller", () => {
     expect(state.cronEditingJobId).toBe("job-9");
     expect(state.cronRunsJobId).toBe("job-9");
     expect(state.cronForm.name).toBe("Weekly report");
+    expect(state.cronForm.sessionKey).toBe("agent:ops:main");
     expect(state.cronForm.enabled).toBe(false);
     expect(state.cronForm.scheduleKind).toBe("every");
     expect(state.cronForm.everyAmount).toBe("2");
@@ -338,6 +479,7 @@ describe("cron controller", () => {
     expect(state.cronForm.deliveryMode).toBe("announce");
     expect(state.cronForm.deliveryChannel).toBe("telegram");
     expect(state.cronForm.deliveryTo).toBe("123");
+    expect(state.cronForm.deliveryAccountId).toBe("bot-2");
   });
 
   it("includes model/thinking/stagger/bestEffort in cron.update patch", async () => {
@@ -387,6 +529,62 @@ describe("cron controller", () => {
           thinking: "low",
         },
         delivery: { mode: "announce", bestEffort: true },
+      },
+    });
+  });
+
+  it("sends lightContext=false in cron.update when clearing prior light-context setting", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-clear-light" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-clear-light" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronEditingJobId: "job-clear-light",
+      cronJobs: [
+        {
+          id: "job-clear-light",
+          name: "Light job",
+          enabled: true,
+          createdAtMs: 0,
+          updatedAtMs: 0,
+          schedule: { kind: "cron", expr: "0 9 * * *" },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "run", lightContext: true },
+          state: {},
+        },
+      ],
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "Light job",
+        scheduleKind: "cron",
+        cronExpr: "0 9 * * *",
+        payloadKind: "agentTurn",
+        payloadText: "run",
+        payloadLightContext: false,
+      },
+    });
+
+    await addCronJob(state);
+
+    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    expect(updateCall).toBeDefined();
+    expect(updateCall?.[1]).toMatchObject({
+      id: "job-clear-light",
+      patch: {
+        payload: {
+          kind: "agentTurn",
+          lightContext: false,
+        },
       },
     });
   });
@@ -786,5 +984,39 @@ describe("cron controller", () => {
     expect(state.cronRuns).toHaveLength(2);
     expect(state.cronRuns[0]?.summary).toBe("newest");
     expect(state.cronRuns[1]?.summary).toBe("older");
+  });
+
+  it("runs cron job in due mode when requested", async () => {
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method === "cron.run") {
+        expect(payload).toMatchObject({ id: "job-due", mode: "due" });
+        return { ok: true };
+      }
+      if (method === "cron.runs") {
+        return { entries: [], total: 0, hasMore: false, nextOffset: null };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronRunsScope: "job",
+      cronRunsJobId: "job-due",
+    });
+    const job = {
+      id: "job-due",
+      name: "Due test",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "cron" as const, expr: "0 * * * *" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+      payload: { kind: "agentTurn" as const, message: "run" },
+      state: {},
+    };
+
+    await runCronJob(state, job, "due");
+
+    expect(request).toHaveBeenCalledWith("cron.run", { id: "job-due", mode: "due" });
   });
 });
