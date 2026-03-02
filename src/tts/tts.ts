@@ -36,11 +36,13 @@ import {
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
   openaiTTS,
+  geminiTTS,
+  GEMINI_TTS_VOICES,
   parseTtsDirectives,
   scheduleCleanup,
   summarizeText,
 } from "./tts-core.js";
-export { OPENAI_TTS_MODELS, OPENAI_TTS_VOICES } from "./tts-core.js";
+export { OPENAI_TTS_MODELS, OPENAI_TTS_VOICES, GEMINI_TTS_VOICES } from "./tts-core.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;
@@ -55,6 +57,8 @@ const DEFAULT_OPENAI_VOICE = "alloy";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-preview-tts";
+const DEFAULT_GEMINI_VOICE = "Puck";
 
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
@@ -111,6 +115,11 @@ export type ResolvedTtsConfig = {
     };
   };
   openai: {
+    apiKey?: string;
+    model: string;
+    voice: string;
+  };
+  gemini: {
     apiKey?: string;
     model: string;
     voice: string;
@@ -290,6 +299,11 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       model: raw.openai?.model ?? DEFAULT_OPENAI_MODEL,
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
     },
+    gemini: {
+      apiKey: raw.gemini?.apiKey,
+      model: raw.gemini?.model ?? DEFAULT_GEMINI_MODEL,
+      voice: raw.gemini?.voice ?? DEFAULT_GEMINI_VOICE,
+    },
     edge: {
       enabled: raw.edge?.enabled ?? true,
       voice: raw.edge?.voice?.trim() || DEFAULT_EDGE_VOICE,
@@ -441,6 +455,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
+  if (resolveTtsApiKey(config, "gemini")) {
+    return "gemini";
+  }
   return "edge";
 }
 
@@ -508,10 +525,13 @@ export function resolveTtsApiKey(
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (provider === "gemini") {
+    return config.gemini.apiKey || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge", "gemini"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -568,6 +588,44 @@ export async function textToSpeech(params: {
   for (const provider of providers) {
     const providerStart = Date.now();
     try {
+      if (provider === "gemini") {
+        const apiKey = resolveTtsApiKey(config, "gemini");
+        if (!apiKey) {
+          errors.push("gemini: no API key");
+          continue;
+        }
+
+        try {
+          const audioBuffer = await geminiTTS({
+            text: params.text,
+            apiKey,
+            model: config.gemini.model,
+            voice: config.gemini.voice,
+            timeoutMs: config.timeoutMs,
+          });
+
+          const latencyMs = Date.now() - providerStart;
+          const tempRoot = resolvePreferredOpenClawTmpDir();
+          mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+          const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
+          const audioPath = path.join(tempDir, `voice-${Date.now()}.wav`);
+          writeFileSync(audioPath, audioBuffer);
+          scheduleCleanup(tempDir);
+
+          return {
+            success: true,
+            audioPath,
+            latencyMs,
+            provider,
+            outputFormat: "wav",
+            voiceCompatible: false,
+          };
+        } catch (err) {
+          errors.push(formatTtsProviderError(provider, err));
+          continue;
+        }
+      }
+
       if (provider === "edge") {
         if (!config.edge.enabled) {
           errors.push("edge: disabled");
@@ -729,8 +787,8 @@ export async function textToSpeechTelephony(params: {
   for (const provider of providers) {
     const providerStart = Date.now();
     try {
-      if (provider === "edge") {
-        errors.push("edge: unsupported for telephony");
+      if (provider === "edge" || provider === "gemini") {
+        errors.push(`${provider}: unsupported for telephony`);
         continue;
       }
 

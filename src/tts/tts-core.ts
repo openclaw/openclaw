@@ -139,7 +139,12 @@ export function parseTtsDirectives(
             if (!policy.allowProvider) {
               break;
             }
-            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
+            if (
+              rawValue === "openai" ||
+              rawValue === "elevenlabs" ||
+              rawValue === "edge" ||
+              rawValue === "gemini"
+            ) {
               overrides.provider = rawValue;
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);
@@ -670,4 +675,144 @@ export async function edgeTTS(params: {
     timeout: config.timeoutMs ?? timeoutMs,
   });
   await tts.ttsPromise(text, outputPath);
+}
+
+// ── Gemini TTS ──────────────────────────────────────────────────────────────
+
+export const GEMINI_TTS_VOICES = [
+  "Puck",
+  "Charon",
+  "Fenrir",
+  "Orus",
+  "Kore",
+  "Aoede",
+  "Leda",
+  "Zephyr",
+] as const;
+
+export type GeminiTtsVoice = (typeof GEMINI_TTS_VOICES)[number];
+
+const DEFAULT_GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts";
+const DEFAULT_GEMINI_TTS_VOICE: GeminiTtsVoice = "Puck";
+
+export function isValidGeminiVoice(voice: string): voice is GeminiTtsVoice {
+  return GEMINI_TTS_VOICES.includes(voice as GeminiTtsVoice);
+}
+
+export async function geminiTTS(params: {
+  text: string;
+  apiKey: string;
+  model?: string;
+  voice?: string;
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const {
+    text,
+    apiKey,
+    model = DEFAULT_GEMINI_TTS_MODEL,
+    voice = DEFAULT_GEMINI_TTS_VOICE,
+    timeoutMs,
+  } = params;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                text: `Say the following text exactly as written: ${text}`,
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: voice },
+            },
+          },
+        },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => "");
+      throw new Error(`Gemini TTS API error (${response.status}): ${errorBody.slice(0, 200)}`);
+    }
+
+    const data = (await response.json()) as {
+      candidates?: Array<{
+        content?: {
+          parts?: Array<{
+            inlineData?: { data: string; mimeType: string };
+            text?: string;
+          }>;
+        };
+      }>;
+    };
+
+    const candidates = data.candidates ?? [];
+    for (const candidate of candidates) {
+      const parts = candidate.content?.parts ?? [];
+      for (const part of parts) {
+        if (part.inlineData?.data) {
+          // Gemini returns raw PCM (L16, 24kHz, mono). Convert to WAV.
+          const pcmBuffer = Buffer.from(part.inlineData.data, "base64");
+          return pcmToWav(pcmBuffer, 24000, 1, 16);
+        }
+      }
+    }
+
+    throw new Error("Gemini TTS returned no audio data");
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Convert raw PCM data to a WAV buffer.
+ */
+function pcmToWav(
+  pcmData: Buffer,
+  sampleRate: number,
+  numChannels: number,
+  bitsPerSample: number,
+): Buffer {
+  const byteRate = (sampleRate * numChannels * bitsPerSample) / 8;
+  const blockAlign = (numChannels * bitsPerSample) / 8;
+  const dataSize = pcmData.length;
+  const headerSize = 44;
+  const buffer = Buffer.alloc(headerSize + dataSize);
+
+  // RIFF header
+  buffer.write("RIFF", 0);
+  buffer.writeUInt32LE(36 + dataSize, 4);
+  buffer.write("WAVE", 8);
+
+  // fmt sub-chunk
+  buffer.write("fmt ", 12);
+  buffer.writeUInt32LE(16, 16); // sub-chunk size
+  buffer.writeUInt16LE(1, 20); // PCM format
+  buffer.writeUInt16LE(numChannels, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(byteRate, 28);
+  buffer.writeUInt16LE(blockAlign, 32);
+  buffer.writeUInt16LE(bitsPerSample, 34);
+
+  // data sub-chunk
+  buffer.write("data", 36);
+  buffer.writeUInt32LE(dataSize, 40);
+  pcmData.copy(buffer, headerSize);
+
+  return buffer;
 }

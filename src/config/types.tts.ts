@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "gemini";
 
 export type TtsMode = "final" | "all";
 
@@ -57,6 +57,15 @@ export type TtsConfig = {
   openai?: {
     apiKey?: string;
     model?: string;
+    voice?: string;
+  };
+  /** Google Gemini TTS configuration. */
+  gemini?: {
+    /** API key for Google Gemini. Falls back to GOOGLE_API_KEY env var. */
+    apiKey?: string;
+    /** Gemini TTS model (default: gemini-2.5-flash-preview-tts). */
+    model?: string;
+    /** Voice name (e.g. Puck, Charon, Fenrir, Orus, Kore, Aoede, Leda, Zephyr). */
     voice?: string;
   };
   /** Microsoft Edge (node-edge-tts) configuration. */
