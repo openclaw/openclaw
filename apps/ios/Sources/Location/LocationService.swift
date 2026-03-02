@@ -21,7 +21,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
         self.manager
     }
 
-    var locationRequestContinuation: CheckedContinuation<CLLocation, Error>? {
+    var locationRequestContinuation: CheckedContinuation<CLLocation, Swift.Error>? {
         get { self.locationContinuation }
         set { self.locationContinuation = newValue }
     }
