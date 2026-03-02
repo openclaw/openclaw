@@ -601,14 +601,18 @@ function buildFailureAlert(form: CronFormState) {
       : undefined;
   const deliveryMode = form.failureAlertDeliveryMode;
   const accountId = form.failureAlertAccountId.trim();
-  return {
+  const patch: Record<string, unknown> = {
     after: after > 0 ? Math.floor(after) : undefined,
     channel: form.failureAlertChannel.trim() || CRON_CHANNEL_LAST,
     to: form.failureAlertTo.trim() || undefined,
     ...(cooldownMs !== undefined ? { cooldownMs } : {}),
-    ...(deliveryMode ? { mode: deliveryMode } : {}),
     ...(accountId ? { accountId } : {}),
   };
+  // Only include mode if explicitly set to non-default value
+  if (deliveryMode && deliveryMode !== "announce") {
+    patch.mode = deliveryMode;
+  }
+  return patch;
 }
 
 export async function addCronJob(state: CronState) {

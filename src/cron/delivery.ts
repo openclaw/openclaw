@@ -165,6 +165,11 @@ export function resolveFailureDestination(
       accountId = jobAccountId;
     }
     if (jobMode !== undefined) {
+      // Mode was explicitly overridden - clear inherited 'to' since URL semantics differ
+      // between announce (channel recipient) and webhook (HTTP endpoint)
+      if (globalConfig?.mode !== jobMode) {
+        to = undefined;
+      }
       mode = jobMode;
     }
   }
