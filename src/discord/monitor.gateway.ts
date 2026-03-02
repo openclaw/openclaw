@@ -5,17 +5,21 @@ export type DiscordGatewayHandle = {
   disconnect?: () => void;
 };
 
-export function getDiscordGatewayEmitter(gateway?: unknown): EventEmitter | undefined {
-  return (gateway as { emitter?: EventEmitter } | undefined)?.emitter;
-}
-
-export async function waitForDiscordGatewayStop(params: {
+export type WaitForDiscordGatewayStopParams = {
   gateway?: DiscordGatewayHandle;
   abortSignal?: AbortSignal;
   onGatewayError?: (err: unknown) => void;
   shouldStopOnError?: (err: unknown) => boolean;
   registerForceStop?: (forceStop: (err: unknown) => void) => void;
-}): Promise<void> {
+};
+
+export function getDiscordGatewayEmitter(gateway?: unknown): EventEmitter | undefined {
+  return (gateway as { emitter?: EventEmitter } | undefined)?.emitter;
+}
+
+export async function waitForDiscordGatewayStop(
+  params: WaitForDiscordGatewayStopParams,
+): Promise<void> {
   const { gateway, abortSignal, onGatewayError, shouldStopOnError } = params;
   const emitter = gateway?.emitter;
   return await new Promise<void>((resolve, reject) => {
