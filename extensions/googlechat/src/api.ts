@@ -128,7 +128,11 @@ export async function sendGoogleChatMessage(params: {
       ...(item.contentName ? { contentName: item.contentName } : {}),
     }));
   }
-  const url = `${CHAT_API_BASE}/${space}/messages`;
+  const urlObj = new URL(`${CHAT_API_BASE}/${space}/messages`);
+  if (thread) {
+    urlObj.searchParams.set("messageReplyOption", "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
+  }
+  const url = urlObj.toString();
   const result = await fetchJson<{ name?: string }>(account, url, {
     method: "POST",
     body: JSON.stringify(body),
