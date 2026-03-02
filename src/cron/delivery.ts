@@ -139,16 +139,34 @@ export function resolveFailureDestination(
   let accountId: string | undefined;
   let mode: "announce" | "webhook" | undefined;
 
-  if (hasJobFailureDest) {
-    channel = normalizeChannel(jobFailureDest.channel);
-    to = normalizeTo(jobFailureDest.to);
-    accountId = normalizeAccountId(jobFailureDest.accountId);
-    mode = normalizeFailureMode(jobFailureDest.mode);
-  } else if (globalConfig) {
+  // Start with global config as base
+  if (globalConfig) {
     channel = normalizeChannel(globalConfig.channel);
     to = normalizeTo(globalConfig.to);
     accountId = normalizeAccountId(globalConfig.accountId);
     mode = normalizeFailureMode(globalConfig.mode);
+  }
+
+  // Override with job-level values if present
+  if (hasJobFailureDest) {
+    const jobChannel = normalizeChannel(jobFailureDest.channel);
+    const jobTo = normalizeTo(jobFailureDest.to);
+    const jobAccountId = normalizeAccountId(jobFailureDest.accountId);
+    const jobMode = normalizeFailureMode(jobFailureDest.mode);
+
+    // Only override if explicitly set (not undefined)
+    if (jobChannel !== undefined) {
+      channel = jobChannel;
+    }
+    if (jobTo !== undefined) {
+      to = jobTo;
+    }
+    if (jobAccountId !== undefined) {
+      accountId = jobAccountId;
+    }
+    if (jobMode !== undefined) {
+      mode = jobMode;
+    }
   }
 
   if (!channel && !to && !accountId && !mode) {
