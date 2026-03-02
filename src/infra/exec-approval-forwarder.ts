@@ -22,6 +22,7 @@ import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
 
 const log = createSubsystemLogger("gateway/exec-approvals");
+const SESSION_FILTER_REGEX_MAX_INPUT = 2048;
 
 export type { ExecApprovalRequest, ExecApprovalResolved };
 
@@ -56,12 +57,28 @@ function normalizeMode(mode?: ExecApprovalForwardingConfig["mode"]) {
 }
 
 function matchSessionFilter(sessionKey: string, patterns: string[]): boolean {
+  const head = sessionKey.slice(0, SESSION_FILTER_REGEX_MAX_INPUT);
+  const tail =
+    sessionKey.length > SESSION_FILTER_REGEX_MAX_INPUT
+      ? sessionKey.slice(-SESSION_FILTER_REGEX_MAX_INPUT)
+      : "";
   return patterns.some((pattern) => {
     if (sessionKey.includes(pattern)) {
       return true;
     }
     const regex = compileSafeRegex(pattern);
-    return regex ? regex.test(sessionKey) : false;
+    if (!regex) {
+      return false;
+    }
+    regex.lastIndex = 0;
+    if (regex.test(head)) {
+      return true;
+    }
+    if (tail) {
+      regex.lastIndex = 0;
+      return regex.test(tail);
+    }
+    return false;
   });
 }
 
