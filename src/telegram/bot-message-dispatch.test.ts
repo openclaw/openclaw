@@ -57,6 +57,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       update: vi.fn(),
       flush: vi.fn().mockResolvedValue(undefined),
       messageId: vi.fn().mockReturnValue(messageId),
+      previewMode: vi.fn().mockReturnValue("message"),
       clear: vi.fn().mockResolvedValue(undefined),
       stop: vi.fn().mockResolvedValue(undefined),
       forceNewMessage: vi.fn(),
@@ -74,6 +75,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       }),
       flush: vi.fn().mockResolvedValue(undefined),
       messageId: vi.fn().mockImplementation(() => activeMessageId),
+      previewMode: vi.fn().mockReturnValue("message"),
       clear: vi.fn().mockResolvedValue(undefined),
       stop: vi.fn().mockResolvedValue(undefined),
       forceNewMessage: vi.fn().mockImplementation(() => {
@@ -1214,6 +1216,54 @@ describe("dispatchTelegramMessage draft streaming", () => {
             text: expect.stringContaining("Reasoning:\nIf I count r in strawberry"),
           }),
         ],
+      }),
+    );
+  });
+
+  it("keeps DM draft reasoning block updates in preview flow without sending duplicates", async () => {
+    const answerDraftStream = createDraftStream(999);
+    const reasoningDraftStream = {
+      update: vi.fn(),
+      flush: vi.fn().mockResolvedValue(undefined),
+      messageId: vi.fn().mockReturnValue(undefined),
+      previewMode: vi.fn().mockReturnValue("draft"),
+      clear: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+      forceNewMessage: vi.fn(),
+    };
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onReasoningStream?.({
+          text: "Reasoning:\nI am counting letters...",
+        });
+        await replyOptions?.onReasoningEnd?.();
+        await replyOptions?.onPartialReply?.({ text: "3" });
+        await dispatcherOptions.deliver({ text: "3" }, { kind: "final" });
+        await dispatcherOptions.deliver(
+          {
+            text: "Reasoning:\nI am counting letters. The total is 3.",
+          },
+          { kind: "block" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createReasoningStreamContext(), streamMode: "partial" });
+
+    expect(editMessageTelegram).toHaveBeenCalledWith(123, 999, "3", expect.any(Object));
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith(
+      "Reasoning:\nI am counting letters. The total is 3.",
+    );
+    expect(reasoningDraftStream.flush).toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: expect.stringContaining("Reasoning:\nI am") })],
       }),
     );
   });

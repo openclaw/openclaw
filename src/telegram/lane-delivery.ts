@@ -103,6 +103,7 @@ type ConsumeArchivedAnswerPreviewParams = {
 
 export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
   const getLanePreviewText = (lane: DraftLaneState) => lane.lastPartialText;
+  const isDraftPreviewLane = (lane: DraftLaneState) => lane.stream?.previewMode?.() === "draft";
 
   const shouldSkipRegressivePreviewUpdate = (args: {
     currentPreviewText: string | undefined;
@@ -337,6 +338,15 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     }
 
     if (allowPreviewUpdateForNonFinal && canEditViaPreview) {
+      if (isDraftPreviewLane(lane)) {
+        // DM draft flow has no message_id to edit; updates are sent via sendMessageDraft.
+        // Treat non-final reasoning blocks as preview updates to avoid duplicate sends.
+        lane.stream?.update(text);
+        await params.flushDraftLane(lane);
+        lane.lastPartialText = text;
+        params.markDelivered();
+        return "preview-updated";
+      }
       const updated = await tryUpdatePreviewForLane({
         lane,
         laneName,
