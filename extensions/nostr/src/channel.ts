@@ -156,6 +156,29 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         messageId: `nostr-${Date.now()}`,
       };
     },
+    sendMedia: async ({ to, text, mediaUrl, accountId }) => {
+      // Nostr has no native media support; append the URL after the caption text.
+      const core = getNostrRuntime();
+      const aid = accountId ?? DEFAULT_ACCOUNT_ID;
+      const bus = activeBuses.get(aid);
+      if (!bus) {
+        throw new Error(`Nostr bus not running for account ${aid}`);
+      }
+      const tableMode = core.channel.text.resolveMarkdownTableMode({
+        cfg: core.config.loadConfig(),
+        channel: "nostr",
+        accountId: aid,
+      });
+      const parts = [text?.trim(), mediaUrl?.trim()].filter(Boolean);
+      const message = core.channel.text.convertMarkdownTables(parts.join("\n"), tableMode);
+      const normalizedTo = normalizePubkey(to);
+      await bus.sendDm(normalizedTo, message);
+      return {
+        channel: "nostr" as const,
+        to: normalizedTo,
+        messageId: `nostr-${Date.now()}`,
+      };
+    },
   },
 
   status: {

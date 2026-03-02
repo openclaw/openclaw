@@ -107,6 +107,17 @@ describe("nostrPlugin", () => {
     it("has reasonable text chunk limit", () => {
       expect(nostrPlugin.outbound?.textChunkLimit).toBe(4000);
     });
+
+    it("has sendText function", () => {
+      expect(nostrPlugin.outbound?.sendText).toBeTypeOf("function");
+    });
+
+    it("has sendMedia function — required by delivery framework", () => {
+      // The delivery framework (src/infra/outbound/deliver.ts) checks for both
+      // sendText and sendMedia before dispatching; missing sendMedia causes
+      // "Outbound not configured for channel: nostr" and silently drops replies.
+      expect(nostrPlugin.outbound?.sendMedia).toBeTypeOf("function");
+    });
   });
 
   describe("pairing", () => {
