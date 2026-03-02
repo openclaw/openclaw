@@ -928,7 +928,7 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0];
-    expect(payload.CommandTargetSessionKey).toBe("agent:main:main:thread:99");
+    expect(payload.CommandTargetSessionKey).toBe("agent:main:main:thread:12345:99");
   });
 
   it("allows native DM commands for paired users", async () => {
