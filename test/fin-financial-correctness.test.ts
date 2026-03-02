@@ -6,10 +6,10 @@
  * to all downstream decisions (allocation, promotion, risk).
  */
 import { describe, expect, it } from "vitest";
-import type { OHLCV } from "../extensions/fin-data-bus/src/types.js";
 import { CapitalAllocator } from "../extensions/fin-fund-manager/src/capital-allocator.js";
 import { FundRiskManager } from "../extensions/fin-fund-manager/src/fund-risk-manager.js";
 import type { StrategyProfile, FundConfig } from "../extensions/fin-fund-manager/src/types.js";
+import type { OHLCV } from "../extensions/fin-shared-types/src/types.js";
 import { BacktestEngine } from "../extensions/fin-strategy-engine/src/backtest-engine.js";
 import {
   sharpeRatio,

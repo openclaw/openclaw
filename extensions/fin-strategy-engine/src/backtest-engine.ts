@@ -32,7 +32,7 @@ interface InternalPosition {
 }
 
 /** Build an IndicatorLib over history close/high/low arrays. */
-function buildIndicatorLib(history: OHLCV[]): IndicatorLib {
+export function buildIndicatorLib(history: OHLCV[]): IndicatorLib {
   const closes = history.map((b) => b.close);
   const highs = history.map((b) => b.high);
   const lows = history.map((b) => b.low);

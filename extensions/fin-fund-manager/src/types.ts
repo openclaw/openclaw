@@ -60,6 +60,7 @@ export interface PromotionCheck {
   targetLevel?: StrategyLevel;
   reasons: string[];
   blockers: string[];
+  needsUserConfirmation?: boolean;
 }
 
 /** Demotion check result. */

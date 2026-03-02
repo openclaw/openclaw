@@ -209,8 +209,14 @@ const plugin = {
         label: "Fund Rebalance",
         description:
           "Execute full rebalance: re-profile strategies, compute correlations, re-allocate, check promotions/demotions",
-        parameters: Type.Object({}),
-        async execute() {
+        parameters: Type.Object({
+          confirmed_promotions: Type.Optional(
+            Type.Array(Type.String(), {
+              description: "Strategy IDs confirmed by user for L3 promotion",
+            }),
+          ),
+        }),
+        async execute(_id: string, params: Record<string, unknown>) {
           const registry = getRegistry();
           if (!registry) return json({ error: "Strategy registry not available" });
 
@@ -264,8 +270,19 @@ const plugin = {
           const result = manager.rebalance(records, paperData);
 
           // Apply promotions/demotions to the registry
+          const confirmedSet = new Set((params.confirmed_promotions as string[] | undefined) ?? []);
+          const pendingConfirmations: PromotionCheck[] = [];
+
           for (const promo of result.promotions) {
             if (promo.targetLevel) {
+              // L2→L3 needs user confirmation
+              if (promo.targetLevel === "L3_LIVE" && !confirmedSet.has(promo.strategyId)) {
+                pendingConfirmations.push({
+                  ...promo,
+                  needsUserConfirmation: true,
+                });
+                continue;
+              }
               try {
                 registry.updateLevel(promo.strategyId, promo.targetLevel);
               } catch {
@@ -305,6 +322,7 @@ const plugin = {
             risk: result.risk,
             promotions: result.promotions,
             demotions: result.demotions,
+            pendingConfirmations,
           });
         },
       },
@@ -387,6 +405,47 @@ const plugin = {
         },
       },
       { names: ["fin_fund_risk"] },
+    );
+
+    api.registerTool(
+      {
+        name: "fin_list_promotions_ready",
+        label: "Promotions Ready",
+        description: "List all strategies eligible for promotion, with confirmation requirements",
+        parameters: Type.Object({
+          level: Type.Optional(
+            Type.Unsafe<string>({
+              type: "string",
+              enum: ["L0_INCUBATE", "L1_BACKTEST", "L2_PAPER"],
+              description: "Filter by current level",
+            }),
+          ),
+        }),
+        async execute(_id: string, params: Record<string, unknown>) {
+          const registry = getRegistry();
+          if (!registry) return json({ error: "Strategy registry not available" });
+
+          const level = params.level as string | undefined;
+          const strategies = registry.list(level ? { level: level as "L0_INCUBATE" } : undefined);
+          const records = strategies as Parameters<typeof manager.buildProfiles>[0];
+          const profiles = manager.buildProfiles(records);
+
+          const promotions = profiles
+            .map((p) => manager.checkPromotion(p))
+            .filter((c) => c.eligible);
+
+          return json({
+            promotions,
+            summary: {
+              total: profiles.length,
+              eligible: promotions.length,
+              needsConfirmation: promotions.filter((p) => p.needsUserConfirmation).length,
+              autoPromote: promotions.filter((p) => !p.needsUserConfirmation).length,
+            },
+          });
+        },
+      },
+      { names: ["fin_list_promotions_ready"] },
     );
 
     // ── Helper: gather status data shared by commands + HTTP routes ──

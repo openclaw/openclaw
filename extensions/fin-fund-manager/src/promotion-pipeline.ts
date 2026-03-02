@@ -157,6 +157,9 @@ export class PromotionPipeline {
     }
 
     result.eligible = result.blockers.length === 0;
+    if (result.eligible) {
+      result.needsUserConfirmation = true;
+    }
     return result;
   }
 

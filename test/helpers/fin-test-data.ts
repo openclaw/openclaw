@@ -1,4 +1,4 @@
-import type { OHLCV } from "../../extensions/fin-data-bus/src/types.js";
+import type { OHLCV } from "../../extensions/fin-shared-types/src/types.js";
 
 /**
  * Generate synthetic OHLCV data for testing.

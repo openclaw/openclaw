@@ -417,8 +417,11 @@ describe("onboard (non-interactive): provider auth", () => {
           [optionKey]: providedSecret,
           skipSkills: true,
         };
+        // Use empty string (not undefined/delete) so dotenv.config() in
+        // readConfigFileSnapshot() won't re-set the key from the CWD .env file.
+        // normalizeOptionalSecretInput("") returns undefined, matching "not set".
         const envOverrides: Record<string, string | undefined> = {
-          [envVar]: undefined,
+          [envVar]: "",
         };
 
         await withEnvAsync(envOverrides, async () => {
