@@ -215,7 +215,7 @@ export async function sendFailureNotificationAnnounce(
 ): Promise<void> {
   const cfg = loadConfig();
   const resolvedTarget = await resolveDeliveryTarget(cfg, agentId, {
-    channel: target.channel as "last" | undefined,
+    channel: target.channel as CronMessageChannel | undefined,
     to: target.to,
     accountId: target.accountId,
   });
