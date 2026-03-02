@@ -160,16 +160,13 @@ describe("registerMatrixMonitorEvents", () => {
         "") as PluginRuntime["system"]["formatNativeDependencyHint"],
       onRoomMessage: vi.fn(),
     };
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
     registerMatrixMonitorEvents(params);
     const initialCallCount = onMock.mock.calls.length;
     registerMatrixMonitorEvents(params);
 
     expect(onMock).toHaveBeenCalledTimes(initialCallCount);
-    expect(errorSpy).toHaveBeenCalledWith(
-      "[matrix] skipping duplicate listener registration for client",
+    expect(params.logVerboseMessage).toHaveBeenCalledWith(
+      "matrix: skipping duplicate listener registration for client",
     );
-    errorSpy.mockRestore();
   });
 });
