@@ -25,7 +25,6 @@ import {
   parseExecApprovalResolved,
   removeExecApproval,
 } from "./controllers/exec-approval.ts";
-import { loadExecApprovals } from "./controllers/exec-approvals.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import {
@@ -208,12 +207,15 @@ export function connectGateway(host: GatewayHost) {
       const gap = received - expected;
       if (gap <= 3) {
         console.debug(
-          `[gateway] small event gap (${gap} events), auto-recovering via full state refresh`,
+          `[gateway] small event gap (${gap} events), auto-recovering via state refresh`,
         );
         const app = host as unknown as OpenClawApp;
         void loadChatHistory(app);
-        void loadExecApprovals(app);
         void loadDevices(app, { quiet: true });
+        if (app.chatRunId) {
+          app.chatRunId = null;
+          app.chatStream = null;
+        }
         return;
       }
       host.lastError = `event gap detected (expected seq ${expected}, got ${received}); refresh recommended`;
