@@ -4,6 +4,7 @@
 
 ## Documents
 
+- [Security Audit 2026-02-13](./AUDIT-2026-02-13.md) - Comprehensive security audit (43 findings across 6 domains)
 - [Threat Model](./THREAT-MODEL-ATLAS.md) - MITRE ATLAS-based threat model for the OpenClaw ecosystem
 - [Contributing to the Threat Model](./CONTRIBUTING-THREAT-MODEL.md) - How to add threats, mitigations, and attack chains
 
