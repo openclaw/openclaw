@@ -20,6 +20,15 @@ export function normalizeAllowListLower(list?: Array<string | number>) {
   return normalizeStringEntriesLower(list);
 }
 
+export function normalizeSlackAllowOwnerEntry(entry: string): string | undefined {
+  const trimmed = entry.trim().toLowerCase();
+  if (!trimmed || trimmed === "*") {
+    return undefined;
+  }
+  const withoutPrefix = trimmed.replace(/^(slack:|user:)/, "");
+  return /^u[a-z0-9]+$/.test(withoutPrefix) ? withoutPrefix : undefined;
+}
+
 export type SlackAllowListMatch = AllowlistMatch<
   "wildcard" | "id" | "prefixed-id" | "prefixed-user" | "name" | "prefixed-name" | "slug"
 >;
