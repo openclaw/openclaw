@@ -8,7 +8,7 @@ import {
   getStoredSession,
 } from "./src/auth/index.js";
 import { getAuditSummary, getRecentLogs } from "./src/tools/audit.js";
-import { setAvatarParameter, sendOSCMessage } from "./src/tools/avatar.js";
+import { setAvatarParameter, sendOSCMessage, changeAvatar } from "./src/tools/avatar.js";
 import {
   setCameraParameter,
   setGreenScreenHSL,
@@ -58,6 +58,16 @@ const plugin = {
 
   register(api: { registerTool: (tool: unknown) => void }) {
     console.log("[vrchat-relay] Registering VRChat Relay plugin (Pro Edition)...");
+
+    // Auto-start OSC Listener for Reactive Manifestation Telemetry
+    const listenerResult = startOSCListener();
+    if (listenerResult.success) {
+      console.log(`[vrchat-relay] OSC Telemetry Listener started on port ${listenerResult.port}`);
+    } else {
+      console.error(
+        `[vrchat-relay] Failed to auto-start OSC Telemetry Listener: ${listenerResult.error}`,
+      );
+    }
 
     // vrchat_login - Authenticate with VRChat
     api.registerTool({
@@ -286,6 +296,65 @@ ${status.allowedOperations.map((op) => `  - ${op}`).join("\n")}`,
             content: [{ type: "text", text: `Failed to set parameter: ${result.error}` }],
           };
         }
+      },
+    });
+
+    // vrchat_change_avatar - Change avatar via OSC
+    api.registerTool({
+      name: "vrchat_change_avatar",
+      description: "Change the current avatar via OSC (Reactive Transformation)",
+      parameters: Type.Object({
+        avatarId: Type.String({ description: "Target Avatar ID (must start with avtr_)" }),
+      }),
+      execute(_id: string, params: { avatarId: string }) {
+        const result = changeAvatar({
+          avatarId: params.avatarId,
+        });
+
+        if (result.success) {
+          return {
+            content: [{ type: "text", text: `Avatar changed to "${params.avatarId}" via OSC` }],
+          };
+        } else {
+          return {
+            isError: true,
+            content: [{ type: "text", text: `Failed to change avatar: ${result.error}` }],
+          };
+        }
+      },
+    });
+
+    // vrchat_discover - Discover avatar parameters
+    api.registerTool({
+      name: "vrchat_discover",
+      description:
+        "Discover available OSC parameters for current avatar using OSCQuery and local JSON",
+      parameters: Type.Object({
+        avatarId: Type.String({ description: "Avatar ID (from /avatar/change event)" }),
+      }),
+      async execute(_id: string, params: { avatarId: string }) {
+        const result = await discoverAvatarParameters(params.avatarId);
+
+        const paramList =
+          result.parameters.length > 0
+            ? result.parameters.map((p) => `  - ${p.name} (${p.type})`).join("\n")
+            : "  No parameters discovered";
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Discovery Result:
+- Avatar ID: ${result.avatarId}
+- Source: ${result.source}
+- Parameters Found: ${result.parameters.length}
+- Timestamp: ${result.timestamp.toISOString()}
+
+Parameters:
+${paramList}`,
+            },
+          ],
+        };
       },
     });
 

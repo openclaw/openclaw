@@ -1310,13 +1310,10 @@
                   "reference/wizard",
                   "reference/token-use",
                   "reference/prompt-caching",
-<<<<<<< HEAD
-                  "channels/grammy"
-=======
+                  "channels/grammy",
                   "reference/api-usage-costs",
                   "reference/transcript-hygiene",
                   "date-time"
->>>>>>> upstream/main
                 ]
               },
               {

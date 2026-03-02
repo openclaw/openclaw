@@ -62,3 +62,30 @@ export function sendOSCMessage(params: SendOSCParams): { success: boolean; error
     };
   }
 }
+
+export interface ChangeAvatarParams {
+  avatarId: string;
+}
+
+/**
+ * Change Avatar in VRChat via OSC (/avatar/change)
+ */
+export function changeAvatar(params: ChangeAvatarParams): { success: boolean; error?: string } {
+  try {
+    const { avatarId } = params;
+
+    if (!avatarId || typeof avatarId !== "string" || !avatarId.startsWith("avtr_")) {
+      return { success: false, error: "Invalid Avatar ID format. Must start with 'avtr_'" };
+    }
+
+    const client = getOSCClient();
+    client.send("/avatar/change", [avatarId]);
+
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error changing avatar",
+    };
+  }
+}
