@@ -41,6 +41,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/Sessions list transcript paths: handle missing/non-string/relative `sessions.list.path` values and per-agent `{agentId}` templates when deriving `transcriptPath`, so cross-agent session listings resolve to concrete agent session files instead of workspace-relative paths. (#24775) Thanks @martinfrancois.
+- macOS/PeekabooBridge: add compatibility socket symlinks for legacy `clawdbot`, `clawdis`, and `moltbot` Application Support socket paths so pre-rename clients can still connect. (#6033) Thanks @lumpinif and @vincentkoc.
 - Webchat/Feishu session continuation: preserve routable `OriginatingChannel`/`OriginatingTo` metadata from session delivery context in `chat.send`, and prefer provider-normalized channel when deciding cross-channel route dispatch so Webchat replies continue on the selected Feishu session instead of falling back to main/internal session routing. (#31573)
 - Feishu/Duplicate replies: suppress same-target reply dispatch when message-tool sends use generic provider metadata (`provider: "message"`) and normalize `lark`/`feishu` provider aliases during duplicate-target checks, preventing double-delivery in Feishu sessions. (#31526)
 - Feishu/Plugin sdk compatibility: add safe webhook default fallbacks when loading Feishu monitor state so mixed-version installs no longer crash if older `openclaw/plugin-sdk` builds omit webhook default constants. (#31606)
