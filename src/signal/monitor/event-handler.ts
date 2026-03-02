@@ -30,17 +30,8 @@ import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { mediaKindFromMime } from "../../media/constants.js";
-import { buildPairingReply } from "../../pairing/pairing-messages.js";
-import {
-  readChannelAllowFromStore,
-  upsertChannelPairingRequest,
-} from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
-import {
-  DM_GROUP_ACCESS_REASON,
-  readStoreAllowFromForDmPolicy,
-  resolveDmGroupAccessWithLists,
-} from "../../security/dm-policy-shared.js";
+import { DM_GROUP_ACCESS_REASON } from "../../security/dm-policy-shared.js";
 import { normalizeE164 } from "../../utils.js";
 import {
   formatSignalPairingIdLine,
@@ -53,6 +44,7 @@ import {
   type SignalSender,
 } from "../identity.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
+import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import type {
   SignalEnvelope,
   SignalEventHandlerDeps,
@@ -72,6 +64,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     groupName?: string;
     isGroup: boolean;
     bodyText: string;
+    commandBody: string;
     timestamp?: number;
     messageId?: string;
     mediaPath?: string;
@@ -155,7 +148,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       BodyForAgent: entry.bodyText,
       InboundHistory: inboundHistory,
       RawBody: entry.bodyText,
-      CommandBody: entry.bodyText,
+      CommandBody: entry.commandBody,
+      BodyForCommands: entry.commandBody,
       From: entry.isGroup
         ? `group:${entry.groupId ?? "unknown"}`
         : `signal:${entry.senderRecipient}`,
@@ -426,18 +420,30 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (!envelope) {
       return;
     }
-    if (envelope.syncMessage) {
-      return;
-    }
 
+    // Check for syncMessage (e.g., sentTranscript from other devices)
+    // We need to check if it's from our own account to prevent self-reply loops
     const sender = resolveSignalSender(envelope);
     if (!sender) {
       return;
     }
-    if (deps.account && sender.kind === "phone") {
-      if (sender.e164 === normalizeE164(deps.account)) {
-        return;
-      }
+
+    // Check if the message is from our own account to prevent loop/self-reply
+    // This handles both phone number and UUID based identification
+    const normalizedAccount = deps.account ? normalizeE164(deps.account) : undefined;
+    const isOwnMessage =
+      (sender.kind === "phone" && normalizedAccount != null && sender.e164 === normalizedAccount) ||
+      (sender.kind === "uuid" && deps.accountUuid != null && sender.raw === deps.accountUuid);
+    if (isOwnMessage) {
+      return;
+    }
+
+    // Filter all sync messages (sentTranscript, readReceipts, etc.).
+    // signal-cli may set syncMessage to null instead of omitting it, so
+    // check property existence rather than truthiness to avoid replaying
+    // the bot's own sent messages on daemon restart.
+    if ("syncMessage" in envelope) {
+      return;
     }
 
     const dataMessage = envelope.dataMessage ?? envelope.editMessage?.dataMessage;
@@ -457,24 +463,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const hasBodyContent =
       Boolean(messageText || quoteText) || Boolean(!reaction && dataMessage?.attachments?.length);
     const senderDisplay = formatSignalSenderDisplay(sender);
-    const storeAllowFrom = await readStoreAllowFromForDmPolicy({
-      provider: "signal",
-      dmPolicy: deps.dmPolicy,
-      readStore: (provider) => readChannelAllowFromStore(provider),
-    });
-    const resolveAccessDecision = (isGroup: boolean) =>
-      resolveDmGroupAccessWithLists({
-        isGroup,
+    const { resolveAccessDecision, dmAccess, effectiveDmAllow, effectiveGroupAllow } =
+      await resolveSignalAccessState({
+        accountId: deps.accountId,
         dmPolicy: deps.dmPolicy,
         groupPolicy: deps.groupPolicy,
         allowFrom: deps.allowFrom,
         groupAllowFrom: deps.groupAllowFrom,
-        storeAllowFrom,
-        isSenderAllowed: (allowEntries) => isSignalSenderAllowed(sender, allowEntries),
+        sender,
       });
-    const dmAccess = resolveAccessDecision(false);
-    const effectiveDmAllow = dmAccess.effectiveAllowFrom;
-    const effectiveGroupAllow = dmAccess.effectiveGroupAllowFrom;
 
     if (
       reaction &&
@@ -505,42 +502,25 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const isGroup = Boolean(groupId);
 
     if (!isGroup) {
-      if (dmAccess.decision === "block") {
-        if (deps.dmPolicy !== "disabled") {
-          logVerbose(`Blocked signal sender ${senderDisplay} (dmPolicy=${deps.dmPolicy})`);
-        }
-        return;
-      }
-      if (dmAccess.decision === "pairing") {
-        if (deps.dmPolicy === "pairing") {
-          const senderId = senderAllowId;
-          const { code, created } = await upsertChannelPairingRequest({
-            channel: "signal",
-            id: senderId,
-            meta: { name: envelope.sourceName ?? undefined },
+      const allowedDirectMessage = await handleSignalDirectMessageAccess({
+        dmPolicy: deps.dmPolicy,
+        dmAccessDecision: dmAccess.decision,
+        senderId: senderAllowId,
+        senderIdLine,
+        senderDisplay,
+        senderName: envelope.sourceName ?? undefined,
+        accountId: deps.accountId,
+        sendPairingReply: async (text) => {
+          await sendMessageSignal(`signal:${senderRecipient}`, text, {
+            baseUrl: deps.baseUrl,
+            account: deps.account,
+            maxBytes: deps.mediaMaxBytes,
+            accountId: deps.accountId,
           });
-          if (created) {
-            logVerbose(`signal pairing request sender=${senderId}`);
-            try {
-              await sendMessageSignal(
-                `signal:${senderRecipient}`,
-                buildPairingReply({
-                  channel: "signal",
-                  idLine: senderIdLine,
-                  code,
-                }),
-                {
-                  baseUrl: deps.baseUrl,
-                  account: deps.account,
-                  maxBytes: deps.mediaMaxBytes,
-                  accountId: deps.accountId,
-                },
-              );
-            } catch (err) {
-              logVerbose(`signal pairing reply failed for ${senderId}: ${String(err)}`);
-            }
-          }
-        }
+        },
+        log: logVerbose,
+      });
+      if (!allowedDirectMessage) {
         return;
       }
     }
@@ -725,6 +705,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       groupName,
       isGroup,
       bodyText,
+      commandBody: messageText,
       timestamp: envelope.timestamp ?? undefined,
       messageId,
       mediaPath,

@@ -8,6 +8,7 @@ import type {
 import {
   buildAgentMediaPayload,
   DM_GROUP_ACCESS_REASON,
+  createScopedPairingAccess,
   createReplyPrefixOptions,
   createTypingCallbacks,
   logInboundDrop,
@@ -109,15 +110,22 @@ function isSystemPost(post: MattermostPost): boolean {
   return Boolean(type);
 }
 
-function channelKind(channelType?: string | null): ChatType {
+export function mapMattermostChannelTypeToChatType(channelType?: string | null): ChatType {
   if (!channelType) {
     return "channel";
   }
+  // Mattermost channel types: D=direct, G=group DM, O=public channel, P=private channel.
   const normalized = channelType.trim().toUpperCase();
   if (normalized === "D") {
     return "direct";
   }
   if (normalized === "G") {
+    return "group";
+  }
+  if (normalized === "P") {
+    // Private channels are invitation-restricted spaces; route as "group" so
+    // groupPolicy / groupAllowFrom can gate access separately from open public
+    // channels (type "O"), and the From prefix becomes mattermost:group:<id>.
     return "group";
   }
   return "channel";
@@ -170,6 +178,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const account = resolveMattermostAccount({
     cfg,
     accountId: opts.accountId,
+  });
+  const pairing = createScopedPairingAccess({
+    core,
+    channel: "mattermost",
+    accountId: account.accountId,
   });
   const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
   const botToken = opts.botToken?.trim() || account.botToken?.trim();
@@ -346,7 +359,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     const channelInfo = await resolveChannelInfo(channelId);
     const channelType = payload.data?.channel_type ?? channelInfo?.type ?? undefined;
-    const kind = channelKind(channelType);
+    const kind = mapMattermostChannelTypeToChatType(channelType);
     const chatType = channelChatType(kind);
 
     const senderName =
@@ -362,8 +375,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const storeAllowFrom = normalizeMattermostAllowList(
       await readStoreAllowFromForDmPolicy({
         provider: "mattermost",
+        accountId: account.accountId,
         dmPolicy,
-        readStore: (provider) => core.channel.pairing.readAllowFromStore(provider),
+        readStore: pairing.readStoreForDmPolicy,
       }),
     );
     const accessDecision = resolveDmGroupAccessWithLists({
@@ -424,8 +438,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           return;
         }
         if (accessDecision.decision === "pairing") {
-          const { code, created } = await core.channel.pairing.upsertPairingRequest({
-            channel: "mattermost",
+          const { code, created } = await pairing.upsertPairingRequest({
             id: senderId,
             meta: { name: senderName },
           });
@@ -632,6 +645,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     const to = kind === "direct" ? `user:${senderId}` : `channel:${channelId}`;
     const mediaPayload = buildAgentMediaPayload(mediaList);
+    const commandBody = rawText.trim();
     const inboundHistory =
       historyKey && historyLimit > 0
         ? (channelHistories.get(historyKey) ?? []).map((entry) => ({
@@ -645,7 +659,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       BodyForAgent: bodyText,
       InboundHistory: inboundHistory,
       RawBody: bodyText,
-      CommandBody: bodyText,
+      CommandBody: commandBody,
+      BodyForCommands: commandBody,
       From:
         kind === "direct"
           ? `mattermost:${senderId}`
@@ -855,15 +870,16 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       logVerboseMessage(`mattermost: drop reaction (cannot resolve channel type for ${channelId})`);
       return;
     }
-    const kind = channelKind(channelInfo.type);
+    const kind = mapMattermostChannelTypeToChatType(channelInfo.type);
 
     // Enforce DM/group policy and allowlist checks (same as normal messages)
     const dmPolicy = account.config.dmPolicy ?? "pairing";
     const storeAllowFrom = normalizeMattermostAllowList(
       await readStoreAllowFromForDmPolicy({
         provider: "mattermost",
+        accountId: account.accountId,
         dmPolicy,
-        readStore: (provider) => core.channel.pairing.readAllowFromStore(provider),
+        readStore: pairing.readStoreForDmPolicy,
       }),
     );
     const reactionAccess = resolveDmGroupAccessWithLists({

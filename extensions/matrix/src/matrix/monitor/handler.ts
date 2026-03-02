@@ -1,13 +1,13 @@
 import type { LocationMessageEventContent, MatrixClient } from "@vector-im/matrix-bot-sdk";
 import {
+  DEFAULT_ACCOUNT_ID,
+  createScopedPairingAccess,
   createReplyPrefixOptions,
   createTypingCallbacks,
   formatAllowlistMatchMeta,
   logInboundDrop,
   logTypingFailure,
-  readStoreAllowFromForDmPolicy,
   resolveControlCommandGate,
-  resolveDmGroupAccessWithLists,
   type PluginRuntime,
   type RuntimeEnv,
   type RuntimeLogger,
@@ -21,11 +21,17 @@ import {
   type PollStartContent,
 } from "../poll-types.js";
 import { reactMatrixMessage, sendMessageMatrix, sendTypingMatrix } from "../send.js";
+import { enforceMatrixDirectMessageAccess, resolveMatrixAccessState } from "./access-policy.js";
 import {
   normalizeMatrixAllowList,
   resolveMatrixAllowListMatch,
   resolveMatrixAllowListMatches,
 } from "./allowlist.js";
+import {
+  resolveMatrixBodyForAgent,
+  resolveMatrixInboundSenderLabel,
+  resolveMatrixSenderUsername,
+} from "./inbound-body.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions } from "./mentions.js";
@@ -93,6 +99,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     getMemberDisplayName,
     accountId,
   } = params;
+  const resolvedAccountId = accountId?.trim() || DEFAULT_ACCOUNT_ID;
+  const pairing = createScopedPairingAccess({
+    core,
+    channel: "matrix",
+    accountId: resolvedAccountId,
+  });
 
   return async (roomId: string, event: MatrixRawEvent) => {
     try {
@@ -215,81 +227,40 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
 
       const senderName = await getMemberDisplayName(roomId, senderId);
-      const storeAllowFrom = isDirectMessage
-        ? await readStoreAllowFromForDmPolicy({
-            provider: "matrix",
-            dmPolicy,
-            readStore: (provider) => core.channel.pairing.readAllowFromStore(provider),
-          })
-        : [];
-      const groupAllowFrom = cfg.channels?.matrix?.groupAllowFrom ?? [];
-      const normalizedGroupAllowFrom = normalizeMatrixAllowList(groupAllowFrom);
-      const senderGroupPolicy =
-        groupPolicy === "disabled"
-          ? "disabled"
-          : normalizedGroupAllowFrom.length > 0
-            ? "allowlist"
-            : "open";
-      const access = resolveDmGroupAccessWithLists({
-        isGroup: isRoom,
-        dmPolicy,
-        groupPolicy: senderGroupPolicy,
-        allowFrom,
-        groupAllowFrom: normalizedGroupAllowFrom,
-        storeAllowFrom,
-        groupAllowFromFallbackToAllowFrom: false,
-        isSenderAllowed: (allowFrom) =>
-          resolveMatrixAllowListMatches({
-            allowList: normalizeMatrixAllowList(allowFrom),
-            userId: senderId,
-          }),
+      const senderUsername = resolveMatrixSenderUsername(senderId);
+      const senderLabel = resolveMatrixInboundSenderLabel({
+        senderName,
+        senderId,
+        senderUsername,
       });
-      const effectiveAllowFrom = normalizeMatrixAllowList(access.effectiveAllowFrom);
-      const effectiveGroupAllowFrom = normalizeMatrixAllowList(access.effectiveGroupAllowFrom);
-      const groupAllowConfigured = effectiveGroupAllowFrom.length > 0;
+      const groupAllowFrom = cfg.channels?.matrix?.groupAllowFrom ?? [];
+      const { access, effectiveAllowFrom, effectiveGroupAllowFrom, groupAllowConfigured } =
+        await resolveMatrixAccessState({
+          isDirectMessage,
+          resolvedAccountId,
+          dmPolicy,
+          groupPolicy,
+          allowFrom,
+          groupAllowFrom,
+          senderId,
+          readStoreForDmPolicy: pairing.readStoreForDmPolicy,
+        });
 
       if (isDirectMessage) {
-        if (!dmEnabled) {
-          return;
-        }
-        if (access.decision !== "allow") {
-          const allowMatch = resolveMatrixAllowListMatch({
-            allowList: effectiveAllowFrom,
-            userId: senderId,
-          });
-          const allowMatchMeta = formatAllowlistMatchMeta(allowMatch);
-          if (access.decision === "pairing") {
-            const { code, created } = await core.channel.pairing.upsertPairingRequest({
-              channel: "matrix",
-              id: senderId,
-              meta: { name: senderName },
-            });
-            if (created) {
-              logVerboseMessage(
-                `matrix pairing request sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`,
-              );
-              try {
-                await sendMessageMatrix(
-                  `room:${roomId}`,
-                  [
-                    "OpenClaw: access not configured.",
-                    "",
-                    `Pairing code: ${code}`,
-                    "",
-                    "Ask the bot owner to approve with:",
-                    "openclaw pairing approve matrix <code>",
-                  ].join("\n"),
-                  { client },
-                );
-              } catch (err) {
-                logVerboseMessage(`matrix pairing reply failed for ${senderId}: ${String(err)}`);
-              }
-            }
-          } else {
-            logVerboseMessage(
-              `matrix: blocked dm sender ${senderId} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
-            );
-          }
+        const allowedDirectMessage = await enforceMatrixDirectMessageAccess({
+          dmEnabled,
+          dmPolicy,
+          accessDecision: access.decision,
+          senderId,
+          senderName,
+          effectiveAllowFrom,
+          upsertPairingRequest: pairing.upsertPairingRequest,
+          sendPairingReply: async (text) => {
+            await sendMessageMatrix(`room:${roomId}`, text, { client });
+          },
+          logVerboseMessage,
+        });
+        if (!allowedDirectMessage) {
           return;
         }
       }
@@ -521,19 +492,25 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         storePath,
         sessionKey: route.sessionKey,
       });
-      const body = core.channel.reply.formatAgentEnvelope({
+      const body = core.channel.reply.formatInboundEnvelope({
         channel: "Matrix",
         from: envelopeFrom,
         timestamp: eventTs ?? undefined,
         previousTimestamp,
         envelope: envelopeOptions,
         body: textWithId,
+        chatType: isDirectMessage ? "direct" : "channel",
+        senderLabel,
       });
 
       const groupSystemPrompt = roomConfig?.systemPrompt?.trim() || undefined;
       const ctxPayload = core.channel.reply.finalizeInboundContext({
         Body: body,
-        BodyForAgent: bodyText,
+        BodyForAgent: resolveMatrixBodyForAgent({
+          isDirectMessage,
+          bodyText,
+          senderLabel,
+        }),
         RawBody: bodyText,
         CommandBody: bodyText,
         From: isDirectMessage ? `matrix:${senderId}` : `matrix:channel:${roomId}`,
@@ -544,7 +521,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         ConversationLabel: envelopeFrom,
         SenderName: senderName,
         SenderId: senderId,
-        SenderUsername: senderId.split(":")[0]?.replace(/^@/, ""),
+        SenderUsername: senderUsername,
         GroupSubject: isRoom ? (roomName ?? roomId) : undefined,
         GroupChannel: isRoom ? (roomInfo.canonicalAlias ?? roomId) : undefined,
         GroupSystemPrompt: isRoom ? groupSystemPrompt : undefined,

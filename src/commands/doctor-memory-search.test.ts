@@ -60,6 +60,61 @@ describe("noteMemorySearchHealth", () => {
     resolveMemoryBackendConfig.mockReturnValue({ backend: "builtin", citations: "auto" });
   });
 
+  it("does not warn when local provider is set with no explicit modelPath (default model fallback)", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {});
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("warns when local provider with default model but gateway probe reports not ready", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: true, ready: false, error: "node-llama-cpp not installed" },
+    });
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("gateway reports local embeddings are not ready");
+    expect(message).toContain("node-llama-cpp not installed");
+  });
+
+  it("does not warn when local provider with default model and gateway probe is ready", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: true, ready: true },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when local provider has an explicit hf: modelPath", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: { modelPath: "hf:some-org/some-model-GGUF/model.gguf" },
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {});
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
   it("does not warn when QMD backend is active", async () => {
     resolveMemoryBackendConfig.mockReturnValue({
       backend: "qmd",
@@ -164,7 +219,7 @@ describe("noteMemorySearchHealth", () => {
     expect(message).not.toContain("openclaw auth add --provider");
   });
 
-  it("uses model configure hint in auto mode when no provider credentials are found", async () => {
+  it("warns in auto mode when no local modelPath and no API keys are configured", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "auto",
       local: {},
@@ -173,10 +228,12 @@ describe("noteMemorySearchHealth", () => {
 
     await noteMemorySearchHealth(cfg);
 
+    // In auto mode, canAutoSelectLocal requires an explicit local file path.
+    // DEFAULT_LOCAL_MODEL fallback does NOT apply to auto — only to explicit
+    // provider: "local". So with no local file and no API keys, warn.
     expect(note).toHaveBeenCalledTimes(1);
     const message = String(note.mock.calls[0]?.[0] ?? "");
     expect(message).toContain("openclaw configure --section model");
-    expect(message).not.toContain("openclaw auth add --provider");
   });
 });
 

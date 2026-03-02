@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
-import { fetchWithSsrFGuard } from "./fetch-guard.js";
+import { EnvHttpProxyAgent } from "undici";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "./fetch-guard.js";
 
 function redirectResponse(location: string): Response {
   return new Response(null, {
@@ -14,6 +15,9 @@ function okResponse(body = "ok"): Response {
 
 describe("fetchWithSsrFGuard hardening", () => {
   type LookupFn = NonNullable<Parameters<typeof fetchWithSsrFGuard>[0]["lookupFn"]>;
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
 
   it("blocks private and legacy loopback literals before fetch", async () => {
     const blockedUrls = [
@@ -157,6 +161,51 @@ describe("fetchWithSsrFGuard hardening", () => {
     const [, secondInit] = fetchImpl.mock.calls[1] as [string, RequestInit];
     const headers = new Headers(secondInit.headers);
     expect(headers.get("authorization")).toBe("Bearer secret");
+    await result.release();
+  });
+
+  it("ignores env proxy by default to preserve DNS-pinned destination binding", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    const lookupFn = vi.fn(async () => [
+      { address: "93.184.216.34", family: 4 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const requestInit = init as RequestInit & { dispatcher?: unknown };
+      expect(requestInit.dispatcher).toBeDefined();
+      expect(requestInit.dispatcher).not.toBeInstanceOf(EnvHttpProxyAgent);
+      return okResponse();
+    });
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl,
+      lookupFn,
+      mode: GUARDED_FETCH_MODE.STRICT,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await result.release();
+  });
+
+  it("uses env proxy only when dangerous proxy bypass is explicitly enabled", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    const lookupFn = vi.fn(async () => [
+      { address: "93.184.216.34", family: 4 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const requestInit = init as RequestInit & { dispatcher?: unknown };
+      expect(requestInit.dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+      return okResponse();
+    });
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl,
+      lookupFn,
+      mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
     await result.release();
   });
 });

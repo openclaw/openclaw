@@ -59,6 +59,8 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 400;
     case "model_not_found":
       return 404;
+    case "session_expired":
+      return 410; // Gone - session no longer exists
     default:
       return undefined;
   }
@@ -176,12 +178,27 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   if (status === 502 || status === 503 || status === 504) {
     return "timeout";
   }
+  if (status === 529) {
+    return "rate_limit";
+  }
   if (status === 400) {
     return "format";
   }
 
   const code = (getErrorCode(err) ?? "").toUpperCase();
-  if (["ETIMEDOUT", "ESOCKETTIMEDOUT", "ECONNRESET", "ECONNABORTED"].includes(code)) {
+  if (
+    [
+      "ETIMEDOUT",
+      "ESOCKETTIMEDOUT",
+      "ECONNRESET",
+      "ECONNABORTED",
+      "ECONNREFUSED",
+      "ENETUNREACH",
+      "EHOSTUNREACH",
+      "ENETRESET",
+      "EAI_AGAIN",
+    ].includes(code)
+  ) {
     return "timeout";
   }
   if (isTimeoutError(err)) {
