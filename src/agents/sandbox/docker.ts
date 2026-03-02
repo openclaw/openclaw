@@ -121,10 +121,12 @@ export function execDockerRaw(
   });
 }
 
+import path from "node:path";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { defaultRuntime } from "../../runtime.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { DEFAULT_SANDBOX_IMAGE, SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
+import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import { readRegistry, updateRegistry } from "./registry.js";
 import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
@@ -196,6 +198,118 @@ export async function readDockerPort(containerName: string, port: number) {
   }
   const mapped = Number.parseInt(match[1] ?? "", 10);
   return Number.isFinite(mapped) ? mapped : null;
+}
+
+type DockerMount = {
+  Source?: string;
+  Destination?: string;
+};
+
+let selfContainerMountsPromise: Promise<DockerMount[] | null> | null = null;
+
+function normalizeContainerMountPath(raw: string): string {
+  const normalized = path.posix.normalize(raw.trim().replaceAll("\\", "/"));
+  if (!normalized) {
+    return "/";
+  }
+  return normalized.replace(/\/+$/, "") || "/";
+}
+
+function isPathInsideMountRoot(root: string, target: string): boolean {
+  if (root === "/") {
+    return target.startsWith("/");
+  }
+  return target === root || target.startsWith(`${root}/`);
+}
+
+function parseDockerMounts(raw: string): DockerMount[] | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed.filter((entry) => entry && typeof entry === "object") as DockerMount[];
+  } catch {
+    return null;
+  }
+}
+
+async function loadSelfContainerMounts(): Promise<DockerMount[] | null> {
+  const containerRef =
+    process.env.OPENCLAW_SANDBOX_SELF_CONTAINER?.trim() || process.env.HOSTNAME?.trim() || "";
+  if (!containerRef) {
+    return null;
+  }
+  const result = await execDocker(
+    ["inspect", "--type", "container", "--format", "{{json .Mounts}}", containerRef],
+    { allowFailure: true },
+  );
+  if (result.code !== 0) {
+    return null;
+  }
+  return parseDockerMounts(result.stdout);
+}
+
+function getSelfContainerMounts(): Promise<DockerMount[] | null> {
+  if (!selfContainerMountsPromise) {
+    selfContainerMountsPromise = loadSelfContainerMounts();
+  }
+  return selfContainerMountsPromise;
+}
+
+function resolveHostPathFromMounts(
+  containerPath: string,
+  mounts: readonly DockerMount[],
+): string | null {
+  if (!containerPath.startsWith("/")) {
+    return null;
+  }
+  const normalizedTarget = normalizeContainerMountPath(containerPath);
+  let bestMatch: { source: string; destination: string } | null = null;
+  for (const mount of mounts) {
+    const source = mount.Source?.trim();
+    const destinationRaw = mount.Destination?.trim();
+    if (!source || !destinationRaw || !destinationRaw.startsWith("/")) {
+      continue;
+    }
+    const destination = normalizeContainerMountPath(destinationRaw);
+    if (!isPathInsideMountRoot(destination, normalizedTarget)) {
+      continue;
+    }
+    if (!bestMatch || destination.length > bestMatch.destination.length) {
+      bestMatch = { source, destination };
+    }
+  }
+  if (!bestMatch) {
+    return null;
+  }
+  const relative = path.posix.relative(bestMatch.destination, normalizedTarget);
+  const segments = relative.split("/").filter(Boolean);
+  const hostPath =
+    segments.length > 0
+      ? path.resolve(bestMatch.source, ...segments)
+      : path.resolve(bestMatch.source);
+  try {
+    return resolveSandboxHostPathViaExistingAncestor(hostPath);
+  } catch {
+    return hostPath;
+  }
+}
+
+export function resetSandboxHostBindSourcePathCacheForTests(): void {
+  selfContainerMountsPromise = null;
+}
+
+export async function resolveSandboxHostBindSourcePath(
+  containerPath: string,
+  options?: { mounts?: readonly DockerMount[] | null },
+): Promise<string> {
+  if (!containerPath.startsWith("/")) {
+    return containerPath;
+  }
+  const mounts = options?.mounts ?? (await getSelfContainerMounts());
+  const resolved = mounts ? resolveHostPathFromMounts(containerPath, mounts) : null;
+  return resolved ?? containerPath;
 }
 
 async function dockerImageExists(image: string) {
@@ -402,6 +516,8 @@ async function createSandboxContainer(params: {
 }) {
   const { name, cfg, workspaceDir, scopeKey } = params;
   await ensureDockerImage(cfg.image);
+  const hostWorkspaceDir = await resolveSandboxHostBindSourcePath(workspaceDir);
+  const hostAgentWorkspaceDir = await resolveSandboxHostBindSourcePath(params.agentWorkspaceDir);
 
   const args = buildSandboxCreateArgs({
     name,
@@ -409,18 +525,15 @@ async function createSandboxContainer(params: {
     scopeKey,
     configHash: params.configHash,
     includeBinds: false,
-    bindSourceRoots: [workspaceDir, params.agentWorkspaceDir],
+    bindSourceRoots: [hostWorkspaceDir, hostAgentWorkspaceDir],
   });
   args.push("--workdir", cfg.workdir);
   const mainMountSuffix =
     params.workspaceAccess === "ro" && workspaceDir === params.agentWorkspaceDir ? ":ro" : "";
-  args.push("-v", `${workspaceDir}:${cfg.workdir}${mainMountSuffix}`);
+  args.push("-v", `${hostWorkspaceDir}:${cfg.workdir}${mainMountSuffix}`);
   if (params.workspaceAccess !== "none" && workspaceDir !== params.agentWorkspaceDir) {
     const agentMountSuffix = params.workspaceAccess === "ro" ? ":ro" : "";
-    args.push(
-      "-v",
-      `${params.agentWorkspaceDir}:${SANDBOX_AGENT_WORKSPACE_MOUNT}${agentMountSuffix}`,
-    );
+    args.push("-v", `${hostAgentWorkspaceDir}:${SANDBOX_AGENT_WORKSPACE_MOUNT}${agentMountSuffix}`);
   }
   appendCustomBinds(args, cfg);
   args.push(cfg.image, "sleep", "infinity");
