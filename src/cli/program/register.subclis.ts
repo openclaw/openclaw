@@ -74,6 +74,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "memory",
+    description: "Three-layer automatic memory extraction system",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../memory-cli.js");
+      mod.registerMemoryCli(program);
+    },
+  },
+  {
     name: "system",
     description: "System events, heartbeat, and presence",
     hasSubcommands: true,
