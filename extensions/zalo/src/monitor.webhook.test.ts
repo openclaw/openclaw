@@ -87,37 +87,19 @@ describe("handleZaloWebhookRequest", () => {
     }
   });
 
-  it("does not activate a webhook target when the path conflicts with a core route", async () => {
+  it("rejects a webhook target when the path conflicts with a core route", () => {
     const registry = createEmptyPluginRegistry();
     setActivePluginRegistry(registry);
-    const unregister = registerTarget({ path: "/chat" });
 
-    try {
-      expect(registry.httpRoutes).toHaveLength(0);
-      expect(registry.diagnostics).toContainEqual(
-        expect.objectContaining({
-          level: "error",
-          pluginId: "zalo",
-          message: "http webhook route conflicts with core path: /chat",
-        }),
-      );
-
-      await withServer(webhookRequestHandler, async (baseUrl) => {
-        const response = await fetch(`${baseUrl}/chat`, {
-          method: "POST",
-          headers: {
-            "x-bot-api-secret-token": "secret",
-            "content-type": "application/json",
-          },
-          body: "{}",
-        });
-
-        expect(response.status).toBe(404);
-        expect(await response.text()).toBe("not found");
-      });
-    } finally {
-      unregister();
-    }
+    expect(() => registerTarget({ path: "/chat" })).toThrow("Failed to register HTTP route: /chat");
+    expect(registry.httpRoutes).toHaveLength(0);
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "zalo",
+        message: "http webhook route conflicts with core path: /chat",
+      }),
+    );
   });
 
   it("returns 400 for non-object payloads", async () => {

@@ -251,7 +251,7 @@ export function registerBlueBubblesWebhookTarget(target: WebhookTarget): () => v
     log: target.runtime.log,
   });
   if (!registration.ok) {
-    return registration.unregister;
+    throw new Error(`Failed to register HTTP route: ${target.path}`);
   }
   const registered = registerWebhookTarget(webhookTargets, target);
   return () => {

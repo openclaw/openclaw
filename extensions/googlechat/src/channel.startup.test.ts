@@ -99,4 +99,29 @@ describe("googlechatPlugin gateway.startAccount", () => {
     expect(patches.some((entry) => entry.running === true)).toBe(true);
     expect(patches.some((entry) => entry.running === false)).toBe(true);
   });
+
+  it("propagates monitor startup failures", async () => {
+    hoisted.startGoogleChatMonitor.mockRejectedValue(
+      new Error("Failed to register HTTP route: /chat"),
+    );
+
+    const account: ResolvedGoogleChatAccount = {
+      accountId: "default",
+      enabled: true,
+      credentialSource: "inline",
+      credentials: {},
+      config: {
+        webhookPath: "/chat",
+      },
+    };
+
+    await expect(
+      googlechatPlugin.gateway!.startAccount!(
+        createStartAccountCtx({
+          account,
+          abortSignal: new AbortController().signal,
+        }),
+      ),
+    ).rejects.toThrow("Failed to register HTTP route: /chat");
+  });
 });

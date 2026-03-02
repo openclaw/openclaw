@@ -89,7 +89,7 @@ export function registerZaloWebhookTarget(target: ZaloWebhookTarget): () => void
     log: target.runtime.log,
   });
   if (!registration.ok) {
-    return registration.unregister;
+    throw new Error(`Failed to register HTTP route: ${target.path}`);
   }
   const unregisterWebhookTarget = registerZaloWebhookTargetInternal(target);
   return () => {
@@ -657,8 +657,6 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
       throw new Error("Zalo webhookPath could not be derived");
     }
 
-    await setWebhook(token, { url: webhookUrl, secret_token: webhookSecret }, fetcher);
-
     const unregister = registerZaloWebhookTarget({
       token,
       account,
@@ -671,6 +669,12 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
       mediaMaxMb: effectiveMediaMaxMb,
       fetcher,
     });
+    try {
+      await setWebhook(token, { url: webhookUrl, secret_token: webhookSecret }, fetcher);
+    } catch (error) {
+      unregister();
+      throw error;
+    }
     stopHandlers.push(unregister);
     abortSignal.addEventListener(
       "abort",

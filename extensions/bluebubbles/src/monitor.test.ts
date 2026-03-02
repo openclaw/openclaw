@@ -417,18 +417,19 @@ describe("BlueBubbles webhook monitor", () => {
     );
   });
 
-  it("does not activate a webhook target when the path conflicts with a core route", async () => {
+  it("rejects a webhook target when the path conflicts with a core route", () => {
     const registry = createEmptyPluginRegistry();
     setActivePluginRegistry(registry);
 
-    unregister = registerBlueBubblesWebhookTarget({
-      account: createMockAccount(),
-      config: {} as OpenClawConfig,
-      runtime: {},
-      core: createMockRuntime(),
-      path: "/chat",
-    });
-
+    expect(() => {
+      unregister = registerBlueBubblesWebhookTarget({
+        account: createMockAccount(),
+        config: {} as OpenClawConfig,
+        runtime: {},
+        core: createMockRuntime(),
+        path: "/chat",
+      });
+    }).toThrow("Failed to register HTTP route: /chat");
     expect(registry.httpRoutes).toHaveLength(0);
     expect(registry.diagnostics).toContainEqual(
       expect.objectContaining({
@@ -437,12 +438,6 @@ describe("BlueBubbles webhook monitor", () => {
         message: "http webhook route conflicts with core path: /chat",
       }),
     );
-
-    const req = createMockRequest("POST", "/chat", {});
-    const res = createMockResponse();
-    const handled = await handleBlueBubblesWebhookRequest(req, res);
-
-    expect(handled).toBe(false);
   });
 
   describe("webhook parsing + auth handling", () => {
