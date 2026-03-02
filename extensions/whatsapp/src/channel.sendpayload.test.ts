@@ -120,7 +120,7 @@ describe("whatsappPlugin sendPayload", () => {
 
   it("returns no-op when chunker produces empty array", async () => {
     // Simulate a chunker that strips whitespace-only input to nothing
-    vi.spyOn(whatsappPlugin.outbound!, "chunker").mockReturnValue([]);
+    vi.spyOn(whatsappPlugin.outbound! as any, "chunker").mockReturnValue([]);
     const sendTextSpy = vi.spyOn(whatsappPlugin.outbound!, "sendText");
 
     const result = await whatsappPlugin.outbound!.sendPayload!({

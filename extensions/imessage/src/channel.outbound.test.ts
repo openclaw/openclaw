@@ -213,7 +213,7 @@ describe("imessagePlugin sendPayload", () => {
 
   it("returns no-op when chunker produces empty array", async () => {
     // Simulate a chunker that strips whitespace-only input to nothing
-    vi.spyOn(imessagePlugin.outbound!, "chunker").mockReturnValue([]);
+    vi.spyOn(imessagePlugin.outbound! as any, "chunker").mockReturnValue([]);
     const sendTextSpy = vi.spyOn(imessagePlugin.outbound!, "sendText");
 
     const result = await imessagePlugin.outbound!.sendPayload!({

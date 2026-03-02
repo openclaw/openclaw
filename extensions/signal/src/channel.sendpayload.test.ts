@@ -114,7 +114,7 @@ describe("signalPlugin sendPayload", () => {
 
   it("returns no-op when chunker produces empty array", async () => {
     // Simulate a chunker that strips whitespace-only input to nothing
-    vi.spyOn(signalPlugin.outbound!, "chunker").mockReturnValue([]);
+    vi.spyOn(signalPlugin.outbound! as any, "chunker").mockReturnValue([]);
     const sendTextSpy = vi.spyOn(signalPlugin.outbound!, "sendText");
 
     const result = await signalPlugin.outbound!.sendPayload!({

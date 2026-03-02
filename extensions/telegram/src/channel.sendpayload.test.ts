@@ -116,7 +116,7 @@ describe("telegramPlugin sendPayload", () => {
 
   it("returns no-op when chunker produces empty array", async () => {
     // Simulate a chunker that strips whitespace-only input to nothing
-    vi.spyOn(telegramPlugin.outbound!, "chunker").mockReturnValue([]);
+    vi.spyOn(telegramPlugin.outbound! as any, "chunker").mockReturnValue([]);
     const sendTextSpy = vi.spyOn(telegramPlugin.outbound!, "sendText");
 
     const result = await telegramPlugin.outbound!.sendPayload!({
