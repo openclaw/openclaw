@@ -67,11 +67,27 @@ export function expandHomePrefix(
   if (!input.startsWith("~")) {
     return input;
   }
+  const env = opts?.env ?? process.env;
   const home =
-    normalize(opts?.home) ??
-    resolveEffectiveHomeDir(opts?.env ?? process.env, opts?.homedir ?? os.homedir);
+    normalize(opts?.home) ?? resolveHomeForTildeExpansion(env, opts?.homedir ?? os.homedir);
   if (!home) {
     return input;
   }
   return input.replace(/^~(?=$|[\\/])/, home);
+}
+
+function resolveHomeForTildeExpansion(
+  env: NodeJS.ProcessEnv,
+  homedir: () => string,
+): string | undefined {
+  const raw = resolveRawHomeDir(env, homedir);
+  if (!raw) {
+    return undefined;
+  }
+  // On Windows, treat POSIX-style HOME values as explicit roots and avoid
+  // coercing them into drive-qualified paths.
+  if (process.platform === "win32" && raw.startsWith("/")) {
+    return raw;
+  }
+  return path.resolve(raw);
 }
