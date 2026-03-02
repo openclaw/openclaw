@@ -3,12 +3,14 @@ import { getFlagValue, getPositiveIntFlagValue, getVerboseFlag, hasFlag } from "
 
 export type RouteSpec = {
   match: (path: string[]) => boolean;
-  loadPlugins?: boolean;
+  loadPlugins?: boolean | ((argv: string[]) => boolean);
   run: (argv: string[]) => Promise<boolean>;
 };
 
 const routeHealth: RouteSpec = {
   match: (path) => path[0] === "health",
+  // Health output uses channel plugin metadata for account fallback/log details.
+  // Keep routed behavior aligned with non-routed command execution.
   loadPlugins: true,
   run: async (argv) => {
     const json = hasFlag(argv, "--json");
@@ -25,6 +27,8 @@ const routeHealth: RouteSpec = {
 
 const routeStatus: RouteSpec = {
   match: (path) => path[0] === "status",
+  // Status runs security audit with channel checks in both text and JSON output,
+  // so plugin registry must be ready for consistent findings.
   loadPlugins: true,
   run: async (argv) => {
     const json = hasFlag(argv, "--json");

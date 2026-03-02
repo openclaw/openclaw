@@ -137,6 +137,253 @@ function findOtherStateDirs(stateDir: string): string[] {
   return found;
 }
 
+function isPathUnderRoot(targetPath: string, rootPath: string): boolean {
+  const normalizedTarget = path.resolve(targetPath);
+  const normalizedRoot = path.resolve(rootPath);
+  if (normalizedRoot === path.sep) {
+    return normalizedTarget.startsWith(path.sep);
+  }
+  return (
+    normalizedTarget === normalizedRoot ||
+    normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`)
+  );
+}
+
+function tryResolveRealPath(targetPath: string): string | null {
+  try {
+    return fs.realpathSync(targetPath);
+  } catch {
+    return null;
+  }
+}
+
+function decodeMountInfoPath(value: string): string {
+  return value.replace(/\\([0-7]{3})/g, (_, octal: string) =>
+    String.fromCharCode(Number.parseInt(octal, 8)),
+  );
+}
+
+function escapeControlCharsForTerminal(value: string): string {
+  let escaped = "";
+  for (const char of value) {
+    if (char === "\u001b") {
+      escaped += "\\x1b";
+      continue;
+    }
+    if (char === "\r") {
+      escaped += "\\r";
+      continue;
+    }
+    if (char === "\n") {
+      escaped += "\\n";
+      continue;
+    }
+    if (char === "\t") {
+      escaped += "\\t";
+      continue;
+    }
+    const code = char.charCodeAt(0);
+    if ((code >= 0 && code <= 8) || code === 11 || code === 12 || (code >= 14 && code <= 31)) {
+      escaped += `\\x${code.toString(16).padStart(2, "0")}`;
+      continue;
+    }
+    if (code === 127) {
+      escaped += "\\x7f";
+      continue;
+    }
+    escaped += char;
+  }
+  return escaped;
+}
+
+type LinuxMountInfoEntry = {
+  mountPoint: string;
+  fsType: string;
+  source: string;
+};
+
+export type LinuxSdBackedStateDir = {
+  path: string;
+  mountPoint: string;
+  fsType: string;
+  source: string;
+};
+
+function parseLinuxMountInfo(rawMountInfo: string): LinuxMountInfoEntry[] {
+  const entries: LinuxMountInfoEntry[] = [];
+  for (const line of rawMountInfo.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const separatorIndex = trimmed.indexOf(" - ");
+    if (separatorIndex === -1) {
+      continue;
+    }
+
+    const left = trimmed.slice(0, separatorIndex);
+    const right = trimmed.slice(separatorIndex + 3);
+    const leftFields = left.split(" ");
+    const rightFields = right.split(" ");
+    if (leftFields.length < 5 || rightFields.length < 2) {
+      continue;
+    }
+
+    entries.push({
+      mountPoint: decodeMountInfoPath(leftFields[4]),
+      fsType: rightFields[0],
+      source: decodeMountInfoPath(rightFields[1]),
+    });
+  }
+  return entries;
+}
+
+function findLinuxMountInfoEntryForPath(
+  targetPath: string,
+  entries: LinuxMountInfoEntry[],
+): LinuxMountInfoEntry | null {
+  const normalizedTarget = path.resolve(targetPath);
+  let bestMatch: LinuxMountInfoEntry | null = null;
+  for (const entry of entries) {
+    if (!isPathUnderRoot(normalizedTarget, entry.mountPoint)) {
+      continue;
+    }
+    if (
+      !bestMatch ||
+      path.resolve(entry.mountPoint).length > path.resolve(bestMatch.mountPoint).length
+    ) {
+      bestMatch = entry;
+    }
+  }
+  return bestMatch;
+}
+
+function isMmcDevicePath(devicePath: string): boolean {
+  const name = path.basename(devicePath);
+  return /^mmcblk\d+(?:p\d+)?$/.test(name);
+}
+
+function tryReadLinuxMountInfo(): string | null {
+  try {
+    return fs.readFileSync("/proc/self/mountinfo", "utf8");
+  } catch {
+    return null;
+  }
+}
+
+export function detectLinuxSdBackedStateDir(
+  stateDir: string,
+  deps?: {
+    platform?: NodeJS.Platform;
+    mountInfo?: string;
+    resolveRealPath?: (targetPath: string) => string | null;
+    resolveDeviceRealPath?: (targetPath: string) => string | null;
+  },
+): LinuxSdBackedStateDir | null {
+  const platform = deps?.platform ?? process.platform;
+  if (platform !== "linux") {
+    return null;
+  }
+
+  const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
+  const resolvedStatePath = resolveRealPath(stateDir) ?? path.resolve(stateDir);
+  const mountInfo = deps?.mountInfo ?? tryReadLinuxMountInfo();
+  if (!mountInfo) {
+    return null;
+  }
+
+  const mountEntry = findLinuxMountInfoEntryForPath(
+    resolvedStatePath,
+    parseLinuxMountInfo(mountInfo),
+  );
+  if (!mountEntry) {
+    return null;
+  }
+
+  const sourceCandidates = [mountEntry.source];
+  if (mountEntry.source.startsWith("/dev/")) {
+    const resolvedDevicePath = (deps?.resolveDeviceRealPath ?? tryResolveRealPath)(
+      mountEntry.source,
+    );
+    if (resolvedDevicePath) {
+      sourceCandidates.push(path.resolve(resolvedDevicePath));
+    }
+  }
+  if (!sourceCandidates.some(isMmcDevicePath)) {
+    return null;
+  }
+
+  return {
+    path: path.resolve(resolvedStatePath),
+    mountPoint: path.resolve(mountEntry.mountPoint),
+    fsType: mountEntry.fsType,
+    source: mountEntry.source,
+  };
+}
+
+export function formatLinuxSdBackedStateDirWarning(
+  displayStateDir: string,
+  linuxSdBackedStateDir: LinuxSdBackedStateDir,
+): string {
+  const displayMountPoint =
+    linuxSdBackedStateDir.mountPoint === "/"
+      ? "/"
+      : shortenHomePath(linuxSdBackedStateDir.mountPoint);
+  const safeSource = escapeControlCharsForTerminal(linuxSdBackedStateDir.source);
+  const safeFsType = escapeControlCharsForTerminal(linuxSdBackedStateDir.fsType);
+  const safeMountPoint = escapeControlCharsForTerminal(displayMountPoint);
+  return [
+    `- State directory appears to be on SD/eMMC storage (${displayStateDir}; device ${safeSource}, fs ${safeFsType}, mount ${safeMountPoint}).`,
+    "- SD/eMMC media can be slower for random I/O and wear faster under session/log churn.",
+    "- For better startup and state durability, prefer SSD/NVMe (or USB SSD on Raspberry Pi) for OPENCLAW_STATE_DIR.",
+  ].join("\n");
+}
+
+export function detectMacCloudSyncedStateDir(
+  stateDir: string,
+  deps?: {
+    platform?: NodeJS.Platform;
+    homedir?: string;
+    resolveRealPath?: (targetPath: string) => string | null;
+  },
+): {
+  path: string;
+  storage: "iCloud Drive" | "CloudStorage provider";
+} | null {
+  const platform = deps?.platform ?? process.platform;
+  if (platform !== "darwin") {
+    return null;
+  }
+
+  // Cloud-sync roots should always be anchored to the OS account home on macOS.
+  // OPENCLAW_HOME can relocate app data defaults, but iCloud/CloudStorage remain under the OS home.
+  const homedir = deps?.homedir ?? os.homedir();
+  const roots = [
+    {
+      storage: "iCloud Drive" as const,
+      root: path.join(homedir, "Library", "Mobile Documents", "com~apple~CloudDocs"),
+    },
+    {
+      storage: "CloudStorage provider" as const,
+      root: path.join(homedir, "Library", "CloudStorage"),
+    },
+  ];
+  const realPath = (deps?.resolveRealPath ?? tryResolveRealPath)(stateDir);
+  // Prefer the resolved target path when available so symlink prefixes do not
+  // misclassify local state dirs as cloud-synced.
+  const candidates = realPath ? [path.resolve(realPath)] : [path.resolve(stateDir)];
+
+  for (const candidate of candidates) {
+    for (const { storage, root } of roots) {
+      if (isPathUnderRoot(candidate, root)) {
+        return { path: candidate, storage };
+      }
+    }
+  }
+
+  return null;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -222,6 +469,22 @@ export async function noteStateIntegrity(
   const displayStoreDir = shortenHomePath(storeDir);
   const displayConfigPath = configPath ? shortenHomePath(configPath) : undefined;
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
+  const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
+  const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
+
+  if (cloudSyncedStateDir) {
+    warnings.push(
+      [
+        `- State directory is under macOS cloud-synced storage (${displayStateDir}; ${cloudSyncedStateDir.storage}).`,
+        "- This can cause slow I/O and sync/lock races for sessions and credentials.",
+        "- Prefer a local non-synced state dir (for example: ~/.openclaw).",
+        `  Set locally: OPENCLAW_STATE_DIR=~/.openclaw ${formatCliCommand("openclaw doctor")}`,
+      ].join("\n"),
+    );
+  }
+  if (linuxSdBackedStateDir) {
+    warnings.push(formatLinuxSdBackedStateDirWarning(displayStateDir, linuxSdBackedStateDir));
+  }
 
   let stateDirExists = existsDir(stateDir);
   if (!stateDirExists) {
