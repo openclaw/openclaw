@@ -686,7 +686,8 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
             do {
                 try ExecApprovalsSocketPathGuard.removeExistingSocket(at: self.socketPath)
             } catch {
-                self.logger.warning("exec approvals socket cleanup failed: \(error.localizedDescription, privacy: .public)")
+                self.logger
+                    .warning("exec approvals socket cleanup failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -726,7 +727,8 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
             try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: self.socketPath)
             try ExecApprovalsSocketPathGuard.removeExistingSocket(at: self.socketPath)
         } catch {
-            self.logger.error("exec approvals socket path hardening failed: \(error.localizedDescription, privacy: .public)")
+            self.logger
+                .error("exec approvals socket path hardening failed: \(error.localizedDescription, privacy: .public)")
             close(fd)
             return -1
         }
