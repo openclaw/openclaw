@@ -15,6 +15,40 @@ import {
   resolveModelRefFromString,
 } from "./model-selection.js";
 
+const EXPLICIT_ALLOWLIST_CONFIG = {
+  agents: {
+    defaults: {
+      model: { primary: "openai/gpt-5.2" },
+      models: {
+        "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+      },
+    },
+  },
+} as OpenClawConfig;
+
+const BUNDLED_ALLOWLIST_CATALOG = [
+  { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+  { provider: "openai", id: "gpt-5.2", name: "gpt-5.2" },
+];
+
+const ANTHROPIC_OPUS_CATALOG = [
+  {
+    provider: "anthropic",
+    id: "claude-opus-4-6",
+    name: "Claude Opus 4.6",
+    reasoning: true,
+  },
+];
+
+function resolveAnthropicOpusThinking(cfg: OpenClawConfig) {
+  return resolveThinkingDefault({
+    cfg,
+    provider: "anthropic",
+    model: "claude-opus-4-6",
+    catalog: ANTHROPIC_OPUS_CATALOG,
+  });
+}
+
 describe("model-selection", () => {
   describe("normalizeProviderId", () => {
     it("should normalize provider names", () => {
@@ -245,25 +279,9 @@ describe("model-selection", () => {
 
   describe("buildAllowedModelSet", () => {
     it("keeps explicitly allowlisted models even when missing from bundled catalog", () => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.2" },
-            models: {
-              "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-            },
-          },
-        },
-      } as OpenClawConfig;
-
-      const catalog = [
-        { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
-        { provider: "openai", id: "gpt-5.2", name: "gpt-5.2" },
-      ];
-
       const result = buildAllowedModelSet({
-        cfg,
-        catalog,
+        cfg: EXPLICIT_ALLOWLIST_CONFIG,
+        catalog: BUNDLED_ALLOWLIST_CATALOG,
         defaultProvider: "anthropic",
       });
 
@@ -277,25 +295,9 @@ describe("model-selection", () => {
 
   describe("resolveAllowedModelRef", () => {
     it("accepts explicit allowlist refs absent from bundled catalog", () => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.2" },
-            models: {
-              "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-            },
-          },
-        },
-      } as OpenClawConfig;
-
-      const catalog = [
-        { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
-        { provider: "openai", id: "gpt-5.2", name: "gpt-5.2" },
-      ];
-
       const result = resolveAllowedModelRef({
-        cfg,
-        catalog,
+        cfg: EXPLICIT_ALLOWLIST_CONFIG,
+        catalog: BUNDLED_ALLOWLIST_CATALOG,
         raw: "anthropic/claude-sonnet-4-6",
         defaultProvider: "openai",
         defaultModel: "gpt-5.2",
@@ -487,21 +489,7 @@ describe("model-selection", () => {
         },
       } as OpenClawConfig;
 
-      expect(
-        resolveThinkingDefault({
-          cfg,
-          provider: "anthropic",
-          model: "claude-opus-4-6",
-          catalog: [
-            {
-              provider: "anthropic",
-              id: "claude-opus-4-6",
-              name: "Claude Opus 4.6",
-              reasoning: true,
-            },
-          ],
-        }),
-      ).toBe("high");
+      expect(resolveAnthropicOpusThinking(cfg)).toBe("high");
     });
 
     it("accepts per-model params.thinking=adaptive", () => {
@@ -517,41 +505,13 @@ describe("model-selection", () => {
         },
       } as OpenClawConfig;
 
-      expect(
-        resolveThinkingDefault({
-          cfg,
-          provider: "anthropic",
-          model: "claude-opus-4-6",
-          catalog: [
-            {
-              provider: "anthropic",
-              id: "claude-opus-4-6",
-              name: "Claude Opus 4.6",
-              reasoning: true,
-            },
-          ],
-        }),
-      ).toBe("adaptive");
+      expect(resolveAnthropicOpusThinking(cfg)).toBe("adaptive");
     });
 
     it("defaults Anthropic Claude 4.6 models to adaptive", () => {
       const cfg = {} as OpenClawConfig;
 
-      expect(
-        resolveThinkingDefault({
-          cfg,
-          provider: "anthropic",
-          model: "claude-opus-4-6",
-          catalog: [
-            {
-              provider: "anthropic",
-              id: "claude-opus-4-6",
-              name: "Claude Opus 4.6",
-              reasoning: true,
-            },
-          ],
-        }),
-      ).toBe("adaptive");
+      expect(resolveAnthropicOpusThinking(cfg)).toBe("adaptive");
 
       expect(
         resolveThinkingDefault({

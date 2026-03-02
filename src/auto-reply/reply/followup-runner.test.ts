@@ -113,6 +113,10 @@ function mockCompactionRun(params: {
   );
 }
 
+function createAsyncReplySpy() {
+  return vi.fn(async () => {});
+}
+
 describe("createFollowupRunner compaction", () => {
   it("adds verbose auto-compaction notice and tracks count", async () => {
     const storePath = path.join(
@@ -181,91 +185,96 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     });
   }
 
-  it("drops payloads already sent via messaging tool", async () => {
-    const onBlockReply = vi.fn(async () => {});
+  async function runMessagingCase(params: {
+    agentResult: Record<string, unknown>;
+    queued?: FollowupRun;
+    runnerOverrides?: Partial<{
+      sessionEntry: SessionEntry;
+      sessionStore: Record<string, SessionEntry>;
+      sessionKey: string;
+      storePath: string;
+    }>;
+  }) {
+    const onBlockReply = createAsyncReplySpy();
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "hello world!" }],
-      messagingToolSentTexts: ["hello world!"],
       meta: {},
+      ...params.agentResult,
     });
+    const runner = createMessagingDedupeRunner(onBlockReply, params.runnerOverrides);
+    await runner(params.queued ?? baseQueuedRun());
+    return { onBlockReply };
+  }
 
-    const runner = createMessagingDedupeRunner(onBlockReply);
+  function makeTextReplyDedupeResult(overrides?: Record<string, unknown>) {
+    return {
+      payloads: [{ text: "hello world!" }],
+      messagingToolSentTexts: ["different message"],
+      ...overrides,
+    };
+  }
 
-    await runner(baseQueuedRun());
+  it("drops payloads already sent via messaging tool", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ text: "hello world!" }],
+        messagingToolSentTexts: ["hello world!"],
+      },
+    });
 
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
   it("delivers payloads when not duplicates", async () => {
-    const onBlockReply = vi.fn(async () => {});
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "hello world!" }],
-      messagingToolSentTexts: ["different message"],
-      meta: {},
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: makeTextReplyDedupeResult(),
     });
-
-    const runner = createMessagingDedupeRunner(onBlockReply);
-
-    await runner(baseQueuedRun());
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses replies when a messaging tool sent via the same provider + target", async () => {
-    const onBlockReply = vi.fn(async () => {});
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "hello world!" }],
-      messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
-      meta: {},
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        ...makeTextReplyDedupeResult(),
+        messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+      },
+      queued: baseQueuedRun("slack"),
     });
-
-    const runner = createMessagingDedupeRunner(onBlockReply);
-
-    await runner(baseQueuedRun("slack"));
 
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
   it("suppresses replies when provider is synthetic but originating channel matches", async () => {
-    const onBlockReply = vi.fn(async () => {});
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "hello world!" }],
-      messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "telegram", provider: "telegram", to: "268300329" }],
-      meta: {},
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        ...makeTextReplyDedupeResult(),
+        messagingToolSentTargets: [{ tool: "telegram", provider: "telegram", to: "268300329" }],
+      },
+      queued: {
+        ...baseQueuedRun("heartbeat"),
+        originatingChannel: "telegram",
+        originatingTo: "268300329",
+      } as FollowupRun,
     });
-
-    const runner = createMessagingDedupeRunner(onBlockReply);
-
-    await runner({
-      ...baseQueuedRun("heartbeat"),
-      originatingChannel: "telegram",
-      originatingTo: "268300329",
-    } as FollowupRun);
 
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
   it("does not suppress replies for same target when account differs", async () => {
-    const onBlockReply = vi.fn(async () => {});
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "hello world!" }],
-      messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [
-        { tool: "telegram", provider: "telegram", to: "268300329", accountId: "work" },
-      ],
-      meta: {},
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        ...makeTextReplyDedupeResult(),
+        messagingToolSentTargets: [
+          { tool: "telegram", provider: "telegram", to: "268300329", accountId: "work" },
+        ],
+      },
+      queued: {
+        ...baseQueuedRun("heartbeat"),
+        originatingChannel: "telegram",
+        originatingTo: "268300329",
+        originatingAccountId: "personal",
+      } as FollowupRun,
     });
-
-    const runner = createMessagingDedupeRunner(onBlockReply);
-
-    await runner({
-      ...baseQueuedRun("heartbeat"),
-      originatingChannel: "telegram",
-      originatingTo: "268300329",
-      originatingAccountId: "personal",
-    } as FollowupRun);
 
     expect(routeReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -278,32 +287,24 @@ describe("createFollowupRunner messaging tool dedupe", () => {
   });
 
   it("drops media URL from payload when messaging tool already sent it", async () => {
-    const onBlockReply = vi.fn(async () => {});
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ mediaUrl: "/tmp/img.png" }],
-      messagingToolSentMediaUrls: ["/tmp/img.png"],
-      meta: {},
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ mediaUrl: "/tmp/img.png" }],
+        messagingToolSentMediaUrls: ["/tmp/img.png"],
+      },
     });
-
-    const runner = createMessagingDedupeRunner(onBlockReply);
-
-    await runner(baseQueuedRun());
 
     // Media stripped → payload becomes non-renderable → not delivered.
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
   it("delivers media payload when not a duplicate", async () => {
-    const onBlockReply = vi.fn(async () => {});
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ mediaUrl: "/tmp/img.png" }],
-      messagingToolSentMediaUrls: ["/tmp/other.png"],
-      meta: {},
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ mediaUrl: "/tmp/img.png" }],
+        messagingToolSentMediaUrls: ["/tmp/other.png"],
+      },
     });
-
-    const runner = createMessagingDedupeRunner(onBlockReply);
-
-    await runner(baseQueuedRun());
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
   });
@@ -318,29 +319,27 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await saveSessionStore(storePath, sessionStore);
 
-    const onBlockReply = vi.fn(async () => {});
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "hello world!" }],
-      messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
-      meta: {
-        agentMeta: {
-          usage: { input: 1_000, output: 50 },
-          lastCallUsage: { input: 400, output: 20 },
-          model: "claude-opus-4-5",
-          provider: "anthropic",
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        ...makeTextReplyDedupeResult(),
+        messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+        meta: {
+          agentMeta: {
+            usage: { input: 1_000, output: 50 },
+            lastCallUsage: { input: 400, output: 20 },
+            model: "claude-opus-4-5",
+            provider: "anthropic",
+          },
         },
       },
+      runnerOverrides: {
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+      },
+      queued: baseQueuedRun("slack"),
     });
-
-    const runner = createMessagingDedupeRunner(onBlockReply, {
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
-    });
-
-    await runner(baseQueuedRun("slack"));
 
     expect(onBlockReply).not.toHaveBeenCalled();
     const store = loadSessionStore(storePath, { skipCache: true });
@@ -353,46 +352,36 @@ describe("createFollowupRunner messaging tool dedupe", () => {
   });
 
   it("does not fall back to dispatcher when cross-channel origin routing fails", async () => {
-    const onBlockReply = vi.fn(async () => {});
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "hello world!" }],
-      meta: {},
-    });
     routeReplyMock.mockResolvedValueOnce({
       ok: false,
       error: "forced route failure",
     });
-
-    const runner = createMessagingDedupeRunner(onBlockReply);
-
-    await runner({
-      ...baseQueuedRun("webchat"),
-      originatingChannel: "discord",
-      originatingTo: "channel:C1",
-    } as FollowupRun);
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }] },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
 
     expect(routeReplyMock).toHaveBeenCalled();
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
   it("falls back to dispatcher when same-channel origin routing fails", async () => {
-    const onBlockReply = vi.fn(async () => {});
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "hello world!" }],
-      meta: {},
-    });
     routeReplyMock.mockResolvedValueOnce({
       ok: false,
       error: "outbound adapter unavailable",
     });
-
-    const runner = createMessagingDedupeRunner(onBlockReply);
-
-    await runner({
-      ...baseQueuedRun(" Feishu "),
-      originatingChannel: "FEISHU",
-      originatingTo: "ou_abc123",
-    } as FollowupRun);
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }] },
+      queued: {
+        ...baseQueuedRun(" Feishu "),
+        originatingChannel: "FEISHU",
+        originatingTo: "ou_abc123",
+      } as FollowupRun,
+    });
 
     expect(routeReplyMock).toHaveBeenCalled();
     expect(onBlockReply).toHaveBeenCalledTimes(1);
@@ -400,21 +389,16 @@ describe("createFollowupRunner messaging tool dedupe", () => {
   });
 
   it("routes followups with originating account/thread metadata", async () => {
-    const onBlockReply = vi.fn(async () => {});
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "hello world!" }],
-      meta: {},
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }] },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingAccountId: "work",
+        originatingThreadId: "1739142736.000100",
+      } as FollowupRun,
     });
-
-    const runner = createMessagingDedupeRunner(onBlockReply);
-
-    await runner({
-      ...baseQueuedRun("webchat"),
-      originatingChannel: "discord",
-      originatingTo: "channel:C1",
-      originatingAccountId: "work",
-      originatingThreadId: "1739142736.000100",
-    } as FollowupRun);
 
     expect(routeReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -429,44 +413,37 @@ describe("createFollowupRunner messaging tool dedupe", () => {
 });
 
 describe("createFollowupRunner typing cleanup", () => {
-  it("calls both markRunComplete and markDispatchIdle on NO_REPLY", async () => {
+  async function runTypingCase(agentResult: Record<string, unknown>) {
     const typing = createMockTypingController();
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "NO_REPLY" }],
       meta: {},
+      ...agentResult,
     });
 
     const runner = createFollowupRunner({
-      opts: { onBlockReply: vi.fn(async () => {}) },
+      opts: { onBlockReply: createAsyncReplySpy() },
       typing,
       typingMode: "instant",
       defaultModel: "anthropic/claude-opus-4-5",
     });
 
     await runner(baseQueuedRun());
+    return typing;
+  }
 
+  function expectTypingCleanup(typing: ReturnType<typeof createMockTypingController>) {
     expect(typing.markRunComplete).toHaveBeenCalled();
     expect(typing.markDispatchIdle).toHaveBeenCalled();
+  }
+
+  it("calls both markRunComplete and markDispatchIdle on NO_REPLY", async () => {
+    const typing = await runTypingCase({ payloads: [{ text: "NO_REPLY" }] });
+    expectTypingCleanup(typing);
   });
 
   it("calls both markRunComplete and markDispatchIdle on empty payloads", async () => {
-    const typing = createMockTypingController();
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [],
-      meta: {},
-    });
-
-    const runner = createFollowupRunner({
-      opts: { onBlockReply: vi.fn(async () => {}) },
-      typing,
-      typingMode: "instant",
-      defaultModel: "anthropic/claude-opus-4-5",
-    });
-
-    await runner(baseQueuedRun());
-
-    expect(typing.markRunComplete).toHaveBeenCalled();
-    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    const typing = await runTypingCase({ payloads: [] });
+    expectTypingCleanup(typing);
   });
 
   it("calls both markRunComplete and markDispatchIdle on agent error", async () => {
@@ -482,8 +459,7 @@ describe("createFollowupRunner typing cleanup", () => {
 
     await runner(baseQueuedRun());
 
-    expect(typing.markRunComplete).toHaveBeenCalled();
-    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    expectTypingCleanup(typing);
   });
 
   it("calls both markRunComplete and markDispatchIdle on successful delivery", async () => {
@@ -504,8 +480,7 @@ describe("createFollowupRunner typing cleanup", () => {
     await runner(baseQueuedRun());
 
     expect(onBlockReply).toHaveBeenCalled();
-    expect(typing.markRunComplete).toHaveBeenCalled();
-    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    expectTypingCleanup(typing);
   });
 });
 
