@@ -82,13 +82,9 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
       containerWorkdir: "/workspace",
     });
 
-    await wrapped.execute("tc-at-absolute", { path: "@/etc/passwd" });
-
-    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
-      filePath: "/etc/passwd",
-      cwd: root,
-      root,
-    });
+    await expect(wrapped.execute("tc-at-absolute", { path: "@/etc/passwd" })).rejects.toThrow(
+      /escapes/i,
+    );
   });
 
   it("does not remap absolute paths outside the configured container workdir", async () => {
@@ -97,12 +93,8 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
       containerWorkdir: "/workspace",
     });
 
-    await wrapped.execute("tc3", { path: "/workspace-two/secret.txt" });
-
-    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
-      filePath: "/workspace-two/secret.txt",
-      cwd: root,
-      root,
-    });
+    await expect(wrapped.execute("tc3", { path: "/workspace-two/secret.txt" })).rejects.toThrow(
+      /escapes/i,
+    );
   });
 });
