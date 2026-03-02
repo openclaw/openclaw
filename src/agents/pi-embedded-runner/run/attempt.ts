@@ -27,10 +27,12 @@ import {
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
 } from "../../channel-tools.js";
+import { resolveCliBackendConfig } from "../../cli-backends.js";
+import { createCliStreamFn } from "../../cli-stream.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
-import { resolveDefaultModelForAgent } from "../../model-selection.js";
+import { isCliProvider, resolveDefaultModelForAgent } from "../../model-selection.js";
 import {
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
@@ -513,7 +515,28 @@ export async function runEmbeddedAttempt(
       });
 
       // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
-      activeSession.agent.streamFn = streamSimple;
+      // When the provider is a CLI backend, inject a StreamFn that
+      // routes model calls through the CLI subprocess with an MCP
+      // bridge for tool execution.
+      if (isCliProvider(params.provider, params.config)) {
+        const cliBackend = resolveCliBackendConfig(params.provider, params.config);
+        if (cliBackend) {
+          activeSession.agent.streamFn = createCliStreamFn({
+            tools,
+            backend: cliBackend.config,
+            provider: params.provider,
+            config: params.config,
+            workspaceDir: params.workspaceDir,
+            timeoutMs: params.timeoutMs ?? 120_000,
+            onStreamEvent: params.streamParams?.onStreamEvent,
+            onAgentEvent: params.onAgentEvent,
+          });
+        } else {
+          activeSession.agent.streamFn = streamSimple;
+        }
+      } else {
+        activeSession.agent.streamFn = streamSimple;
+      }
 
       applyExtraParamsToAgent(
         activeSession.agent,

@@ -26,7 +26,7 @@ import {
   resolveAuthProfileOrder,
   type ResolvedProviderAuth,
 } from "../model-auth.js";
-import { normalizeProviderId } from "../model-selection.js";
+import { isCliProvider, normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
@@ -139,6 +139,14 @@ export async function runEmbeddedPiAgent(
         );
       }
 
+      // CLI providers handle authentication internally (the CLI
+      // subprocess manages its own credentials). Skip auth resolution
+      // but set a placeholder key so the Pi SDK doesn't reject it.
+      const cliProviderMode = isCliProvider(provider, params.config);
+      if (cliProviderMode) {
+        authStorage.setRuntimeApiKey(provider, "cli-managed");
+      }
+
       const authStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
       const preferredProfileId = params.authProfileId?.trim();
       let lockedProfileId = params.authProfileIdSource === "user" ? preferredProfileId : undefined;
@@ -151,26 +159,32 @@ export async function runEmbeddedPiAgent(
           lockedProfileId = undefined;
         }
       }
-      const profileOrder = resolveAuthProfileOrder({
-        cfg: params.config,
-        store: authStore,
-        provider,
-        preferredProfile: preferredProfileId,
-      });
-      if (lockedProfileId && !profileOrder.includes(lockedProfileId)) {
+      const profileOrder = cliProviderMode
+        ? []
+        : resolveAuthProfileOrder({
+            cfg: params.config,
+            store: authStore,
+            provider,
+            preferredProfile: preferredProfileId,
+          });
+      if (!cliProviderMode && lockedProfileId && !profileOrder.includes(lockedProfileId)) {
         throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);
       }
-      const profileCandidates = lockedProfileId
-        ? [lockedProfileId]
-        : profileOrder.length > 0
-          ? profileOrder
-          : [undefined];
+      const profileCandidates = cliProviderMode
+        ? [undefined]
+        : lockedProfileId
+          ? [lockedProfileId]
+          : profileOrder.length > 0
+            ? profileOrder
+            : [undefined];
       let profileIndex = 0;
 
       const initialThinkLevel = params.thinkLevel ?? "off";
       let thinkLevel = initialThinkLevel;
       const attemptedThinking = new Set<ThinkLevel>();
-      let apiKeyInfo: ApiKeyInfo | null = null;
+      let apiKeyInfo: ApiKeyInfo | null = cliProviderMode
+        ? { apiKey: "cli-managed", source: "cli", mode: "api-key" as const }
+        : null;
       let lastProfileId: string | undefined;
 
       const resolveAuthProfileFailoverReason = (params: {
@@ -249,7 +263,7 @@ export async function runEmbeddedPiAgent(
       };
 
       const advanceAuthProfile = async (): Promise<boolean> => {
-        if (lockedProfileId) {
+        if (cliProviderMode || lockedProfileId) {
           return false;
         }
         let nextIndex = profileIndex + 1;
@@ -275,33 +289,35 @@ export async function runEmbeddedPiAgent(
         return false;
       };
 
-      try {
-        while (profileIndex < profileCandidates.length) {
-          const candidate = profileCandidates[profileIndex];
-          if (
-            candidate &&
-            candidate !== lockedProfileId &&
-            isProfileInCooldown(authStore, candidate)
-          ) {
-            profileIndex += 1;
-            continue;
+      if (!cliProviderMode) {
+        try {
+          while (profileIndex < profileCandidates.length) {
+            const candidate = profileCandidates[profileIndex];
+            if (
+              candidate &&
+              candidate !== lockedProfileId &&
+              isProfileInCooldown(authStore, candidate)
+            ) {
+              profileIndex += 1;
+              continue;
+            }
+            await applyApiKeyInfo(profileCandidates[profileIndex]);
+            break;
           }
-          await applyApiKeyInfo(profileCandidates[profileIndex]);
-          break;
-        }
-        if (profileIndex >= profileCandidates.length) {
-          throwAuthProfileFailover({ allInCooldown: true });
-        }
-      } catch (err) {
-        if (err instanceof FailoverError) {
-          throw err;
-        }
-        if (profileCandidates[profileIndex] === lockedProfileId) {
-          throwAuthProfileFailover({ allInCooldown: false, error: err });
-        }
-        const advanced = await advanceAuthProfile();
-        if (!advanced) {
-          throwAuthProfileFailover({ allInCooldown: false, error: err });
+          if (profileIndex >= profileCandidates.length) {
+            throwAuthProfileFailover({ allInCooldown: true });
+          }
+        } catch (err) {
+          if (err instanceof FailoverError) {
+            throw err;
+          }
+          if (profileCandidates[profileIndex] === lockedProfileId) {
+            throwAuthProfileFailover({ allInCooldown: false, error: err });
+          }
+          const advanced = await advanceAuthProfile();
+          if (!advanced) {
+            throwAuthProfileFailover({ allInCooldown: false, error: err });
+          }
         }
       }
 

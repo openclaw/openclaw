@@ -4,7 +4,7 @@ import type { ModelDefinitionConfig } from "../../config/types.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { normalizeModelCompat } from "../model-compat.js";
-import { normalizeProviderId } from "../model-selection.js";
+import { isCliProvider, normalizeProviderId } from "../model-selection.js";
 import {
   discoverAuthStorage,
   discoverModels,
@@ -100,6 +100,22 @@ export function resolveModel(
         maxTokens: providerCfg?.models?.[0]?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
       } as Model<Api>);
       return { model: fallbackModel, authStorage, modelRegistry };
+    }
+    // CLI providers handle model selection internally — create a
+    // synthetic model so the Pi runner has valid metadata.
+    if (isCliProvider(provider, cfg)) {
+      const cliModel: Model<Api> = normalizeModelCompat({
+        id: modelId,
+        name: modelId,
+        api: "anthropic" as Model<Api>["api"],
+        provider,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: DEFAULT_CONTEXT_TOKENS,
+        maxTokens: DEFAULT_CONTEXT_TOKENS,
+      } as Model<Api>);
+      return { model: cliModel, authStorage, modelRegistry };
     }
     return {
       error: `Unknown model: ${provider}/${modelId}`,

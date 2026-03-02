@@ -9,7 +9,6 @@ import {
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session-override.js";
-import { runCliAgent } from "../agents/cli-runner.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runWithModelFallback } from "../agents/model-fallback.js";
@@ -392,24 +391,9 @@ export async function agentCommand(
         agentDir,
         fallbacksOverride: resolveAgentModelFallbacksOverride(cfg, sessionAgentId),
         run: (providerOverride, modelOverride) => {
-          if (isCliProvider(providerOverride, cfg)) {
-            return runCliAgent({
-              sessionId,
-              sessionKey,
-              sessionFile,
-              workspaceDir,
-              config: cfg,
-              prompt: body,
-              provider: providerOverride,
-              model: modelOverride,
-              thinkLevel: resolvedThinkLevel,
-              timeoutMs,
-              runId,
-              extraSystemPrompt: opts.extraSystemPrompt,
-              images: opts.images,
-              streamParams: opts.streamParams,
-            });
-          }
+          // CLI providers are now routed through the embedded Pi
+          // runner. The CLI-backed StreamFn in attempt.ts handles
+          // spawning the CLI subprocess with MCP tools.
           const authProfileId =
             providerOverride === provider ? sessionEntry?.authProfileOverride : undefined;
           return runEmbeddedPiAgent({
