@@ -104,8 +104,18 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
     callIdOrProviderCallId: event.callId,
   });
 
-  if (!call && event.direction === "inbound" && event.providerCallId) {
-    if (!shouldAcceptInbound(ctx.config, event.from)) {
+  // Auto-register untracked calls arriving via webhook. This covers both
+  // true inbound calls and externally-initiated outbound-api calls (e.g. calls
+  // placed directly via the Twilio REST API pointing at our webhook URL).
+  const isUnregisteredWebhookCall =
+    !call &&
+    event.providerCallId &&
+    (event.direction === "inbound" || event.direction === "outbound");
+
+  if (isUnregisteredWebhookCall) {
+    // Apply inbound policy for true inbound calls; external outbound-api calls
+    // are implicitly trusted because the caller controls the webhook URL.
+    if (event.direction === "inbound" && !shouldAcceptInbound(ctx.config, event.from)) {
       const pid = event.providerCallId;
       if (!ctx.provider) {
         console.warn(
