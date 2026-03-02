@@ -89,6 +89,68 @@ export const FIELD_HELP: Record<string, string> = {
     "Explicit gateway-level tool allowlist when you want a narrow set of tools available at runtime. Use this for locked-down environments where tool scope must be tightly controlled.",
   "gateway.tools.deny":
     "Explicit gateway-level tool denylist to block risky tools even if lower-level policies allow them. Use deny rules for emergency response and defense-in-depth hardening.",
+  "gateway.abuse":
+    "Gateway abuse-hardening controls grouped by quota, anomaly, correlation, incident, and audit-ledger domains. Keep these controls in observe mode first, then advance to enforce mode after baseline tuning.",
+  "gateway.abuse.quota":
+    "Unified post-auth quota policy for high-abuse gateway methods. Use this section to define burst and sustained budgets consistently across gateway method surfaces.",
+  "gateway.abuse.quota.mode":
+    'Quota policy mode: "off" disables evaluation, "observe" records and audits would-block outcomes, and "enforce" applies throttles. Start with "observe" in production rollouts.',
+  "gateway.abuse.quota.burstLimit":
+    "Maximum requests allowed in the short burst window before the quota policy marks traffic as over limit. Set this close to expected interactive spikes and tune with observed traffic.",
+  "gateway.abuse.quota.burstWindowMs":
+    "Burst quota sliding window in milliseconds used with burstLimit for short-spike protection. Keep this window short so normal conversational bursts are not over-penalized.",
+  "gateway.abuse.quota.sustainedLimit":
+    "Maximum requests allowed in the sustained window for long-running abuse control. Keep this value higher than burstLimit and tune against real workload rhythms.",
+  "gateway.abuse.quota.sustainedWindowMs":
+    "Sustained quota sliding window in milliseconds used for longer-horizon abuse detection. Keep this window at least as large as burstWindowMs for predictable two-tier quota behavior.",
+  "gateway.abuse.anomaly":
+    "Semantic anomaly scoring controls for repeated capability-extraction behavior across gateway traffic. Use staged thresholds to progressively move from warning to throttle and temporary block actions.",
+  "gateway.abuse.anomaly.mode":
+    'Anomaly policy mode: "off" disables semantic scoring, "observe" records decisions without blocking, and "enforce" enables staged actions. Keep observe-first rollout for false-positive calibration.',
+  "gateway.abuse.anomaly.warningThreshold":
+    "Lowest anomaly score threshold that emits warning-grade security events. Keep this lower than throttleThreshold so operators can see early signals before enforcement.",
+  "gateway.abuse.anomaly.throttleThreshold":
+    "Anomaly score threshold that allows throttle actions to trigger for suspicious repeated behavior. Keep this higher than warningThreshold and lower than blockThreshold.",
+  "gateway.abuse.anomaly.blockThreshold":
+    "Anomaly score threshold that allows temporary block actions for highest-confidence abuse patterns. Keep this above throttleThreshold to preserve staged escalation.",
+  "gateway.abuse.anomaly.blockDurationMs":
+    "Temporary block duration in milliseconds when blockThreshold is reached. Use bounded durations first so false positives can recover automatically.",
+  "gateway.abuse.correlation":
+    "Cross-account and proxy-fanout campaign correlation settings for coordinated abuse clustering. Use this section to configure scoring windows and alert severity cutoffs.",
+  "gateway.abuse.correlation.mode":
+    'Correlation policy mode: "off" disables clustering, "observe" emits cluster findings only, and "enforce" enables downstream automated policy hooks.',
+  "gateway.abuse.correlation.windowMs":
+    "Correlation lookback window in milliseconds used to link related events into campaign clusters. Increase gradually when campaigns are slow-drip and distributed over longer periods.",
+  "gateway.abuse.correlation.decayHalfLifeMs":
+    "Score decay half-life in milliseconds used to reduce stale correlation weight over time. Use shorter values for bursty campaigns and longer values for persistent low-rate abuse.",
+  "gateway.abuse.correlation.warningScore":
+    "Cluster score threshold for warning-level campaign events. Keep this lower than criticalScore so cluster findings can escalate cleanly.",
+  "gateway.abuse.correlation.criticalScore":
+    "Cluster score threshold for critical campaign events tied to containment workflows. Keep this above warningScore to avoid alert-tier collapse.",
+  "gateway.abuse.incident":
+    "Incident lifecycle controls for abuse-event triage and containment orchestration. Use this section to define mode, auto-containment behavior, and retention boundaries.",
+  "gateway.abuse.incident.mode":
+    'Incident workflow mode: "off" disables incident generation, "observe" records recommendations, and "enforce" allows containment transitions to execute.',
+  "gateway.abuse.incident.autoContainment":
+    "Automatic containment policy settings for qualifying incidents. Keep this disabled during initial rollout until detector precision and operator workflows are validated.",
+  "gateway.abuse.incident.autoContainment.enabled":
+    "If true, qualifying incidents can trigger automatic temporary containment actions. Enable only after observe-mode tuning confirms acceptable false-positive rates.",
+  "gateway.abuse.incident.autoContainment.minSeverity":
+    'Minimum event severity for auto-containment: "warn" or "critical". Keep "critical" as the safer default unless your threat model requires earlier automated intervention.',
+  "gateway.abuse.incident.autoContainment.ttlMs":
+    "Time-bounded containment duration in milliseconds for auto-applied incident actions. Keep this finite so containment self-reverts if operators are unavailable.",
+  "gateway.abuse.incident.retentionDays":
+    "Default retention horizon (days) for incident timelines and linked evidence. Set this to satisfy audit and post-incident review requirements.",
+  "gateway.abuse.auditLedger":
+    "Unified tool-use and exfiltration audit-ledger controls shared across core and extension channels. Use this section to govern ledger mode, retention, and redaction behavior.",
+  "gateway.abuse.auditLedger.mode":
+    'Audit-ledger mode: "off" disables storage, "observe" records findings without enforcement coupling, and "enforce" enables policy hooks that depend on ledger outcomes.',
+  "gateway.abuse.auditLedger.retentionDays":
+    "Default retention horizon (days) for stored audit-ledger rows. Tune for incident forensics needs while staying within storage constraints.",
+  "gateway.abuse.auditLedger.maxRecords":
+    "Maximum retained ledger records before oldest-first compaction. Use explicit caps to prevent unbounded growth during abuse surges.",
+  "gateway.abuse.auditLedger.redactPayloads":
+    "If true, redact sensitive payload/result fields before writing ledger rows. Keep enabled in shared environments unless a secure isolated forensic store is guaranteed.",
   "gateway.channelHealthCheckMinutes":
     "Interval in minutes for automatic channel health probing and status updates. Use lower intervals for faster detection, or higher intervals to reduce periodic probe noise.",
   "gateway.tailscale":

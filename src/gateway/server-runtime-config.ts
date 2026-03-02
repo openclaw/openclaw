@@ -1,9 +1,11 @@
 import type {
+  GatewayAbuseConfig,
   GatewayAuthConfig,
   GatewayBindMode,
   GatewayTailscaleConfig,
   loadConfig,
 } from "../config/config.js";
+import { type ResolvedGatewayAbuseConfig, resolveGatewayAbuseConfig } from "./abuse-config.js";
 import {
   assertGatewayAuthConfigured,
   type ResolvedGatewayAuth,
@@ -33,6 +35,7 @@ export type GatewayRuntimeConfig = {
   tailscaleConfig: GatewayTailscaleConfig;
   tailscaleMode: "off" | "serve" | "funnel";
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
+  abuseConfig: ResolvedGatewayAbuseConfig;
   canvasHostEnabled: boolean;
 };
 
@@ -46,6 +49,7 @@ export async function resolveGatewayRuntimeConfig(params: {
   openResponsesEnabled?: boolean;
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
+  abuse?: GatewayAbuseConfig;
 }): Promise<GatewayRuntimeConfig> {
   const bindMode = params.bind ?? params.cfg.gateway?.bind ?? "loopback";
   const customBindHost = params.cfg.gateway?.customBindHost;
@@ -111,6 +115,7 @@ export async function resolveGatewayRuntimeConfig(params: {
   const hasSharedSecret =
     (authMode === "token" && hasToken) || (authMode === "password" && hasPassword);
   const hooksConfig = resolveHooksConfig(params.cfg);
+  const abuseConfig = resolveGatewayAbuseConfig(params.cfg, params.abuse);
   const canvasHostEnabled =
     process.env.OPENCLAW_SKIP_CANVAS_HOST !== "1" && params.cfg.canvasHost?.enabled !== false;
 
@@ -180,6 +185,7 @@ export async function resolveGatewayRuntimeConfig(params: {
     tailscaleConfig,
     tailscaleMode,
     hooksConfig,
+    abuseConfig,
     canvasHostEnabled,
   };
 }

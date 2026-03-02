@@ -232,6 +232,67 @@ describe("resolveGatewayRuntimeConfig", () => {
     });
   });
 
+  describe("gateway abuse config", () => {
+    it("resolves abuse defaults when no config is provided", async () => {
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            auth: { mode: "none" },
+          },
+        },
+        port: 18789,
+      });
+
+      expect(result.abuseConfig.quota.mode).toBe("off");
+      expect(result.abuseConfig.anomaly.mode).toBe("off");
+      expect(result.abuseConfig.correlation.mode).toBe("off");
+      expect(result.abuseConfig.incident.mode).toBe("off");
+      expect(result.abuseConfig.auditLedger.mode).toBe("off");
+    });
+
+    it("applies runtime abuse overrides on top of config", async () => {
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            auth: { mode: "none" },
+            abuse: {
+              quota: {
+                mode: "observe",
+                burstLimit: 40,
+              },
+              incident: {
+                mode: "observe",
+              },
+            },
+          },
+        },
+        abuse: {
+          quota: {
+            sustainedLimit: 200,
+          },
+          incident: {
+            autoContainment: {
+              enabled: true,
+              minSeverity: "warn",
+              ttlMs: 90_000,
+            },
+          },
+        },
+        port: 18789,
+      });
+
+      expect(result.abuseConfig.quota.mode).toBe("observe");
+      expect(result.abuseConfig.quota.burstLimit).toBe(40);
+      expect(result.abuseConfig.quota.sustainedLimit).toBe(200);
+      expect(result.abuseConfig.incident.mode).toBe("observe");
+      expect(result.abuseConfig.incident.autoContainment.enabled).toBe(true);
+      expect(result.abuseConfig.incident.autoContainment.minSeverity).toBe("warn");
+      expect(result.abuseConfig.incident.autoContainment.ttlMs).toBe(90_000);
+    });
+  });
+
   describe("HTTP security headers", () => {
     it("resolves strict transport security header from config", async () => {
       const result = await resolveGatewayRuntimeConfig({

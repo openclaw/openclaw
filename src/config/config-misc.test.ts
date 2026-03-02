@@ -171,6 +171,92 @@ describe("gateway.channelHealthCheckMinutes", () => {
   });
 });
 
+describe("gateway.abuse config", () => {
+  it("accepts gateway.abuse sections with observe/enforce modes", () => {
+    const res = validateConfigObject({
+      gateway: {
+        abuse: {
+          quota: {
+            mode: "observe",
+            burstLimit: 25,
+            burstWindowMs: 15_000,
+            sustainedLimit: 150,
+            sustainedWindowMs: 90_000,
+          },
+          anomaly: {
+            mode: "enforce",
+            warningThreshold: 20,
+            throttleThreshold: 50,
+            blockThreshold: 80,
+            blockDurationMs: 120_000,
+          },
+          correlation: {
+            mode: "observe",
+            windowMs: 300_000,
+            decayHalfLifeMs: 120_000,
+            warningScore: 40,
+            criticalScore: 70,
+          },
+          incident: {
+            mode: "observe",
+            autoContainment: {
+              enabled: true,
+              minSeverity: "critical",
+              ttlMs: 60_000,
+            },
+            retentionDays: 30,
+          },
+          auditLedger: {
+            mode: "observe",
+            retentionDays: 14,
+            maxRecords: 5000,
+            redactPayloads: true,
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid anomaly threshold ordering", () => {
+    const res = validateConfigObject({
+      gateway: {
+        abuse: {
+          anomaly: {
+            warningThreshold: 50,
+            throttleThreshold: 20,
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((iss) => iss.path === "gateway.abuse.anomaly.throttleThreshold")).toBe(
+        true,
+      );
+    }
+  });
+
+  it("rejects invalid correlation severity ordering", () => {
+    const res = validateConfigObject({
+      gateway: {
+        abuse: {
+          correlation: {
+            warningScore: 80,
+            criticalScore: 70,
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((iss) => iss.path === "gateway.abuse.correlation.criticalScore")).toBe(
+        true,
+      );
+    }
+  });
+});
+
 describe("cron webhook schema", () => {
   it("accepts cron.webhookToken and legacy cron.webhook", () => {
     const res = OpenClawSchema.safeParse({

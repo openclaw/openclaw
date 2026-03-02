@@ -315,6 +315,81 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+export type GatewayAbuseMode = "off" | "observe" | "enforce";
+
+export type GatewayAbuseQuotaConfig = {
+  /** Enforcement mode for unified post-auth quotas. */
+  mode?: GatewayAbuseMode;
+  /** Burst threshold for short-window method calls. */
+  burstLimit?: number;
+  /** Burst quota sliding window in milliseconds. */
+  burstWindowMs?: number;
+  /** Sustained threshold for longer-window method calls. */
+  sustainedLimit?: number;
+  /** Sustained quota sliding window in milliseconds. */
+  sustainedWindowMs?: number;
+};
+
+export type GatewayAbuseAnomalyConfig = {
+  /** Enforcement mode for semantic anomaly detection. */
+  mode?: GatewayAbuseMode;
+  /** Score threshold for warning-grade detections. */
+  warningThreshold?: number;
+  /** Score threshold that starts throttle actions. */
+  throttleThreshold?: number;
+  /** Score threshold that starts temporary block actions. */
+  blockThreshold?: number;
+  /** Block duration (ms) when blockThreshold is reached. */
+  blockDurationMs?: number;
+};
+
+export type GatewayAbuseCorrelationConfig = {
+  /** Enforcement mode for cross-account campaign correlation. */
+  mode?: GatewayAbuseMode;
+  /** Correlation lookback window in milliseconds. */
+  windowMs?: number;
+  /** Decay half-life used for cluster scoring in milliseconds. */
+  decayHalfLifeMs?: number;
+  /** Score threshold for warning-level cluster events. */
+  warningScore?: number;
+  /** Score threshold for critical-level cluster events. */
+  criticalScore?: number;
+};
+
+export type GatewayAbuseIncidentConfig = {
+  /** Enforcement mode for incident workflow automation. */
+  mode?: GatewayAbuseMode;
+  autoContainment?: {
+    /** If true, allow automatic containment actions for qualifying incidents. */
+    enabled?: boolean;
+    /** Minimum event severity that can trigger auto-containment. */
+    minSeverity?: "warn" | "critical";
+    /** Time-bounded containment duration in milliseconds. */
+    ttlMs?: number;
+  };
+  /** Default retention horizon (days) for incident timeline records. */
+  retentionDays?: number;
+};
+
+export type GatewayAbuseAuditLedgerConfig = {
+  /** Enforcement mode for the unified tool-use audit ledger. */
+  mode?: GatewayAbuseMode;
+  /** Default retention horizon (days) for audit ledger rows. */
+  retentionDays?: number;
+  /** Maximum retained records before oldest-first compaction. */
+  maxRecords?: number;
+  /** Redact sensitive payload/result fields when storing ledger entries. */
+  redactPayloads?: boolean;
+};
+
+export type GatewayAbuseConfig = {
+  quota?: GatewayAbuseQuotaConfig;
+  anomaly?: GatewayAbuseAnomalyConfig;
+  correlation?: GatewayAbuseCorrelationConfig;
+  incident?: GatewayAbuseIncidentConfig;
+  auditLedger?: GatewayAbuseAuditLedgerConfig;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -362,4 +437,6 @@ export type GatewayConfig = {
    * Set to 0 to disable. Default: 5.
    */
   channelHealthCheckMinutes?: number;
+  /** Gateway abuse-hardening controls (quota/anomaly/correlation/incident/audit). */
+  abuse?: GatewayAbuseConfig;
 };

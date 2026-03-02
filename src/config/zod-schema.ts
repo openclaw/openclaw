@@ -128,6 +128,130 @@ const HttpUrlSchema = z
     return protocol === "http:" || protocol === "https:";
   }, "Expected http:// or https:// URL");
 
+const GatewayAbuseModeSchema = z
+  .union([z.literal("off"), z.literal("observe"), z.literal("enforce")])
+  .optional();
+
+const GatewayAbuseQuotaSchema = z
+  .object({
+    mode: GatewayAbuseModeSchema,
+    burstLimit: z.number().int().positive().optional(),
+    burstWindowMs: z.number().int().positive().optional(),
+    sustainedLimit: z.number().int().positive().optional(),
+    sustainedWindowMs: z.number().int().positive().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (
+      value.burstWindowMs !== undefined &&
+      value.sustainedWindowMs !== undefined &&
+      value.sustainedWindowMs < value.burstWindowMs
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["sustainedWindowMs"],
+        message: "gateway.abuse.quota.sustainedWindowMs must be >= burstWindowMs.",
+      });
+    }
+  })
+  .optional();
+
+const GatewayAbuseAnomalySchema = z
+  .object({
+    mode: GatewayAbuseModeSchema,
+    warningThreshold: z.number().int().positive().optional(),
+    throttleThreshold: z.number().int().positive().optional(),
+    blockThreshold: z.number().int().positive().optional(),
+    blockDurationMs: z.number().int().positive().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (
+      value.warningThreshold !== undefined &&
+      value.throttleThreshold !== undefined &&
+      value.warningThreshold >= value.throttleThreshold
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["throttleThreshold"],
+        message: "gateway.abuse.anomaly.warningThreshold must be < throttleThreshold.",
+      });
+    }
+    if (
+      value.throttleThreshold !== undefined &&
+      value.blockThreshold !== undefined &&
+      value.throttleThreshold >= value.blockThreshold
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["blockThreshold"],
+        message: "gateway.abuse.anomaly.throttleThreshold must be < blockThreshold.",
+      });
+    }
+  })
+  .optional();
+
+const GatewayAbuseCorrelationSchema = z
+  .object({
+    mode: GatewayAbuseModeSchema,
+    windowMs: z.number().int().positive().optional(),
+    decayHalfLifeMs: z.number().int().positive().optional(),
+    warningScore: z.number().int().positive().optional(),
+    criticalScore: z.number().int().positive().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (
+      value.warningScore !== undefined &&
+      value.criticalScore !== undefined &&
+      value.warningScore >= value.criticalScore
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["criticalScore"],
+        message: "gateway.abuse.correlation.warningScore must be < criticalScore.",
+      });
+    }
+  })
+  .optional();
+
+const GatewayAbuseIncidentSchema = z
+  .object({
+    mode: GatewayAbuseModeSchema,
+    autoContainment: z
+      .object({
+        enabled: z.boolean().optional(),
+        minSeverity: z.union([z.literal("warn"), z.literal("critical")]).optional(),
+        ttlMs: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
+    retentionDays: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
+const GatewayAbuseAuditLedgerSchema = z
+  .object({
+    mode: GatewayAbuseModeSchema,
+    retentionDays: z.number().int().positive().optional(),
+    maxRecords: z.number().int().positive().optional(),
+    redactPayloads: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
+const GatewayAbuseSchema = z
+  .object({
+    quota: GatewayAbuseQuotaSchema,
+    anomaly: GatewayAbuseAnomalySchema,
+    correlation: GatewayAbuseCorrelationSchema,
+    incident: GatewayAbuseIncidentSchema,
+    auditLedger: GatewayAbuseAuditLedgerSchema,
+  })
+  .strict()
+  .optional();
+
 export const OpenClawSchema = z
   .object({
     $schema: z.string().optional(),
@@ -603,6 +727,7 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        abuse: GatewayAbuseSchema,
         channelHealthCheckMinutes: z.number().int().min(0).optional(),
         tailscale: z
           .object({
