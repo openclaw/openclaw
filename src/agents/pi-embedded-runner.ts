@@ -1,6 +1,12 @@
 export type { MessagingToolSend } from "./pi-embedded-messaging.js";
 export { compactEmbeddedPiSession } from "./pi-embedded-runner/compact.js";
-export { applyExtraParamsToAgent, resolveExtraParams } from "./pi-embedded-runner/extra-params.js";
+export {
+  applyExtraParamsToAgent,
+  getSanitizedHeadersForCustomProviderUpstream,
+  isKnownFirstPartyHost,
+  resolveExtraParams,
+  shouldSanitizeHeadersForCustomProvider,
+} from "./pi-embedded-runner/extra-params.js";
 
 export { applyGoogleTurnOrderingFix } from "./pi-embedded-runner/google.js";
 export {
