@@ -264,17 +264,10 @@ export function resolveBrowserConfig(
   );
   const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";
 
-  // In headless/noSandbox environments (servers), prefer "openclaw" profile over "chrome"
-  // because Chrome extension relay requires a GUI browser which isn't available headless.
-  // Issue: https://github.com/openclaw/openclaw/issues/14895
-  const preferOpenClawProfile = headless || noSandbox;
+  // ensureDefaultProfile() guarantees the openclaw profile always exists.
+  // Use the constant directly as the single source of truth (#31907).
   const defaultProfile =
-    defaultProfileFromConfig ??
-    (preferOpenClawProfile && profiles[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]
-      ? DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME
-      : profiles[DEFAULT_BROWSER_DEFAULT_PROFILE_NAME]
-        ? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME
-        : DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
+    defaultProfileFromConfig ?? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME;
 
   const extraArgs = Array.isArray(cfg?.extraArgs)
     ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
