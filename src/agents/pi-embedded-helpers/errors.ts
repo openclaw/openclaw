@@ -110,7 +110,10 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     errorMessage.includes("上下文超出") ||
     errorMessage.includes("上下文长度超") ||
     errorMessage.includes("超出最大上下文") ||
-    errorMessage.includes("请压缩上下文")
+    errorMessage.includes("请压缩上下文") ||
+    // llama.cpp / LM Studio errors when system prompt exceeds context window
+    /n_keep\s*\(?\d+\)?\s*>=?\s*n_ctx\s*\(?\d+\)?/.test(lower) ||
+    lower.includes("cannot truncate prompt")
   );
 }
 

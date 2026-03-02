@@ -1226,3 +1226,87 @@ describe("isAnthropicBillingError", () => {
     }
   });
 });
+
+describe("context overflow fallback (#30056)", () => {
+  it("falls back to next model when primary throws context overflow error", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "lmstudio/qwen2.5-14b-instruct",
+            fallbacks: ["anthropic/claude-sonnet-4-5"],
+          },
+        },
+      },
+    });
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "lmstudio",
+      model: "qwen2.5-14b-instruct",
+      run: async (provider, model) => {
+        if (provider === "lmstudio") {
+          throw new Error("cannot truncate prompt with n_keep (13575) >= n_ctx (4096)");
+        }
+        return `ok:${provider}/${model}`;
+      },
+    });
+
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-sonnet-4-5");
+    expect(result.result).toBe("ok:anthropic/claude-sonnet-4-5");
+    expect(result.attempts).toHaveLength(1);
+    expect(result.attempts[0].provider).toBe("lmstudio");
+  });
+
+  it("rethrows context overflow when no fallback candidates remain", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "lmstudio/qwen2.5-14b-instruct",
+          },
+        },
+      },
+    });
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "lmstudio",
+        model: "qwen2.5-14b-instruct",
+        run: async () => {
+          throw new Error("cannot truncate prompt with n_keep (13575) >= n_ctx (4096)");
+        },
+      }),
+    ).rejects.toThrow("cannot truncate prompt");
+  });
+
+  it("falls back on generic context length exceeded errors", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "local/small-model",
+            fallbacks: ["openai/gpt-4.1"],
+          },
+        },
+      },
+    });
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "local",
+      model: "small-model",
+      run: async (provider, model) => {
+        if (provider === "local") {
+          throw new Error("context length exceeded: 14000 > 4096");
+        }
+        return `ok:${provider}/${model}`;
+      },
+    });
+
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-4.1");
+  });
+});
