@@ -5,9 +5,11 @@ import { setZalouserRuntime } from "./runtime.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
 
 const sendMessageZalouserMock = vi.hoisted(() => vi.fn(async () => {}));
+const sendTypingZalouserMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("./send.js", () => ({
   sendMessageZalouser: sendMessageZalouserMock,
+  sendTypingZalouser: sendTypingZalouserMock,
 }));
 
 describe("zalouser monitor pairing account scoping", () => {

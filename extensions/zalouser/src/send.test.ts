@@ -1,19 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { sendImageZalouser, sendLinkZalouser, sendMessageZalouser } from "./send.js";
-import { sendZaloLink, sendZaloTextMessage } from "./zalo-js.js";
+import {
+  sendImageZalouser,
+  sendLinkZalouser,
+  sendMessageZalouser,
+  sendTypingZalouser,
+} from "./send.js";
+import { sendZaloLink, sendZaloTextMessage, sendZaloTypingEvent } from "./zalo-js.js";
 
 vi.mock("./zalo-js.js", () => ({
   sendZaloTextMessage: vi.fn(),
   sendZaloLink: vi.fn(),
+  sendZaloTypingEvent: vi.fn(),
 }));
 
 const mockSendText = vi.mocked(sendZaloTextMessage);
 const mockSendLink = vi.mocked(sendZaloLink);
+const mockSendTyping = vi.mocked(sendZaloTypingEvent);
 
 describe("zalouser send helpers", () => {
   beforeEach(() => {
     mockSendText.mockReset();
     mockSendLink.mockReset();
+    mockSendTyping.mockReset();
   });
 
   it("delegates text send to JS transport", async () => {
@@ -61,5 +69,14 @@ describe("zalouser send helpers", () => {
       isGroup: true,
     });
     expect(result).toEqual({ ok: false, error: "boom" });
+  });
+
+  it("delegates typing helper to JS transport", async () => {
+    await sendTypingZalouser("thread-4", { profile: "p4", isGroup: true });
+
+    expect(mockSendTyping).toHaveBeenCalledWith("thread-4", {
+      profile: "p4",
+      isGroup: true,
+    });
   });
 });

@@ -18,6 +18,29 @@ describe("zalouser outbound chunker", () => {
 });
 
 describe("zalouser channel policies", () => {
+  it("resolves requireMention from group config", () => {
+    const resolveRequireMention = zalouserPlugin.groups?.resolveRequireMention;
+    expect(resolveRequireMention).toBeTypeOf("function");
+    if (!resolveRequireMention) {
+      return;
+    }
+    const requireMention = resolveRequireMention({
+      cfg: {
+        channels: {
+          zalouser: {
+            groups: {
+              "123": { requireMention: false },
+            },
+          },
+        },
+      },
+      accountId: "default",
+      groupId: "123",
+      groupChannel: "123",
+    });
+    expect(requireMention).toBe(false);
+  });
+
   it("resolves group tool policy by explicit group id", () => {
     const resolveToolPolicy = zalouserPlugin.groups?.resolveToolPolicy;
     expect(resolveToolPolicy).toBeTypeOf("function");
