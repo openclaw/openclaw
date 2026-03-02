@@ -253,6 +253,7 @@ describe("CronService failure alerts", () => {
       expect.objectContaining({
         mode: "webhook",
         accountId: "global-account",
+        to: undefined,
       }),
     );
 

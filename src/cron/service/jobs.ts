@@ -151,6 +151,27 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
   }
 }
 
+function assertFailureDestinationSupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
+  const failureDestination = job.delivery?.failureDestination;
+  if (!failureDestination) {
+    return;
+  }
+  if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
+    throw new Error(
+      'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
+    );
+  }
+  if (failureDestination.mode === "webhook") {
+    const target = normalizeHttpWebhookUrl(failureDestination.to);
+    if (!target) {
+      throw new Error(
+        "cron failure destination webhook requires delivery.failureDestination.to to be a valid http(s) URL",
+      );
+    }
+    failureDestination.to = target;
+  }
+}
+
 export function findJobOrThrow(state: CronServiceState, id: string) {
   const job = state.store?.jobs.find((j) => j.id === id);
   if (!job) {
@@ -452,6 +473,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
   assertSupportedJobSpec(job);
   assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
+  assertFailureDestinationSupport(job);
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
   return job;
 }
@@ -517,6 +539,15 @@ export function applyJobPatch(
   if ("failureAlert" in patch) {
     job.failureAlert = mergeCronFailureAlert(job.failureAlert, patch.failureAlert);
   }
+  if (
+    job.sessionTarget === "main" &&
+    job.delivery?.mode !== "webhook" &&
+    job.delivery?.failureDestination
+  ) {
+    throw new Error(
+      'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
+    );
+  }
   if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
     job.delivery = undefined;
   }
@@ -532,6 +563,7 @@ export function applyJobPatch(
   assertSupportedJobSpec(job);
   assertMainSessionAgentId(job, opts?.defaultAgentId);
   assertDeliverySupport(job);
+  assertFailureDestinationSupport(job);
 }
 
 function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronPayload {

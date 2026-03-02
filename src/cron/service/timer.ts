@@ -206,6 +206,9 @@ function resolveFailureAlert(
     return null;
   }
 
+  const mode = jobConfig?.mode ?? globalConfig?.mode;
+  const explicitTo = normalizeTo(jobConfig?.to);
+
   return {
     after: clampPositiveInt(jobConfig?.after ?? globalConfig?.after, DEFAULT_FAILURE_ALERT_AFTER),
     cooldownMs: clampNonNegativeInt(
@@ -216,8 +219,8 @@ function resolveFailureAlert(
       normalizeCronMessageChannel(jobConfig?.channel) ??
       normalizeCronMessageChannel(job.delivery?.channel) ??
       "last",
-    to: normalizeTo(jobConfig?.to) ?? normalizeTo(job.delivery?.to),
-    mode: jobConfig?.mode ?? globalConfig?.mode,
+    to: mode === "webhook" ? explicitTo : (explicitTo ?? normalizeTo(job.delivery?.to)),
+    mode,
     accountId: jobConfig?.accountId ?? globalConfig?.accountId,
   };
 }

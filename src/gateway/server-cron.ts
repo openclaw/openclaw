@@ -410,6 +410,7 @@ export function buildGatewayCronService(params: {
               const failurePayload = {
                 jobId: job.id,
                 jobName: job.name,
+                message: failureMessage,
                 status: evt.status,
                 error: evt.error,
                 runAtMs: evt.runAtMs,
