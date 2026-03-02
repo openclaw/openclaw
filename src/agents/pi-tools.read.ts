@@ -670,7 +670,63 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   const base = createEditTool(params.root, {
     operations: createSandboxEditOperations(params),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  return wrapEditToolWithCurrentContent(base, params.bridge);
+}
+
+/**
+ * Wraps the edit tool to return the current file content on mismatch.
+ * This allows the agent to retry immediately without a separate Read call.
+ * Implements Option 1 from https://github.com/openclaw/openclaw/issues/18132
+ */
+function wrapEditToolWithCurrentContent(tool: AnyAgentTool, bridge: SandboxFsBridge): AnyAgentTool {
+  const wrapped = wrapToolParamNormalization(tool, CLAUDE_PARAM_GROUPS.edit);
+  return {
+    ...wrapped,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      const result = await wrapped.execute(toolCallId, params, signal, onUpdate);
+      
+      // Check if edit failed due to mismatch
+      if (result.isError && result.content.some(block => {
+        if (block.type === 'text') {
+          const text = block.text.toLowerCase();
+          return text.includes('mismatch') || 
+                 text.includes('not found') || 
+                 text.includes('no exact match') ||
+                 text.includes('could not find') ||
+                 text.includes('does not match');
+        }
+        return false;
+      })) {
+        // Try to read current file content and append it to the error
+        const record = params as Record<string, unknown>;
+        const filePath = record?.file_path || record?.path;
+        
+        if (typeof filePath === 'string') {
+          try {
+            const content = await bridge.readFile({ filePath, cwd: '', encoding: 'utf-8' });
+            const currentContent = typeof content === 'string' ? content : Buffer.from(content).toString('utf-8');
+            
+            // Append current content to error message
+            return {
+              ...result,
+              content: [
+                ...result.content,
+                {
+                  type: 'text' as const,
+                  text: `\n\n--- Current file content ---\n${currentContent}\n--- End of current content ---`,
+                },
+              ],
+            };
+          } catch {
+            // If we can't read the file, just return the original error
+            return result;
+          }
+        }
+      }
+      
+      return result;
+    },
+  };
 }
 
 export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
@@ -684,7 +740,65 @@ export function createHostWorkspaceEditTool(root: string, options?: { workspaceO
   const base = createEditTool(root, {
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  return wrapHostEditToolWithCurrentContent(base, root, options);
+}
+
+/**
+ * Wraps the host edit tool to return the current file content on mismatch.
+ * Implements Option 1 from https://github.com/openclaw/openclaw/issues/18132
+ */
+function wrapHostEditToolWithCurrentContent(
+  tool: AnyAgentTool, 
+  root: string, 
+  options?: { workspaceOnly?: boolean }
+): AnyAgentTool {
+  const wrapped = wrapToolParamNormalization(tool, CLAUDE_PARAM_GROUPS.edit);
+  return {
+    ...wrapped,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      const result = await wrapped.execute(toolCallId, params, signal, onUpdate);
+      
+      // Check if edit failed due to mismatch
+      if (result.isError && result.content.some(block => {
+        if (block.type === 'text') {
+          const text = block.text.toLowerCase();
+          return text.includes('mismatch') || 
+                 text.includes('not found') || 
+                 text.includes('no exact match') ||
+                 text.includes('could not find') ||
+                 text.includes('does not match');
+        }
+        return false;
+      })) {
+        // Try to read current file content and append it to the error
+        const record = params as Record<string, unknown>;
+        const filePath = record?.file_path || record?.path;
+        
+        if (typeof filePath === 'string') {
+          try {
+            const content = await fs.readFile(filePath, 'utf-8');
+            
+            // Append current content to error message
+            return {
+              ...result,
+              content: [
+                ...result.content,
+                {
+                  type: 'text' as const,
+                  text: `\n\n--- Current file content ---\n${content}\n--- End of current content ---`,
+                },
+              ],
+            };
+          } catch {
+            // If we can't read the file, just return the original error
+            return result;
+          }
+        }
+      }
+      
+      return result;
+    },
+  };
 }
 
 export function createOpenClawReadTool(
