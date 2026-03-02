@@ -246,7 +246,9 @@ async function discoverOllamaModels(
     }
     const data = (await response.json()) as OllamaTagsResponse;
     if (!data.models || data.models.length === 0) {
-      if (!opts?.quiet) console.warn("No Ollama models found on local instance");
+      if (!opts?.quiet) {
+        console.warn("No Ollama models found on local instance");
+      }
       return [];
     }
     const modelsToInspect = data.models.slice(0, OLLAMA_SHOW_MAX_MODELS);

@@ -122,8 +122,12 @@ describe("resolveDeliveryTarget", () => {
                 process.env,
                 accountId ?? "",
               );
-              if (storeEntries.length === 0) return configEntries;
-              if (configEntries.length === 0) return storeEntries;
+              if (storeEntries.length === 0) {
+                return configEntries;
+              }
+              if (configEntries.length === 0) {
+                return storeEntries;
+              }
               return [...new Set([...configEntries, ...storeEntries])];
             },
           },
