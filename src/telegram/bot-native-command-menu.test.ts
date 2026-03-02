@@ -81,7 +81,7 @@ describe("bot-native-command-menu", () => {
     );
   });
 
-  it("deletes stale commands before setting new menu", async () => {
+  it("sets menu without deleteMyCommands when commands are present", async () => {
     const callOrder: string[] = [];
     const deleteMyCommands = vi.fn(async () => {
       callOrder.push("delete");
@@ -105,7 +105,29 @@ describe("bot-native-command-menu", () => {
       expect(setMyCommands).toHaveBeenCalled();
     });
 
-    expect(callOrder).toEqual(["delete", "set"]);
+    expect(deleteMyCommands).not.toHaveBeenCalled();
+    expect(callOrder).toEqual(["set"]);
+  });
+
+  it("deletes menu when no commands are registered", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+
+    syncTelegramMenuCommands({
+      bot: {
+        api: {
+          deleteMyCommands,
+          setMyCommands,
+        },
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
+      runtime: {} as Parameters<typeof syncTelegramMenuCommands>[0]["runtime"],
+      commandsToRegister: [],
+    });
+
+    await vi.waitFor(() => {
+      expect(deleteMyCommands).toHaveBeenCalledTimes(1);
+    });
+    expect(setMyCommands).not.toHaveBeenCalled();
   });
 
   it("retries with fewer commands on BOT_COMMANDS_TOO_MUCH", async () => {
