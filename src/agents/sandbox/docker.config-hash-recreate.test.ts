@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { ensureSandboxContainer } from "./docker.js";
+import { collectDockerFlagValues } from "./test-args.js";
 import type { SandboxConfig } from "./types.js";
 
 type SpawnCall = {
@@ -237,13 +238,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(createCall).toBeDefined();
     expect(createCall?.args).toContain(`openclaw.configHash=${expectedHash}`);
 
-    const bindArgs: string[] = [];
-    const args = createCall?.args ?? [];
-    for (let i = 0; i < args.length; i += 1) {
-      if (args[i] === "-v" && typeof args[i + 1] === "string") {
-        bindArgs.push(args[i + 1]);
-      }
-    }
+    const bindArgs = collectDockerFlagValues(createCall?.args ?? [], "-v");
     const workspaceMountIdx = bindArgs.indexOf("/tmp/workspace:/workspace");
     const customMountIdx = bindArgs.indexOf("/tmp/workspace-shared/USER.md:/workspace/USER.md:ro");
     expect(workspaceMountIdx).toBeGreaterThanOrEqual(0);
@@ -277,13 +272,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       );
       expect(createCall).toBeDefined();
 
-      const bindArgs: string[] = [];
-      const args = createCall?.args ?? [];
-      for (let i = 0; i < args.length; i += 1) {
-        if (args[i] === "-v" && typeof args[i + 1] === "string") {
-          bindArgs.push(args[i + 1]);
-        }
-      }
+      const bindArgs = collectDockerFlagValues(createCall?.args ?? [], "-v");
       expect(bindArgs).toContain(expectedMainMount);
     },
   );
