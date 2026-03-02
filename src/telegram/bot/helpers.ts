@@ -175,6 +175,24 @@ export function buildTelegramGroupPeerId(chatId: number | string, messageThreadI
   return messageThreadId != null ? `${chatId}:topic:${messageThreadId}` : String(chatId);
 }
 
+/**
+ * Resolve the direct-message peer identifier for Telegram routing/session keys.
+ *
+ * In some Telegram DM deliveries (for example certain business/chat bridge flows),
+ * `chat.id` can differ from the actual sender user id. Prefer sender id when present
+ * so per-peer DM scopes isolate users correctly.
+ */
+export function resolveTelegramDirectPeerId(params: {
+  chatId: number | string;
+  senderId?: number | string | null;
+}) {
+  const senderId = params.senderId != null ? String(params.senderId).trim() : "";
+  if (senderId) {
+    return senderId;
+  }
+  return String(params.chatId);
+}
+
 export function buildTelegramGroupFrom(chatId: number | string, messageThreadId?: number) {
   return `telegram:group:${buildTelegramGroupPeerId(chatId, messageThreadId)}`;
 }
