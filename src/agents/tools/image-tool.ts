@@ -309,8 +309,11 @@ export function createImageTool(options?: {
     : "Analyze one or more images with the configured image model (agents.defaults.imageModel). Use image for a single path/URL, or images for multiple (up to 20). Provide a prompt describing what to analyze.";
 
   const localRoots = (() => {
-    const roots = getDefaultLocalRoots();
     const workspaceDir = normalizeWorkspaceDir(options?.workspaceDir);
+    if (options?.fsPolicy?.workspaceOnly) {
+      return workspaceDir ? [workspaceDir] : [];
+    }
+    const roots = getDefaultLocalRoots();
     if (!workspaceDir) {
       return roots;
     }
