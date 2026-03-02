@@ -9,6 +9,42 @@ describe("FS tools with workspaceOnly=false", () => {
   let workspaceDir: string;
   let outsideFile: string;
 
+  const hasToolError = (result: { content: Array<{ type: string; text?: string }> }) =>
+    result.content.some((content) => {
+      if (content.type !== "text") {
+        return false;
+      }
+      return content.text?.toLowerCase().includes("error") ?? false;
+    });
+
+  const toolsFor = (workspaceOnly: boolean | undefined) =>
+    createOpenClawCodingTools({
+      workspaceDir,
+      config:
+        workspaceOnly === undefined
+          ? {}
+          : {
+              tools: {
+                fs: {
+                  workspaceOnly,
+                },
+              },
+            },
+    });
+
+  const runFsTool = async (
+    toolName: "write" | "edit" | "read",
+    callId: string,
+    input: Record<string, unknown>,
+    workspaceOnly: boolean | undefined,
+  ) => {
+    const tool = toolsFor(workspaceOnly).find((candidate) => candidate.name === toolName);
+    expect(tool).toBeDefined();
+    const result = await tool!.execute(callId, input);
+    expect(hasToolError(result)).toBe(false);
+    return result;
+  };
+
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
     workspaceDir = path.join(tmpDir, "workspace");
@@ -21,30 +57,15 @@ describe("FS tools with workspaceOnly=false", () => {
   });
 
   it("should allow write outside workspace when workspaceOnly=false", async () => {
-    const tools = createOpenClawCodingTools({
-      workspaceDir,
-      config: {
-        tools: {
-          fs: {
-            workspaceOnly: false,
-          },
-        },
+    await runFsTool(
+      "write",
+      "test-call-1",
+      {
+        path: outsideFile,
+        content: "test content",
       },
-    });
-
-    const writeTool = tools.find((t) => t.name === "write");
-    expect(writeTool).toBeDefined();
-
-    const result = await writeTool!.execute("test-call-1", {
-      path: outsideFile,
-      content: "test content",
-    });
-
-    // Check if the operation succeeded (no error in content)
-    const hasError = result.content.some(
-      (c) => c.type === "text" && c.text.toLowerCase().includes("error"),
+      false,
     );
-    expect(hasError).toBe(false);
     const content = await fs.readFile(outsideFile, "utf-8");
     expect(content).toBe("test content");
   });
@@ -53,29 +74,15 @@ describe("FS tools with workspaceOnly=false", () => {
     const relativeOutsidePath = path.join("..", "outside-relative-write.txt");
     const outsideRelativeFile = path.join(tmpDir, "outside-relative-write.txt");
 
-    const tools = createOpenClawCodingTools({
-      workspaceDir,
-      config: {
-        tools: {
-          fs: {
-            workspaceOnly: false,
-          },
-        },
+    await runFsTool(
+      "write",
+      "test-call-1b",
+      {
+        path: relativeOutsidePath,
+        content: "relative test content",
       },
-    });
-
-    const writeTool = tools.find((t) => t.name === "write");
-    expect(writeTool).toBeDefined();
-
-    const result = await writeTool!.execute("test-call-1b", {
-      path: relativeOutsidePath,
-      content: "relative test content",
-    });
-
-    const hasError = result.content.some(
-      (c) => c.type === "text" && c.text.toLowerCase().includes("error"),
+      false,
     );
-    expect(hasError).toBe(false);
     const content = await fs.readFile(outsideRelativeFile, "utf-8");
     expect(content).toBe("relative test content");
   });
@@ -83,31 +90,16 @@ describe("FS tools with workspaceOnly=false", () => {
   it("should allow edit outside workspace when workspaceOnly=false", async () => {
     await fs.writeFile(outsideFile, "old content");
 
-    const tools = createOpenClawCodingTools({
-      workspaceDir,
-      config: {
-        tools: {
-          fs: {
-            workspaceOnly: false,
-          },
-        },
+    await runFsTool(
+      "edit",
+      "test-call-2",
+      {
+        path: outsideFile,
+        oldText: "old content",
+        newText: "new content",
       },
-    });
-
-    const editTool = tools.find((t) => t.name === "edit");
-    expect(editTool).toBeDefined();
-
-    const result = await editTool!.execute("test-call-2", {
-      path: outsideFile,
-      oldText: "old content",
-      newText: "new content",
-    });
-
-    // Check if the operation succeeded (no error in content)
-    const hasError = result.content.some(
-      (c) => c.type === "text" && c.text.toLowerCase().includes("error"),
+      false,
     );
-    expect(hasError).toBe(false);
     const content = await fs.readFile(outsideFile, "utf-8");
     expect(content).toBe("new content");
   });
@@ -117,30 +109,16 @@ describe("FS tools with workspaceOnly=false", () => {
     const outsideRelativeFile = path.join(tmpDir, "outside-relative-edit.txt");
     await fs.writeFile(outsideRelativeFile, "old relative content");
 
-    const tools = createOpenClawCodingTools({
-      workspaceDir,
-      config: {
-        tools: {
-          fs: {
-            workspaceOnly: false,
-          },
-        },
+    await runFsTool(
+      "edit",
+      "test-call-2b",
+      {
+        path: relativeOutsidePath,
+        oldText: "old relative content",
+        newText: "new relative content",
       },
-    });
-
-    const editTool = tools.find((t) => t.name === "edit");
-    expect(editTool).toBeDefined();
-
-    const result = await editTool!.execute("test-call-2b", {
-      path: relativeOutsidePath,
-      oldText: "old relative content",
-      newText: "new relative content",
-    });
-
-    const hasError = result.content.some(
-      (c) => c.type === "text" && c.text.toLowerCase().includes("error"),
+      false,
     );
-    expect(hasError).toBe(false);
     const content = await fs.readFile(outsideRelativeFile, "utf-8");
     expect(content).toBe("new relative content");
   });
@@ -148,50 +126,27 @@ describe("FS tools with workspaceOnly=false", () => {
   it("should allow read outside workspace when workspaceOnly=false", async () => {
     await fs.writeFile(outsideFile, "test read content");
 
-    const tools = createOpenClawCodingTools({
-      workspaceDir,
-      config: {
-        tools: {
-          fs: {
-            workspaceOnly: false,
-          },
-        },
+    await runFsTool(
+      "read",
+      "test-call-3",
+      {
+        path: outsideFile,
       },
-    });
-
-    const readTool = tools.find((t) => t.name === "read");
-    expect(readTool).toBeDefined();
-
-    const result = await readTool!.execute("test-call-3", {
-      path: outsideFile,
-    });
-
-    // Check if the operation succeeded (no error in content)
-    const hasError = result.content.some(
-      (c) => c.type === "text" && c.text.toLowerCase().includes("error"),
+      false,
     );
-    expect(hasError).toBe(false);
   });
 
   it("should allow write outside workspace when workspaceOnly is unset", async () => {
     const outsideUnsetFile = path.join(tmpDir, "outside-unset-write.txt");
-    const tools = createOpenClawCodingTools({
-      workspaceDir,
-      config: {},
-    });
-
-    const writeTool = tools.find((t) => t.name === "write");
-    expect(writeTool).toBeDefined();
-
-    const result = await writeTool!.execute("test-call-3a", {
-      path: outsideUnsetFile,
-      content: "unset write content",
-    });
-
-    const hasError = result.content.some(
-      (c) => c.type === "text" && c.text.toLowerCase().includes("error"),
+    await runFsTool(
+      "write",
+      "test-call-3a",
+      {
+        path: outsideUnsetFile,
+        content: "unset write content",
+      },
+      undefined,
     );
-    expect(hasError).toBe(false);
     const content = await fs.readFile(outsideUnsetFile, "utf-8");
     expect(content).toBe("unset write content");
   });
@@ -199,40 +154,22 @@ describe("FS tools with workspaceOnly=false", () => {
   it("should allow edit outside workspace when workspaceOnly is unset", async () => {
     const outsideUnsetFile = path.join(tmpDir, "outside-unset-edit.txt");
     await fs.writeFile(outsideUnsetFile, "before");
-    const tools = createOpenClawCodingTools({
-      workspaceDir,
-      config: {},
-    });
-
-    const editTool = tools.find((t) => t.name === "edit");
-    expect(editTool).toBeDefined();
-
-    const result = await editTool!.execute("test-call-3b", {
-      path: outsideUnsetFile,
-      oldText: "before",
-      newText: "after",
-    });
-
-    const hasError = result.content.some(
-      (c) => c.type === "text" && c.text.toLowerCase().includes("error"),
+    await runFsTool(
+      "edit",
+      "test-call-3b",
+      {
+        path: outsideUnsetFile,
+        oldText: "before",
+        newText: "after",
+      },
+      undefined,
     );
-    expect(hasError).toBe(false);
     const content = await fs.readFile(outsideUnsetFile, "utf-8");
     expect(content).toBe("after");
   });
 
   it("should block write outside workspace when workspaceOnly=true", async () => {
-    const tools = createOpenClawCodingTools({
-      workspaceDir,
-      config: {
-        tools: {
-          fs: {
-            workspaceOnly: true,
-          },
-        },
-      },
-    });
-
+    const tools = toolsFor(true);
     const writeTool = tools.find((t) => t.name === "write");
     expect(writeTool).toBeDefined();
 
