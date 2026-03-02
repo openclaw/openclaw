@@ -120,6 +120,21 @@ async function runPoll(params: Record<string, unknown>) {
   return { respond };
 }
 
+function expectDeliverySessionMirror(params: { agentId: string; sessionKey: string }) {
+  expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    expect.objectContaining({
+      session: expect.objectContaining({
+        agentId: params.agentId,
+        key: params.sessionKey,
+      }),
+      mirror: expect.objectContaining({
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+      }),
+    }),
+  );
+}
+
 function mockDeliverySuccess(messageId: string) {
   mocks.deliverOutboundPayloads.mockResolvedValue([{ messageId, channel: "slack" }]);
 }
@@ -423,18 +438,10 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-session-agent",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        session: expect.objectContaining({
-          agentId: "work",
-          key: "agent:work:slack:channel:c1",
-        }),
-        mirror: expect.objectContaining({
-          sessionKey: "agent:work:slack:channel:c1",
-          agentId: "work",
-        }),
-      }),
-    );
+    expectDeliverySessionMirror({
+      agentId: "work",
+      sessionKey: "agent:work:slack:channel:c1",
+    });
   });
 
   it("prefers explicit agentId over sessionKey agent for delivery and mirror", async () => {
@@ -475,18 +482,10 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-agent-blank",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        session: expect.objectContaining({
-          agentId: "work",
-          key: "agent:work:slack:channel:c1",
-        }),
-        mirror: expect.objectContaining({
-          sessionKey: "agent:work:slack:channel:c1",
-          agentId: "work",
-        }),
-      }),
-    );
+    expectDeliverySessionMirror({
+      agentId: "work",
+      sessionKey: "agent:work:slack:channel:c1",
+    });
   });
 
   it("forwards threadId to outbound delivery when provided", async () => {

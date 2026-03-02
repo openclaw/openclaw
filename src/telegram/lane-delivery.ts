@@ -183,6 +183,23 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         lane,
         treatEditFailureAsDelivered,
       });
+    const finalizePreview = (
+      previewMessageId: number,
+      treatEditFailureAsDelivered: boolean,
+    ): boolean | Promise<boolean> => {
+      const currentPreviewText = previewTextSnapshot ?? getLanePreviewText(lane);
+      const shouldSkipRegressive = shouldSkipRegressivePreviewUpdate({
+        currentPreviewText,
+        text,
+        skipRegressive,
+        hadPreviewMessage,
+      });
+      if (shouldSkipRegressive) {
+        params.markDelivered();
+        return true;
+      }
+      return editPreview(previewMessageId, treatEditFailureAsDelivered);
+    };
     if (!lane.stream) {
       return false;
     }
@@ -199,18 +216,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       if (typeof previewMessageId !== "number") {
         return false;
       }
-      const currentPreviewText = previewTextSnapshot ?? getLanePreviewText(lane);
-      const shouldSkipRegressive = shouldSkipRegressivePreviewUpdate({
-        currentPreviewText,
-        text,
-        skipRegressive,
-        hadPreviewMessage,
-      });
-      if (shouldSkipRegressive) {
-        params.markDelivered();
-        return true;
-      }
-      return editPreview(previewMessageId, true);
+      return finalizePreview(previewMessageId, true);
     }
     if (stopBeforeEdit) {
       await params.stopDraftLane(lane);
@@ -222,18 +228,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     if (typeof previewMessageId !== "number") {
       return false;
     }
-    const currentPreviewText = previewTextSnapshot ?? getLanePreviewText(lane);
-    const shouldSkipRegressive = shouldSkipRegressivePreviewUpdate({
-      currentPreviewText,
-      text,
-      skipRegressive,
-      hadPreviewMessage,
-    });
-    if (shouldSkipRegressive) {
-      params.markDelivered();
-      return true;
-    }
-    return editPreview(previewMessageId, false);
+    return finalizePreview(previewMessageId, false);
   };
 
   const consumeArchivedAnswerPreviewForFinal = async ({

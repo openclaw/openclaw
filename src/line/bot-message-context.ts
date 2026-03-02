@@ -1,14 +1,10 @@
 import type { MessageEvent, StickerEventMessage, EventSource, PostbackEvent } from "@line/bot-sdk";
-import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../auto-reply/envelope.js";
+import { formatInboundEnvelope } from "../auto-reply/envelope.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
+import { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  readSessionUpdatedAt,
-  recordSessionMetaFromInbound,
-  resolveStorePath,
-  updateLastRoute,
-} from "../config/sessions.js";
+import { recordSessionMetaFromInbound, updateLastRoute } from "../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
@@ -243,12 +239,9 @@ async function finalizeLineInboundContext(params: {
     senderLabel,
   });
 
-  const storePath = resolveStorePath(params.cfg.session?.store, {
+  const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
+    cfg: params.cfg,
     agentId: params.route.agentId,
-  });
-  const envelopeOptions = resolveEnvelopeFormatOptions(params.cfg);
-  const previousTimestamp = readSessionUpdatedAt({
-    storePath,
     sessionKey: params.route.sessionKey,
   });
 
