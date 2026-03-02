@@ -17,23 +17,70 @@ public struct GatewayTLSParams: Sendable {
 }
 
 public enum GatewayTLSStore {
-    private static let suiteName = "ai.openclaw.shared"
-    private static let keyPrefix = "gateway.tls."
+    private static let keychainService = "ai.openclaw.tls-pinning"
 
-    private static var defaults: UserDefaults {
-        UserDefaults(suiteName: suiteName) ?? .standard
-    }
+    // Legacy UserDefaults location used before Keychain migration.
+    private static let legacySuiteName = "ai.openclaw.shared"
+    private static let legacyKeyPrefix = "gateway.tls."
 
     public static func loadFingerprint(stableID: String) -> String? {
-        let key = self.keyPrefix + stableID
-        let raw = self.defaults.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.migrateFromUserDefaultsIfNeeded(stableID: stableID)
+        let raw = self.keychainLoad(account: stableID)?.trimmingCharacters(in: .whitespacesAndNewlines)
         if raw?.isEmpty == false { return raw }
         return nil
     }
 
     public static func saveFingerprint(_ value: String, stableID: String) {
-        let key = self.keyPrefix + stableID
-        self.defaults.set(value, forKey: key)
+        self.keychainSave(value, account: stableID)
+    }
+
+    // MARK: - Migration
+
+    /// On first Keychain read for a given stableID, move any legacy UserDefaults
+    /// fingerprint into Keychain and remove the old entry.
+    private static func migrateFromUserDefaultsIfNeeded(stableID: String) {
+        guard let defaults = UserDefaults(suiteName: self.legacySuiteName) else { return }
+        let legacyKey = self.legacyKeyPrefix + stableID
+        guard let existing = defaults.string(forKey: legacyKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !existing.isEmpty
+        else { return }
+        if self.keychainLoad(account: stableID) == nil {
+            self.keychainSave(existing, account: stableID)
+        }
+        defaults.removeObject(forKey: legacyKey)
+    }
+
+    // MARK: - Self-contained Keychain helpers (OpenClawKit can't import iOS KeychainStore)
+
+    private static func keychainLoad(account: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: self.keychainService,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status == errSecSuccess, let data = item as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    @discardableResult
+    private static func keychainSave(_ value: String, account: String) -> Bool {
+        let data = Data(value.utf8)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: self.keychainService,
+            kSecAttrAccount as String: account,
+        ]
+        // Delete-then-add to enforce accessibility attribute.
+        SecItemDelete(query as CFDictionary)
+        var insert = query
+        insert[kSecValueData as String] = data
+        insert[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        return SecItemAdd(insert as CFDictionary, nil) == errSecSuccess
     }
 }
 
@@ -52,7 +99,7 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
 
     public func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
         let task = self.session.webSocketTask(with: url)
-        task.maximumMessageSize = 16 * 1024 * 1024
+        task.maximumMessageSize = 4 * 1024 * 1024
         return WebSocketTaskBox(task: task)
     }
 
