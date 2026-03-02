@@ -79,4 +79,13 @@ export type TtsConfig = {
   maxTextLength?: number;
   /** API request timeout (ms). */
   timeoutMs?: number;
+  /** Optional forwarding hook for generated TTS audio. */
+  forward?: {
+    /** Enable forwarding. */
+    enabled?: boolean;
+    /** Shell command to run ({{file}} substituted with the audio file path). */
+    command?: string;
+    /** Command timeout (ms). */
+    timeoutMs?: number;
+  };
 };

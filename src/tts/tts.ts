@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   existsSync,
@@ -10,6 +11,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import path from "node:path";
+import { promisify } from "node:util";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
@@ -43,6 +45,8 @@ import {
 export { OPENAI_TTS_MODELS, OPENAI_TTS_VOICES } from "./tts-core.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_TTS_FORWARD_TIMEOUT_MS = 30_000;
+const execFileAsync = promisify(execFile);
 const DEFAULT_TTS_MAX_LENGTH = 1500;
 const DEFAULT_TTS_SUMMARIZE = true;
 const DEFAULT_MAX_TEXT_LENGTH = 4096;
@@ -127,6 +131,11 @@ export type ResolvedTtsConfig = {
     saveSubtitles: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  forward?: {
+    enabled: boolean;
+    command?: string;
+    timeoutMs: number;
   };
   prefsPath?: string;
   maxTextLength: number;
@@ -303,6 +312,13 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
     },
+    forward: raw.forward
+      ? {
+          enabled: raw.forward.enabled ?? false,
+          command: raw.forward.command?.trim() || undefined,
+          timeoutMs: raw.forward.timeoutMs ?? DEFAULT_TTS_FORWARD_TIMEOUT_MS,
+        }
+      : undefined,
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
     timeoutMs: raw.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -530,6 +546,37 @@ function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
     return `${provider}: request timed out`;
   }
   return `${provider}: ${error.message}`;
+}
+
+/** Shell-escape a value by wrapping in single quotes. */
+function shellEscape(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+/** Substitute {{key}} placeholders in a template with shell-escaped values. */
+function substituteShellSafe(template: string, vars: Record<string, string>): string {
+  let result = template;
+  for (const [key, value] of Object.entries(vars)) {
+    result = result.replaceAll(`{{${key}}}`, shellEscape(value));
+  }
+  return result;
+}
+
+/** Run the configured forward command for a TTS audio file. Fire-and-forget. */
+async function maybeForwardTtsAudio(params: {
+  audioPath: string;
+  config: ResolvedTtsConfig;
+}): Promise<void> {
+  const fwd = params.config.forward;
+  if (!fwd?.enabled || !fwd.command) {
+    return;
+  }
+  const cmd = substituteShellSafe(fwd.command, { file: params.audioPath });
+  try {
+    await execFileAsync("sh", ["-c", cmd], { timeout: fwd.timeoutMs });
+  } catch (err) {
+    logVerbose(`TTS: forward command failed: ${(err as Error).message}`);
+  }
 }
 
 export async function textToSpeech(params: {
@@ -904,6 +951,9 @@ export async function maybeApplyTtsToPayload(params: {
   });
 
   if (result.success && result.audioPath) {
+    // Fire-and-forget: forward audio without blocking reply delivery
+    void maybeForwardTtsAudio({ audioPath: result.audioPath, config });
+
     lastTtsAttempt = {
       timestamp: Date.now(),
       success: true,
