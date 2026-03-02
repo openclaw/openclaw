@@ -148,6 +148,11 @@ scripts/sandbox-browser-setup.sh
 By default, sandbox containers run with **no network**.
 Override with `agents.defaults.sandbox.docker.network`.
 
+The bundled sandbox browser image also applies conservative Chromium defaults for
+containerized workloads (for example renderer process limits, software rasterizer
+disabling, and no-sandbox compatibility flags). If you need a different runtime
+profile, use a custom browser image and provide your own entrypoint.
+
 Security defaults:
 
 - `network: "host"` is blocked.

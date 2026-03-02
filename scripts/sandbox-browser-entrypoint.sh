@@ -41,6 +41,7 @@ CHROME_ARGS+=(
   "--no-first-run"
   "--no-default-browser-check"
   "--disable-3d-apis"
+  "--disable-gpu"
   "--disable-dev-shm-usage"
   "--disable-background-networking"
   "--disable-extensions"
