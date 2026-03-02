@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
+import { resolveBoundaryPath } from "../../infra/boundary-path.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../../infra/path-alias-guards.js";
 import type { SafeOpenSyncAllowedType } from "../../infra/safe-open-sync.js";
 import { execDockerRaw, type ExecDockerRawResult } from "./docker.js";
@@ -258,23 +259,47 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       );
     }
 
-    const guarded = await openBoundaryFile({
-      absolutePath: target.hostPath,
-      rootPath: lexicalMount.hostRoot,
-      boundaryLabel: "sandbox mount root",
-      aliasPolicy: options.aliasPolicy,
-      allowedType: options.allowedType,
-    });
-    if (!guarded.ok) {
-      if (guarded.reason !== "path") {
-        throw guarded.error instanceof Error
-          ? guarded.error
+    if (options.allowedType === "directory") {
+      let resolvedTarget;
+      try {
+        resolvedTarget = await resolveBoundaryPath({
+          absolutePath: target.hostPath,
+          rootPath: lexicalMount.hostRoot,
+          boundaryLabel: "sandbox mount root",
+          policy: options.aliasPolicy,
+        });
+      } catch (error) {
+        throw error instanceof Error
+          ? error
           : new Error(
               `Sandbox boundary checks failed; cannot ${options.action}: ${target.containerPath}`,
             );
       }
+
+      if (resolvedTarget.exists && resolvedTarget.kind !== "directory") {
+        throw new Error(
+          `Sandbox boundary checks failed; cannot ${options.action}: ${target.containerPath}`,
+        );
+      }
     } else {
-      fs.closeSync(guarded.fd);
+      const guarded = await openBoundaryFile({
+        absolutePath: target.hostPath,
+        rootPath: lexicalMount.hostRoot,
+        boundaryLabel: "sandbox mount root",
+        aliasPolicy: options.aliasPolicy,
+        allowedType: options.allowedType,
+      });
+      if (!guarded.ok) {
+        if (guarded.reason !== "path") {
+          throw guarded.error instanceof Error
+            ? guarded.error
+            : new Error(
+                `Sandbox boundary checks failed; cannot ${options.action}: ${target.containerPath}`,
+              );
+        }
+      } else {
+        fs.closeSync(guarded.fd);
+      }
     }
 
     const canonicalContainerPath = await this.resolveCanonicalContainerPath({
