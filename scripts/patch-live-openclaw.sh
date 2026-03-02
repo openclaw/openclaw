@@ -38,6 +38,10 @@ cd "$REPO_DIR"
 PACKAGE_DIR="$(npm root -g)/openclaw"
 BACKUP_TGZ="$BACKUP_DIR/openclaw-global-backup-$TIMESTAMP.tgz"
 
+if [[ -L "$PACKAGE_DIR" && "$(readlink -f "$PACKAGE_DIR")" == "$REPO_DIR" ]]; then
+  echo "info: global openclaw is linked to this repo; Control UI assets must be rebuilt after each pnpm build"
+fi
+
 run "mkdir -p '$BACKUP_DIR'"
 
 if [[ -d "$PACKAGE_DIR" ]]; then
@@ -49,6 +53,13 @@ fi
 
 run "pnpm install --frozen-lockfile"
 run "pnpm build"
+run "pnpm ui:build"
+
+if [[ "$DRY_RUN" != "1" && ! -f "$REPO_DIR/dist/control-ui/index.html" ]]; then
+  echo "error: missing Control UI assets after ui:build: $REPO_DIR/dist/control-ui/index.html" >&2
+  exit 1
+fi
+
 run "pnpm test -- --run src/commands/models/auth.login-profiles.test.ts src/cli/models-cli.test.ts"
 
 # Create tarball and install globally
@@ -64,6 +75,11 @@ fi
 PKG_TGZ="$(ls -1t ./openclaw-*.tgz | head -n1)"
 if [[ -z "$PKG_TGZ" ]]; then
   echo "error: npm pack did not produce a tarball" >&2
+  exit 1
+fi
+
+if ! tar -tf "$PKG_TGZ" | grep -q '^package/dist/control-ui/index.html$'; then
+  echo "error: tarball is missing Control UI assets (package/dist/control-ui/index.html)" >&2
   exit 1
 fi
 
