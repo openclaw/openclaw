@@ -55,27 +55,13 @@ export async function updateSessionStoreAfterAgentRun(params: {
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
-  const entry = sessionStore[sessionKey] ?? {
+  const now = Date.now();
+  const patch: Partial<SessionEntry> = {
     sessionId,
-    updatedAt: Date.now(),
-  };
-  const next: SessionEntry = {
-    ...entry,
-    sessionId,
-    updatedAt: Date.now(),
+    updatedAt: now,
     contextTokens,
+    abortedLastRun: result.meta.aborted ?? false,
   };
-  setSessionRuntimeModel(next, {
-    provider: providerUsed,
-    model: modelUsed,
-  });
-  if (isCliProvider(providerUsed, cfg)) {
-    const cliSessionId = result.meta.agentMeta?.sessionId?.trim();
-    if (cliSessionId) {
-      setCliSessionId(next, providerUsed, cliSessionId);
-    }
-  }
-  next.abortedLastRun = result.meta.aborted ?? false;
   if (hasNonzeroUsage(usage)) {
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
@@ -84,23 +70,42 @@ export async function updateSessionStoreAfterAgentRun(params: {
       contextTokens,
       promptTokens,
     });
-    next.inputTokens = input;
-    next.outputTokens = output;
+    patch.inputTokens = input;
+    patch.outputTokens = output;
     if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
-      next.totalTokens = totalTokens;
-      next.totalTokensFresh = true;
+      patch.totalTokens = totalTokens;
+      patch.totalTokensFresh = true;
     } else {
-      next.totalTokens = undefined;
-      next.totalTokensFresh = false;
+      patch.totalTokens = undefined;
+      patch.totalTokensFresh = false;
     }
-    next.cacheRead = usage.cacheRead ?? 0;
-    next.cacheWrite = usage.cacheWrite ?? 0;
+    patch.cacheRead = usage.cacheRead ?? 0;
+    patch.cacheWrite = usage.cacheWrite ?? 0;
   }
-  if (compactionsThisRun > 0) {
-    next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
-  }
+
+  const cliSessionId =
+    isCliProvider(providerUsed, cfg) && result.meta.agentMeta?.sessionId?.trim()
+      ? result.meta.agentMeta.sessionId.trim()
+      : undefined;
+
   const persisted = await updateSessionStore(storePath, (store) => {
-    const merged = mergeSessionEntry(store[sessionKey], next);
+    const existing =
+      store[sessionKey] ??
+      sessionStore[sessionKey] ?? {
+        sessionId,
+        updatedAt: now,
+      };
+    const merged = mergeSessionEntry(existing, patch);
+    setSessionRuntimeModel(merged, {
+      provider: providerUsed,
+      model: modelUsed,
+    });
+    if (cliSessionId) {
+      setCliSessionId(merged, providerUsed, cliSessionId);
+    }
+    if (compactionsThisRun > 0) {
+      merged.compactionCount = (existing.compactionCount ?? 0) + compactionsThisRun;
+    }
     store[sessionKey] = merged;
     return merged;
   });
