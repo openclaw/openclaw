@@ -300,7 +300,9 @@ export function createFollowupRunner(params: {
 
       const sentTexts = [
         ...(runResult.messagingToolSentTexts ?? []),
-        ...(canReuseSessionDedupeFingerprints ? (sessionEntry?.lastMessagingToolSentTexts ?? []) : []),
+        ...(canReuseSessionDedupeFingerprints
+          ? (sessionEntry?.lastMessagingToolSentTexts ?? [])
+          : []),
       ];
       const sentMediaUrls = [
         ...(runResult.messagingToolSentMediaUrls ?? []),
