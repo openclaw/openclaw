@@ -519,15 +519,19 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
     chunkerMode: "text",
     textChunkLimit: 2000,
     sendPayload: async (ctx) => {
+      const text = ctx.payload.text ?? "";
       const urls = ctx.payload.mediaUrls?.length
         ? ctx.payload.mediaUrls
         : ctx.payload.mediaUrl
           ? [ctx.payload.mediaUrl]
           : [];
+      if (!text && urls.length === 0) {
+        return { channel: "zalouser", messageId: "" };
+      }
       if (urls.length > 0) {
         let lastResult = await zalouserPlugin.outbound!.sendMedia!({
           ...ctx,
-          text: ctx.payload.text ?? "",
+          text,
           mediaUrl: urls[0],
         });
         for (let i = 1; i < urls.length; i++) {
@@ -539,7 +543,14 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
         }
         return lastResult;
       }
-      return zalouserPlugin.outbound!.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
+      const outbound = zalouserPlugin.outbound!;
+      const limit = outbound.textChunkLimit;
+      const chunks = limit && outbound.chunker ? outbound.chunker(text, limit) : [text];
+      let lastResult: Awaited<ReturnType<NonNullable<typeof outbound.sendText>>>;
+      for (const chunk of chunks) {
+        lastResult = await outbound.sendText!({ ...ctx, text: chunk });
+      }
+      return lastResult!;
     },
     sendText: async ({ to, text, accountId, cfg }) => {
       const account = resolveZalouserAccountSync({ cfg: cfg, accountId });
