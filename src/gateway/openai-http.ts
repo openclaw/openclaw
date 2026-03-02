@@ -1,10 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createDefaultDeps } from "../cli/deps.js";
-import { agentCommand } from "../commands/agent.js";
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
+import { dispatchInboundMessage } from "../auto-reply/dispatch.js";
+import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
+import type { MsgContext } from "../auto-reply/templating.js";
+import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
+import { loadConfig } from "../config/config.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
-import { defaultRuntime } from "../runtime.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import {
   buildAgentMessageFromConversationEntries,
@@ -15,6 +19,7 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import { resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
+import { injectTimestamp, timestampOptsFromConfig } from "./server-methods/agent-timestamp.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -39,22 +44,6 @@ type OpenAiChatCompletionRequest = {
 
 function writeSse(res: ServerResponse, data: unknown) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
-}
-
-function buildAgentCommandInput(params: {
-  prompt: { message: string; extraSystemPrompt?: string };
-  sessionKey: string;
-  runId: string;
-}) {
-  return {
-    message: params.prompt.message,
-    extraSystemPrompt: params.prompt.extraSystemPrompt,
-    sessionKey: params.sessionKey,
-    runId: params.runId,
-    deliver: false as const,
-    messageChannel: "webchat" as const,
-    bestEffortDeliver: false as const,
-  };
 }
 
 function writeAssistantRoleChunk(res: ServerResponse, params: { runId: string; model: string }) {
@@ -120,14 +109,19 @@ function extractTextContent(content: unknown): string {
   return "";
 }
 
-function buildAgentPrompt(messagesUnknown: unknown): {
+type AgentPromptResult = {
   message: string;
+  /** Raw text of the last user/tool message, used for command/directive parsing. */
+  commandText: string;
   extraSystemPrompt?: string;
-} {
+};
+
+function buildAgentPrompt(messagesUnknown: unknown): AgentPromptResult {
   const messages = asMessages(messagesUnknown);
 
   const systemParts: string[] = [];
   const conversationEntries: ConversationEntry[] = [];
+  let lastNonAssistantContent = "";
 
   for (const msg of messages) {
     if (!msg || typeof msg !== "object") {
@@ -146,6 +140,10 @@ function buildAgentPrompt(messagesUnknown: unknown): {
     const normalizedRole = role === "function" ? "tool" : role;
     if (normalizedRole !== "user" && normalizedRole !== "assistant" && normalizedRole !== "tool") {
       continue;
+    }
+
+    if (normalizedRole === "user" || normalizedRole === "tool") {
+      lastNonAssistantContent = content;
     }
 
     const name = typeof msg.name === "string" ? msg.name.trim() : "";
@@ -168,6 +166,7 @@ function buildAgentPrompt(messagesUnknown: unknown): {
 
   return {
     message,
+    commandText: lastNonAssistantContent || message,
     extraSystemPrompt: systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
   };
 }
@@ -187,16 +186,31 @@ function coerceRequest(val: unknown): OpenAiChatCompletionRequest {
   return val as OpenAiChatCompletionRequest;
 }
 
-function resolveAgentResponseText(result: unknown): string {
-  const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
-  if (!Array.isArray(payloads) || payloads.length === 0) {
-    return "No response from OpenClaw.";
-  }
-  const content = payloads
-    .map((p) => (typeof p.text === "string" ? p.text : ""))
-    .filter(Boolean)
-    .join("\n\n");
-  return content || "No response from OpenClaw.";
+function buildMsgContext(params: {
+  prompt: AgentPromptResult;
+  sessionKey: string;
+  runId: string;
+  cfg: ReturnType<typeof loadConfig>;
+}): MsgContext {
+  const { prompt, sessionKey, runId, cfg } = params;
+  const stampedMessage = injectTimestamp(prompt.message, timestampOptsFromConfig(cfg));
+  return {
+    Body: prompt.message,
+    BodyForAgent: stampedMessage,
+    BodyForCommands: prompt.commandText,
+    RawBody: prompt.commandText,
+    CommandBody: prompt.commandText,
+    SessionKey: sessionKey,
+    Provider: INTERNAL_MESSAGE_CHANNEL,
+    Surface: INTERNAL_MESSAGE_CHANNEL,
+    OriginatingChannel: INTERNAL_MESSAGE_CHANNEL,
+    ChatType: "direct",
+    CommandAuthorized: true,
+    MessageSid: runId,
+    // Pass OpenAI system/developer messages as the group system prompt so they
+    // are included in the agent's extra system prompt by the reply pipeline.
+    GroupSystemPrompt: prompt.extraSystemPrompt,
+  };
 }
 
 export async function handleOpenAiHttpRequest(
@@ -238,18 +252,47 @@ export async function handleOpenAiHttpRequest(
   }
 
   const runId = `chatcmpl_${randomUUID()}`;
-  const deps = createDefaultDeps();
-  const commandInput = buildAgentCommandInput({
-    prompt,
-    sessionKey,
-    runId,
+  const cfg = loadConfig();
+  const resolvedAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+  const ctx = buildMsgContext({ prompt, sessionKey, runId, cfg });
+  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+    cfg,
+    agentId: resolvedAgentId,
+    channel: INTERNAL_MESSAGE_CHANNEL,
   });
 
   if (!stream) {
-    try {
-      const result = await agentCommand(commandInput, defaultRuntime, deps);
+    const finalReplyParts: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      ...prefixOptions,
+      onError: (err) => {
+        logWarn(`openai-compat: chat completion dispatch failed: ${String(err)}`);
+      },
+      deliver: async (_payload, info) => {
+        if (info.kind !== "final") {
+          return;
+        }
+        const text = _payload.text?.trim() ?? "";
+        if (text) {
+          finalReplyParts.push(text);
+        }
+      },
+    });
 
-      const content = resolveAgentResponseText(result);
+    try {
+      await dispatchInboundMessage({
+        ctx,
+        cfg,
+        dispatcher,
+        replyOptions: { runId, onModelSelected },
+      });
+
+      const content =
+        finalReplyParts
+          .map((part) => part.trim())
+          .filter(Boolean)
+          .join("\n\n")
+          .trim() || "No response from OpenClaw.";
 
       sendJson(res, 200, {
         id: runId,
@@ -274,11 +317,13 @@ export async function handleOpenAiHttpRequest(
     return true;
   }
 
+  // --- Streaming path ---
   setSseHeaders(res);
 
   let wroteRole = false;
   let sawAssistantDelta = false;
   let closed = false;
+  const finalReplyParts: string[] = [];
 
   const unsubscribe = onAgentEvent((evt) => {
     if (evt.runId !== runId) {
@@ -325,21 +370,48 @@ export async function handleOpenAiHttpRequest(
     unsubscribe();
   });
 
+  const dispatcher = createReplyDispatcher({
+    ...prefixOptions,
+    onError: (err) => {
+      logWarn(`openai-compat: streaming dispatch failed: ${String(err)}`);
+    },
+    deliver: async (_payload, info) => {
+      if (info.kind !== "final") {
+        return;
+      }
+      const text = _payload.text?.trim() ?? "";
+      if (text) {
+        finalReplyParts.push(text);
+      }
+    },
+  });
+
   void (async () => {
     try {
-      const result = await agentCommand(commandInput, defaultRuntime, deps);
+      await dispatchInboundMessage({
+        ctx,
+        cfg,
+        dispatcher,
+        replyOptions: { runId, onModelSelected },
+      });
 
       if (closed) {
         return;
       }
 
+      // If no streaming deltas arrived, send the collected final reply parts.
       if (!sawAssistantDelta) {
         if (!wroteRole) {
           wroteRole = true;
           writeAssistantRoleChunk(res, { runId, model });
         }
 
-        const content = resolveAgentResponseText(result);
+        const content =
+          finalReplyParts
+            .map((part) => part.trim())
+            .filter(Boolean)
+            .join("\n\n")
+            .trim() || "No response from OpenClaw.";
 
         sawAssistantDelta = true;
         writeAssistantContentChunk(res, {
