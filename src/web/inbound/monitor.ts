@@ -16,6 +16,7 @@ import {
   extractLocationData,
   extractMediaPlaceholder,
   extractMentionedJids,
+  extractQuotedMessage,
   extractText,
 } from "./extract.js";
 import { downloadInboundMedia } from "./media.js";
@@ -118,6 +119,36 @@ export async function monitorWebInbox(options: {
   >();
   const GROUP_META_TTL_MS = 5 * 60 * 1000; // 5 minutes
   const lidLookup = sock.signalRepository?.lidMapping;
+  type ResolvedMedia = { mediaPath: string; mediaType?: string; mediaFileName?: string };
+  const recentMediaByMessageId = new Map<string, ResolvedMedia & { expires: number }>();
+  const RECENT_MEDIA_TTL_MS = 10 * 60 * 1000;
+  const RECENT_MEDIA_MAX_ENTRIES = 128;
+
+  const rememberRecentMedia = (messageId: string, media: ResolvedMedia) => {
+    recentMediaByMessageId.set(messageId, {
+      ...media,
+      expires: Date.now() + RECENT_MEDIA_TTL_MS,
+    });
+    while (recentMediaByMessageId.size > RECENT_MEDIA_MAX_ENTRIES) {
+      const oldest = recentMediaByMessageId.keys().next().value;
+      if (!oldest) {
+        break;
+      }
+      recentMediaByMessageId.delete(oldest);
+    }
+  };
+
+  const getRecentMedia = (messageId: string) => {
+    const entry = recentMediaByMessageId.get(messageId);
+    if (!entry) {
+      return undefined;
+    }
+    if (entry.expires <= Date.now()) {
+      recentMediaByMessageId.delete(messageId);
+      return undefined;
+    }
+    return entry;
+  };
 
   const resolveInboundJid = async (jid: string | null | undefined): Promise<string | null> =>
     resolveJidToE164(jid, { authDir: options.authDir, lidLookup });
@@ -255,8 +286,11 @@ export async function monitorWebInbox(options: {
       let mediaType: string | undefined;
       let mediaFileName: string | undefined;
       try {
-        const inboundMedia = await downloadInboundMedia(msg as proto.IWebMessageInfo, sock);
-        if (inboundMedia) {
+        const saveResolvedInboundMedia = async (inboundMedia: {
+          buffer: Buffer;
+          mimetype?: string;
+          fileName?: string;
+        }): Promise<ResolvedMedia> => {
           const maxMb =
             typeof options.mediaMaxMb === "number" && options.mediaMaxMb > 0
               ? options.mediaMaxMb
@@ -269,9 +303,55 @@ export async function monitorWebInbox(options: {
             maxBytes,
             inboundMedia.fileName,
           );
-          mediaPath = saved.path;
-          mediaType = inboundMedia.mimetype;
-          mediaFileName = inboundMedia.fileName;
+          return {
+            mediaPath: saved.path,
+            mediaType: inboundMedia.mimetype,
+            mediaFileName: inboundMedia.fileName,
+          };
+        };
+
+        const currentInboundMedia = await downloadInboundMedia(msg as proto.IWebMessageInfo, sock);
+        let resolvedMedia = currentInboundMedia
+          ? await saveResolvedInboundMedia(currentInboundMedia)
+          : undefined;
+
+        if (!resolvedMedia && replyContext?.id) {
+          const quotedContext = extractQuotedMessage(msg.message as proto.IMessage | undefined);
+          if (quotedContext) {
+            const quotedMsg = {
+              ...msg,
+              key: {
+                ...msg.key,
+                id: quotedContext.id ?? msg.key?.id ?? undefined,
+              },
+              message: quotedContext.message,
+            } as proto.IWebMessageInfo;
+            const quotedInboundMedia = await downloadInboundMedia(quotedMsg, sock);
+            if (quotedInboundMedia) {
+              resolvedMedia = await saveResolvedInboundMedia(quotedInboundMedia);
+              if (replyContext.id) {
+                rememberRecentMedia(replyContext.id, resolvedMedia);
+              }
+            }
+          }
+        }
+
+        if (!resolvedMedia && replyContext?.id) {
+          resolvedMedia = getRecentMedia(replyContext.id);
+        }
+
+        if (resolvedMedia) {
+          mediaPath = resolvedMedia.mediaPath;
+          mediaType = resolvedMedia.mediaType;
+          mediaFileName = resolvedMedia.mediaFileName;
+        }
+
+        if (id && currentInboundMedia && mediaPath) {
+          rememberRecentMedia(id, {
+            mediaPath,
+            mediaType,
+            mediaFileName,
+          });
         }
       } catch (err) {
         logVerbose(`Inbound media download failed: ${String(err)}`);

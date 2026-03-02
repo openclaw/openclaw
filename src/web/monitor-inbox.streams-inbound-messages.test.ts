@@ -1,7 +1,17 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import "./monitor-inbox.test-harness.js";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { downloadInboundMediaMock } = vi.hoisted(() => ({
+  downloadInboundMediaMock: vi.fn(),
+}));
+
+vi.mock("./inbound/media.js", () => ({
+  downloadInboundMedia: (...args: unknown[]) => downloadInboundMediaMock(...args),
+}));
+
+import { saveMediaBuffer } from "../media/store.js";
 import { monitorWebInbox } from "./inbound.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -12,6 +22,9 @@ import {
 
 describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
+  beforeEach(() => {
+    downloadInboundMediaMock.mockResolvedValue(undefined);
+  });
   type InboxOnMessage = NonNullable<Parameters<typeof monitorWebInbox>[0]["onMessage"]>;
 
   async function tick() {
@@ -287,6 +300,140 @@ describe("web monitor inbox", () => {
 
   it("captures reply context from quoted messages", async () => {
     await expectQuotedReplyContext({ conversation: "original" });
+  });
+
+  it("resolves quoted inline reply media when current message has no media", async () => {
+    downloadInboundMediaMock.mockImplementation(
+      async (message: { message?: { audioMessage?: { url?: string } } }) => {
+        const marker = message.message?.audioMessage?.url;
+        if (marker === "quoted-audio") {
+          return {
+            buffer: Buffer.from("quoted-audio"),
+            mimetype: "audio/ogg; codecs=opus",
+          };
+        }
+        return undefined;
+      },
+    );
+
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage);
+
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: "reply-1",
+            fromMe: false,
+            remoteJid: "123@g.us",
+            participant: "999@s.whatsapp.net",
+          },
+          message: {
+            extendedTextMessage: {
+              text: "@bot",
+              contextInfo: {
+                stanzaId: "orig-audio-1",
+                participant: "111@s.whatsapp.net",
+                quotedMessage: {
+                  audioMessage: { url: "quoted-audio" },
+                },
+              },
+            },
+          },
+          messageTimestamp: 1_700_000_000,
+        },
+      ],
+    });
+    await tick();
+
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToId: "orig-audio-1",
+        mediaPath: "/tmp/mid",
+        mediaType: "audio/ogg; codecs=opus",
+      }),
+    );
+    expect(downloadInboundMediaMock).toHaveBeenCalledTimes(2);
+
+    await listener.close();
+  });
+
+  it("falls back to recent reply-id media when quoted inline media is unavailable", async () => {
+    downloadInboundMediaMock.mockImplementation(
+      async (message: { key?: { id?: string }; message?: { audioMessage?: { url?: string } } }) => {
+        if (message.key?.id === "orig-audio-1" && message.message?.audioMessage) {
+          return {
+            buffer: Buffer.from("original-audio"),
+            mimetype: "audio/ogg; codecs=opus",
+          };
+        }
+        return undefined;
+      },
+    );
+
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage);
+
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: "orig-audio-1",
+            fromMe: false,
+            remoteJid: "123@g.us",
+            participant: "111@s.whatsapp.net",
+          },
+          message: {
+            audioMessage: { url: "live-audio" },
+          },
+          messageTimestamp: 1_700_000_000,
+        },
+      ],
+    });
+    await tick();
+
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: "reply-2",
+            fromMe: false,
+            remoteJid: "123@g.us",
+            participant: "999@s.whatsapp.net",
+          },
+          message: {
+            extendedTextMessage: {
+              text: "@bot",
+              contextInfo: {
+                stanzaId: "orig-audio-1",
+                participant: "111@s.whatsapp.net",
+                quotedMessage: {
+                  conversation: "<media:audio>",
+                },
+              },
+            },
+          },
+          messageTimestamp: 1_700_000_001,
+        },
+      ],
+    });
+    await tick();
+
+    expect(onMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        id: "reply-2",
+        replyToId: "orig-audio-1",
+        mediaPath: "/tmp/mid",
+        mediaType: "audio/ogg; codecs=opus",
+      }),
+    );
+    expect(vi.mocked(saveMediaBuffer)).toHaveBeenCalledTimes(1);
+
+    await listener.close();
   });
 
   it("captures reply context from wrapped quoted messages", async () => {

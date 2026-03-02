@@ -288,12 +288,10 @@ export function extractLocationData(
   return null;
 }
 
-export function describeReplyContext(rawMessage: proto.IMessage | undefined): {
+export function extractQuotedMessage(rawMessage: proto.IMessage | undefined): {
   id?: string;
-  body: string;
-  sender: string;
-  senderJid?: string;
-  senderE164?: string;
+  participantJid?: string;
+  message: proto.IMessage;
 } | null {
   const message = unwrapMessage(rawMessage);
   if (!message) {
@@ -304,6 +302,25 @@ export function describeReplyContext(rawMessage: proto.IMessage | undefined): {
   if (!quoted) {
     return null;
   }
+  return {
+    id: contextInfo?.stanzaId ? String(contextInfo.stanzaId) : undefined,
+    participantJid: contextInfo?.participant ?? undefined,
+    message: quoted,
+  };
+}
+
+export function describeReplyContext(rawMessage: proto.IMessage | undefined): {
+  id?: string;
+  body: string;
+  sender: string;
+  senderJid?: string;
+  senderE164?: string;
+} | null {
+  const quotedContext = extractQuotedMessage(rawMessage);
+  if (!quotedContext) {
+    return null;
+  }
+  const quoted = quotedContext.message;
   const location = extractLocationData(quoted);
   const locationText = location ? formatLocationText(location) : undefined;
   const text = extractText(quoted);
@@ -318,11 +335,11 @@ export function describeReplyContext(rawMessage: proto.IMessage | undefined): {
     );
     return null;
   }
-  const senderJid = contextInfo?.participant ?? undefined;
+  const senderJid = quotedContext.participantJid;
   const senderE164 = senderJid ? (jidToE164(senderJid) ?? senderJid) : undefined;
   const sender = senderE164 ?? "unknown sender";
   return {
-    id: contextInfo?.stanzaId ? String(contextInfo.stanzaId) : undefined,
+    id: quotedContext.id,
     body,
     sender,
     senderJid,
