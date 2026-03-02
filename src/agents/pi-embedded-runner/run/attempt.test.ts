@@ -36,7 +36,7 @@ describe("resolvePromptBuildHookResult", () => {
     expect(hookRunner.runBeforeAgentStart).not.toHaveBeenCalled();
     expect(result).toEqual({
       prependContext: "from-cache",
-      systemPrompt: "legacy-system",
+      systemPrompt: undefined,
     });
   });
 
@@ -53,7 +53,29 @@ describe("resolvePromptBuildHookResult", () => {
     expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledTimes(1);
     expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledWith({ prompt: "hello", messages }, {});
     expect(result.prependContext).toBe("from-hook");
+    expect(result.systemPrompt).toBeUndefined();
   });
+  it("prefers before_prompt_build systemPrompt over legacy before_agent_start", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn(
+        (hookName: "before_prompt_build" | "before_agent_start") =>
+          hookName === "before_prompt_build" || hookName === "before_agent_start",
+      ),
+      runBeforePromptBuild: vi.fn(async () => ({ systemPrompt: "runtime-system", prependContext: "new" })),
+      runBeforeAgentStart: vi.fn(async () => ({ systemPrompt: "stale-legacy", prependContext: "legacy" })),
+    };
+
+    const result = await resolvePromptBuildHookResult({
+      prompt: "hello",
+      messages: [],
+      hookCtx: {},
+      hookRunner,
+    });
+
+    expect(result.systemPrompt).toBe("runtime-system");
+    expect(result.prependContext).toBe("new\n\nlegacy");
+  });
+
 });
 
 describe("resolvePromptModeForSession", () => {

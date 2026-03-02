@@ -337,7 +337,9 @@ export async function resolvePromptBuildHookResult(params: {
           })
       : undefined);
   return {
-    systemPrompt: promptBuildResult?.systemPrompt ?? legacyResult?.systemPrompt,
+    // Legacy before_agent_start may carry stale/cached system prompts; only the new
+    // before_prompt_build hook can override the full system prompt safely.
+    systemPrompt: promptBuildResult?.systemPrompt,
     prependContext: [promptBuildResult?.prependContext, legacyResult?.prependContext]
       .filter((value): value is string => Boolean(value))
       .join("\n\n"),
