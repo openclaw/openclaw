@@ -2,7 +2,9 @@ import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
+  createBoundedCounter,
   createDedupeCache,
+  createFixedWindowRateLimiter,
   readJsonBodyWithLimit,
   registerWebhookTarget,
   rejectNonPostWebhookRequest,
@@ -14,12 +16,13 @@ import type { ResolvedZaloAccount } from "./accounts.js";
 import type { ZaloFetch, ZaloUpdate } from "./api.js";
 import type { ZaloRuntimeEnv } from "./monitor.js";
 
-type WebhookRateLimitState = { count: number; windowStartMs: number };
-
 const ZALO_WEBHOOK_RATE_LIMIT_WINDOW_MS = 60_000;
 const ZALO_WEBHOOK_RATE_LIMIT_MAX_REQUESTS = 120;
+const ZALO_WEBHOOK_RATE_LIMIT_MAX_TRACKED_KEYS = 4_096;
 const ZALO_WEBHOOK_REPLAY_WINDOW_MS = 5 * 60_000;
 const ZALO_WEBHOOK_COUNTER_LOG_EVERY = 25;
+const ZALO_WEBHOOK_COUNTER_MAX_TRACKED_KEYS = 4_096;
+const ZALO_WEBHOOK_COUNTER_TTL_MS = 6 * 60 * 60_000;
 
 export type ZaloWebhookTarget = {
   token: string;
@@ -40,12 +43,32 @@ export type ZaloWebhookProcessUpdate = (params: {
 }) => Promise<void>;
 
 const webhookTargets = new Map<string, ZaloWebhookTarget[]>();
-const webhookRateLimits = new Map<string, WebhookRateLimitState>();
+const webhookRateLimiter = createFixedWindowRateLimiter({
+  windowMs: ZALO_WEBHOOK_RATE_LIMIT_WINDOW_MS,
+  maxRequests: ZALO_WEBHOOK_RATE_LIMIT_MAX_REQUESTS,
+  maxTrackedKeys: ZALO_WEBHOOK_RATE_LIMIT_MAX_TRACKED_KEYS,
+});
 const recentWebhookEvents = createDedupeCache({
   ttlMs: ZALO_WEBHOOK_REPLAY_WINDOW_MS,
   maxSize: 5000,
 });
-const webhookStatusCounters = new Map<string, number>();
+const webhookStatusCounters = createBoundedCounter({
+  maxTrackedKeys: ZALO_WEBHOOK_COUNTER_MAX_TRACKED_KEYS,
+  ttlMs: ZALO_WEBHOOK_COUNTER_TTL_MS,
+});
+
+export function clearZaloWebhookSecurityStateForTest(): void {
+  webhookRateLimiter.clear();
+  webhookStatusCounters.clear();
+}
+
+export function getZaloWebhookRateLimitStateSizeForTest(): number {
+  return webhookRateLimiter.size();
+}
+
+export function getZaloWebhookStatusCounterSizeForTest(): number {
+  return webhookStatusCounters.size();
+}
 
 function isJsonContentType(value: string | string[] | undefined): boolean {
   const first = Array.isArray(value) ? value[0] : value;
@@ -73,20 +96,6 @@ function timingSafeEquals(left: string, right: string): boolean {
   return timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-function isWebhookRateLimited(key: string, nowMs: number): boolean {
-  const state = webhookRateLimits.get(key);
-  if (!state || nowMs - state.windowStartMs >= ZALO_WEBHOOK_RATE_LIMIT_WINDOW_MS) {
-    webhookRateLimits.set(key, { count: 1, windowStartMs: nowMs });
-    return false;
-  }
-
-  state.count += 1;
-  if (state.count > ZALO_WEBHOOK_RATE_LIMIT_MAX_REQUESTS) {
-    return true;
-  }
-  return false;
-}
-
 function isReplayEvent(update: ZaloUpdate, nowMs: number): boolean {
   const messageId = update.message?.message_id;
   if (!messageId) {
@@ -105,8 +114,7 @@ function recordWebhookStatus(
     return;
   }
   const key = `${path}:${statusCode}`;
-  const next = (webhookStatusCounters.get(key) ?? 0) + 1;
-  webhookStatusCounters.set(key, next);
+  const next = webhookStatusCounters.increment(key);
   if (next === 1 || next % ZALO_WEBHOOK_COUNTER_LOG_EVERY === 0) {
     runtime?.log?.(
       `[zalo] webhook anomaly path=${path} status=${statusCode} count=${String(next)}`,
@@ -127,7 +135,7 @@ export async function handleZaloWebhookRequest(
   if (!resolved) {
     return false;
   }
-  const { targets } = resolved;
+  const { targets, path } = resolved;
 
   if (rejectNonPostWebhookRequest(req, res)) {
     return true;
@@ -140,21 +148,20 @@ export async function handleZaloWebhookRequest(
   if (matchedTarget.kind === "none") {
     res.statusCode = 401;
     res.end("unauthorized");
-    recordWebhookStatus(targets[0]?.runtime, req.url ?? "<unknown>", res.statusCode);
+    recordWebhookStatus(targets[0]?.runtime, path, res.statusCode);
     return true;
   }
   if (matchedTarget.kind === "ambiguous") {
     res.statusCode = 401;
     res.end("ambiguous webhook target");
-    recordWebhookStatus(targets[0]?.runtime, req.url ?? "<unknown>", res.statusCode);
+    recordWebhookStatus(targets[0]?.runtime, path, res.statusCode);
     return true;
   }
   const target = matchedTarget.target;
-  const path = req.url ?? "<unknown>";
   const rateLimitKey = `${path}:${req.socket.remoteAddress ?? "unknown"}`;
   const nowMs = Date.now();
 
-  if (isWebhookRateLimited(rateLimitKey, nowMs)) {
+  if (webhookRateLimiter.isRateLimited(rateLimitKey, nowMs)) {
     res.statusCode = 429;
     res.end("Too Many Requests");
     recordWebhookStatus(target.runtime, path, res.statusCode);
