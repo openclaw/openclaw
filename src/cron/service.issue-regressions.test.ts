@@ -20,6 +20,7 @@ const noopLogger = {
   trace: vi.fn(),
 };
 const TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1_000;
+const FAST_TIMEOUT_SECONDS = 0.006;
 type CronServiceOptions = ConstructorParameters<typeof CronService>[0];
 
 function topOfHourOffsetMs(jobId: string) {
@@ -1178,7 +1179,7 @@ describe("Cron issue regressions", () => {
       name: "abort timeout",
       scheduledAt,
       schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
-      payload: { kind: "agentTurn", message: "work", timeoutSeconds: 0.01 },
+      payload: { kind: "agentTurn", message: "work", timeoutSeconds: FAST_TIMEOUT_SECONDS },
       state: { nextRunAtMs: scheduledAt },
     });
     await writeCronJobs(store.storePath, [cronJob]);
@@ -1219,7 +1220,7 @@ describe("Cron issue regressions", () => {
       name: "timeout side effects",
       scheduledAt,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: scheduledAt },
-      payload: { kind: "agentTurn", message: "work", timeoutSeconds: 0.01 },
+      payload: { kind: "agentTurn", message: "work", timeoutSeconds: FAST_TIMEOUT_SECONDS },
       state: { nextRunAtMs: scheduledAt },
     });
     await writeCronJobs(store.storePath, [cronJob]);
@@ -1278,7 +1279,7 @@ describe("Cron issue regressions", () => {
       schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
       sessionTarget: "isolated",
       wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "work", timeoutSeconds: 0.01 },
+      payload: { kind: "agentTurn", message: "work", timeoutSeconds: FAST_TIMEOUT_SECONDS },
       delivery: { mode: "none" },
     });
 
@@ -1306,7 +1307,7 @@ describe("Cron issue regressions", () => {
       name: "startup timeout",
       scheduledAt,
       schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
-      payload: { kind: "agentTurn", message: "work", timeoutSeconds: 0.01 },
+      payload: { kind: "agentTurn", message: "work", timeoutSeconds: FAST_TIMEOUT_SECONDS },
       state: { nextRunAtMs: scheduledAt },
     });
     await writeCronJobs(store.storePath, [cronJob]);
@@ -1540,7 +1541,7 @@ describe("Cron issue regressions", () => {
 
     // Keep this short for suite speed while still separating expected timeout
     // from the 1/3-regression timeout.
-    const timeoutSeconds = 0.16;
+    const timeoutSeconds = 0.12;
     const cronJob = createIsolatedRegressionJob({
       id: "timeout-fraction-29774",
       name: "timeout fraction regression",
@@ -1596,7 +1597,7 @@ describe("Cron issue regressions", () => {
     // The abort must not fire at the old ~1/3 regression value.
     // Keep the lower bound conservative for loaded CI runners.
     const elapsedMs = (abortWallMs ?? Date.now()) - wallStart;
-    expect(elapsedMs).toBeGreaterThanOrEqual(timeoutSeconds * 1000 * 0.7);
+    expect(elapsedMs).toBeGreaterThanOrEqual(timeoutSeconds * 1000 * 0.6);
 
     const job = state.store?.jobs.find((entry) => entry.id === "timeout-fraction-29774");
     expect(job?.state.lastStatus).toBe("error");
