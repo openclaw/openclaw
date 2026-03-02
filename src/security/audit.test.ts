@@ -5,7 +5,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { collectPluginsCodeSafetyFindings } from "./audit-extra.js";
+import {
+  collectInstalledSkillsCodeSafetyFindings,
+  collectPluginsCodeSafetyFindings,
+} from "./audit-extra.js";
 import type { SecurityAuditOptions, SecurityAuditReport } from "./audit.js";
 import { runSecurityAudit } from "./audit.js";
 import * as skillScanner from "./skill-scanner.js";
@@ -2666,24 +2669,22 @@ description: test skill
   });
 
   it("reports detailed code-safety issues for both plugins and skills", async () => {
-    const deepRes = await runSecurityAudit({
-      config: { agents: { defaults: { workspace: sharedCodeSafetyWorkspaceDir } } },
-      includeFilesystem: true,
-      includeChannelSecurity: false,
-      deep: true,
-      stateDir: sharedCodeSafetyStateDir,
-      probeGatewayFn: async (opts) => successfulProbeResult(opts.url),
-      execDockerRawFn: execDockerRawUnavailable,
-    });
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: sharedCodeSafetyWorkspaceDir } },
+    };
+    const [pluginFindings, skillFindings] = await Promise.all([
+      collectPluginsCodeSafetyFindings({ stateDir: sharedCodeSafetyStateDir }),
+      collectInstalledSkillsCodeSafetyFindings({ cfg, stateDir: sharedCodeSafetyStateDir }),
+    ]);
 
-    const pluginFinding = deepRes.findings.find(
+    const pluginFinding = pluginFindings.find(
       (finding) => finding.checkId === "plugins.code_safety" && finding.severity === "critical",
     );
     expect(pluginFinding).toBeDefined();
     expect(pluginFinding?.detail).toContain("dangerous-exec");
     expect(pluginFinding?.detail).toMatch(/\.hidden[\\/]+index\.js:\d+/);
 
-    const skillFinding = deepRes.findings.find(
+    const skillFinding = skillFindings.find(
       (finding) => finding.checkId === "skills.code_safety" && finding.severity === "critical",
     );
     expect(skillFinding).toBeDefined();
