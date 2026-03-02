@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 
 const note = vi.hoisted(() => vi.fn());
 
@@ -7,6 +8,20 @@ vi.mock("../terminal/note.js", () => ({
 }));
 
 import { noteOpenAIOAuthTlsPrerequisites } from "./oauth-tls-preflight.js";
+
+function buildOpenAICodexOAuthConfig(): OpenClawConfig {
+  return {
+    auth: {
+      profiles: {
+        "openai-codex:user@example.com": {
+          provider: "openai-codex",
+          mode: "oauth",
+          email: "user@example.com",
+        },
+      },
+    },
+  };
+}
 
 describe("noteOpenAIOAuthTlsPrerequisites", () => {
   beforeEach(() => {
@@ -23,7 +38,7 @@ describe("noteOpenAIOAuthTlsPrerequisites", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     try {
-      await noteOpenAIOAuthTlsPrerequisites();
+      await noteOpenAIOAuthTlsPrerequisites({ cfg: buildOpenAICodexOAuthConfig() });
     } finally {
       vi.stubGlobal("fetch", originalFetch);
     }
@@ -41,10 +56,40 @@ describe("noteOpenAIOAuthTlsPrerequisites", () => {
       vi.fn(async () => new Response("", { status: 400 })),
     );
     try {
-      await noteOpenAIOAuthTlsPrerequisites();
+      await noteOpenAIOAuthTlsPrerequisites({ cfg: buildOpenAICodexOAuthConfig() });
     } finally {
       vi.stubGlobal("fetch", originalFetch);
     }
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("skips probe when OpenAI Codex OAuth is not configured", async () => {
+    const fetchMock = vi.fn(async () => new Response("", { status: 400 }));
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await noteOpenAIOAuthTlsPrerequisites({ cfg: {} });
+    } finally {
+      vi.stubGlobal("fetch", originalFetch);
+    }
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("runs probe in deep mode even without OpenAI Codex OAuth profile", async () => {
+    const fetchMock = vi.fn(async () => new Response("", { status: 400 }));
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await noteOpenAIOAuthTlsPrerequisites({ cfg: {}, deep: true });
+    } finally {
+      vi.stubGlobal("fetch", originalFetch);
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(note).not.toHaveBeenCalled();
   });
 });
