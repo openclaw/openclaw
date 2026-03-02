@@ -1,4 +1,6 @@
-import { createMatrixClient } from "./client.js";
+import { LogService } from "@vector-im/matrix-bot-sdk";
+import { createMatrixClient } from "./client/create-client.js";
+import { startMatrixClientWithGrace } from "./client/startup.js";
 
 type MatrixClientBootstrapAuth = {
   homeserver: string;
@@ -34,6 +36,11 @@ export async function createPreparedMatrixClient(opts: {
       // Ignore crypto prep failures for one-off requests.
     }
   }
-  await client.start();
+  await startMatrixClientWithGrace({
+    client,
+    onError: (err: unknown) => {
+      LogService.error("MatrixClientBootstrap", "client.start() error:", err);
+    },
+  });
   return client;
 }

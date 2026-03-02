@@ -42,13 +42,15 @@ describe("createDirectRoomTracker", () => {
   });
 
   it("does not classify 2-member rooms as DMs without direct flags", async () => {
-    const tracker = createDirectRoomTracker(createMockClient({ isDm: false }));
+    const client = createMockClient({ isDm: false });
+    const tracker = createDirectRoomTracker(client);
     await expect(
       tracker.isDirectMessage({
         roomId: "!room:example.org",
         senderId: "@alice:example.org",
       }),
     ).resolves.toBe(false);
+    expect(client.getJoinedRoomMembers).not.toHaveBeenCalled();
   });
 
   it("uses is_direct member flags when present", async () => {
