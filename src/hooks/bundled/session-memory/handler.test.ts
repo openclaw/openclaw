@@ -42,17 +42,24 @@ function createMockSessionContent(
 
 async function runNewWithPreviousSessionEntry(params: {
   tempDir: string;
-  previousSessionEntry: { sessionId: string; sessionFile?: string };
+  previousSessionEntry?: { sessionId: string; sessionFile?: string };
+  sessionEntry?: { sessionId: string; sessionFile?: string };
   cfg?: OpenClawConfig;
   action?: "new" | "reset";
+  eventType?: "command" | "session";
+  eventAction?: string;
 }): Promise<{ files: string[]; memoryContent: string }> {
-  const event = createHookEvent("command", params.action ?? "new", "agent:main:main", {
+  const eventType = params.eventType ?? "command";
+  const eventAction =
+    params.eventAction ?? (eventType === "command" ? (params.action ?? "new") : "end");
+  const event = createHookEvent(eventType, eventAction, "agent:main:main", {
     cfg:
       params.cfg ??
       ({
         agents: { defaults: { workspace: params.tempDir } },
       } satisfies OpenClawConfig),
     previousSessionEntry: params.previousSessionEntry,
+    sessionEntry: params.sessionEntry,
   });
 
   await handler(event);
@@ -220,6 +227,35 @@ describe("session-memory hook", () => {
     expect(files.length).toBe(1);
     expect(memoryContent).toContain("user: Please reset and keep notes");
     expect(memoryContent).toContain("assistant: Captured before reset");
+  });
+
+  it("creates memory file when session:end is emitted", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "Need autosave on timeout" },
+      { role: "assistant", content: "Session ending automatically" },
+    ]);
+    const { tempDir, sessionsDir } = await createSessionMemoryWorkspace();
+    const sessionId = "session-end-123";
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: `${sessionId}.jsonl`,
+      content: sessionContent,
+    });
+
+    const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      cfg: makeSessionMemoryConfig(tempDir),
+      sessionEntry: {
+        sessionId,
+        sessionFile,
+      },
+      eventType: "session",
+      eventAction: "end",
+    });
+
+    expect(files.length).toBe(1);
+    expect(memoryContent).toContain("user: Need autosave on timeout");
+    expect(memoryContent).toContain("assistant: Session ending automatically");
   });
 
   it("filters out non-message entries (tool calls, system)", async () => {

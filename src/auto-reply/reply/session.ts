@@ -27,6 +27,7 @@ import {
 } from "../../config/sessions.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -381,7 +382,6 @@ export async function initSessionState(params: {
     sessionStore[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
   }
   const entry = sessionStore[sessionKey];
-  const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
   const now = Date.now();
   const isThread = resolveThreadFlag({
     sessionKey,
@@ -437,6 +437,8 @@ export async function initSessionState(params: {
       persistedLabel = entry.label;
     }
   }
+  const endedSessionEntry = isNewSession && entry ? { ...entry } : undefined;
+  const previousSessionEntry = resetTriggered ? endedSessionEntry : undefined;
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
   // Track the originating channel/to for announce routing (subagent announce-back).
@@ -635,36 +637,49 @@ export async function initSessionState(params: {
     IsNewSession: isNewSession ? "true" : "false",
   };
 
-  // Run session plugin hooks (fire-and-forget)
+  // Run session plugin + internal lifecycle hooks (fire-and-forget)
   const hookRunner = getGlobalHookRunner();
-  if (hookRunner && isNewSession) {
+  if (isNewSession) {
     const effectiveSessionId = sessionId ?? "";
 
     // If replacing an existing session, fire session_end for the old one
-    if (previousSessionEntry?.sessionId && previousSessionEntry.sessionId !== effectiveSessionId) {
-      if (hookRunner.hasHooks("session_end")) {
+    if (endedSessionEntry?.sessionId && endedSessionEntry.sessionId !== effectiveSessionId) {
+      if (hookRunner?.hasHooks("session_end")) {
         void hookRunner
           .runSessionEnd(
             {
-              sessionId: previousSessionEntry.sessionId,
+              sessionId: endedSessionEntry.sessionId,
               messageCount: 0,
             },
             {
-              sessionId: previousSessionEntry.sessionId,
+              sessionId: endedSessionEntry.sessionId,
               agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
             },
           )
           .catch(() => {});
       }
+
+      // /new and /reset already trigger command hooks. Emit session:end only for
+      // automatic freshness rollovers so session-memory doesn't double-save.
+      if (!resetTriggered) {
+        void triggerInternalHook(
+          createInternalHookEvent("session", "end", sessionKey, {
+            sessionEntry: endedSessionEntry,
+            previousSessionEntry: endedSessionEntry,
+            commandSource: "session:freshness",
+            cfg,
+          }),
+        ).catch(() => {});
+      }
     }
 
     // Fire session_start for the new session
-    if (hookRunner.hasHooks("session_start")) {
+    if (hookRunner?.hasHooks("session_start")) {
       void hookRunner
         .runSessionStart(
           {
             sessionId: effectiveSessionId,
-            resumedFrom: previousSessionEntry?.sessionId,
+            resumedFrom: endedSessionEntry?.sessionId,
           },
           {
             sessionId: effectiveSessionId,

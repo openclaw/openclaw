@@ -6,6 +6,8 @@ import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { saveSessionStore } from "../../config/sessions.js";
+import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
+import { clearInternalHooks, registerInternalHook } from "../../hooks/internal-hooks.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
@@ -1601,5 +1603,86 @@ describe("initSessionState internal channel routing preservation", () => {
     });
 
     expect(result.sessionEntry.lastChannel).toBe("webchat");
+  });
+});
+
+describe("initSessionState session lifecycle hooks", () => {
+  beforeEach(() => {
+    clearInternalHooks();
+  });
+
+  afterEach(() => {
+    clearInternalHooks();
+  });
+
+  const waitForAsyncHookDelivery = async (): Promise<void> => {
+    for (let i = 0; i < 5; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  };
+
+  it("emits session:end when replacing a stale session automatically", async () => {
+    const storePath = await createStorePath("session-end-auto-rollover-");
+    const sessionKey = "agent:main:main";
+    const existingSessionId = "stale-session-id";
+    await saveSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: 0,
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const captured: InternalHookEvent[] = [];
+    registerInternalHook("session:end", async (event) => {
+      captured.push(event);
+    });
+
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    await waitForAsyncHookDelivery();
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.sessionKey).toBe(sessionKey);
+    expect(captured[0]?.context).toMatchObject({
+      sessionEntry: { sessionId: existingSessionId },
+      commandSource: "session:freshness",
+    });
+  });
+
+  it("does not emit session:end for manual /new resets", async () => {
+    const storePath = await createStorePath("session-end-manual-reset-");
+    const sessionKey = "agent:main:main";
+    const existingSessionId = "fresh-session-id";
+    await saveSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const captured: InternalHookEvent[] = [];
+    registerInternalHook("session:end", async (event) => {
+      captured.push(event);
+    });
+
+    const result = await initSessionState({
+      ctx: { Body: "/new", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    await waitForAsyncHookDelivery();
+
+    expect(captured).toHaveLength(0);
   });
 });
