@@ -130,4 +130,42 @@ describe("config schema regressions", () => {
       expect(res.issues[0]?.path).toBe("channels.imessage.attachmentRoots.0");
     }
   });
+
+  it('accepts legacy gateway.mode="gateway" (alias of local)', () => {
+    const res = validateConfigObject({
+      gateway: {
+        mode: "gateway",
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.gateway?.mode).toBe("local");
+    }
+  });
+
+  it('accepts legacy gateway.bind="0.0.0.0" by mapping to customBindHost', () => {
+    const res = validateConfigObject({
+      gateway: {
+        bind: "0.0.0.0",
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.gateway?.bind).toBe("custom");
+      expect(res.config.gateway?.customBindHost).toBe("0.0.0.0");
+    }
+  });
+
+  it("rejects legacy gateway.bind IPv4 when gateway.customBindHost conflicts", () => {
+    const res = validateConfigObject({
+      gateway: {
+        bind: "0.0.0.0",
+        customBindHost: "127.0.0.1",
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
 });

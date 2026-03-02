@@ -198,9 +198,44 @@ export function mapSensitivePaths(
   let currentSchema = schema;
   let isSensitive = sensitive.has(currentSchema);
 
-  while (isUnwrappable(currentSchema)) {
-    currentSchema = currentSchema.unwrap();
-    isSensitive ||= sensitive.has(currentSchema);
+  // Unwrap schema wrappers so we can traverse nested schemas for hints.
+  // Order matters: preprocess returns ZodPipe (v4) or ZodEffects (older), and
+  // the output may still be optional/nullable/etc.
+  const ZodEffectsCtor = (z as unknown as { ZodEffects?: unknown }).ZodEffects;
+  while (true) {
+    if (isUnwrappable(currentSchema)) {
+      currentSchema = currentSchema.unwrap();
+      isSensitive ||= sensitive.has(currentSchema);
+      continue;
+    }
+
+    if (currentSchema instanceof z.ZodPipe) {
+      currentSchema = currentSchema._def.out as z.ZodType;
+      isSensitive ||= sensitive.has(currentSchema);
+      continue;
+    }
+
+    if (
+      ZodEffectsCtor &&
+      typeof ZodEffectsCtor === "function" &&
+      currentSchema instanceof (ZodEffectsCtor as new (...args: never[]) => z.ZodType)
+    ) {
+      currentSchema = (currentSchema as unknown as { _def: { schema: z.ZodType } })._def.schema;
+      isSensitive ||= sensitive.has(currentSchema);
+      continue;
+    }
+
+    if (
+      (currentSchema as unknown as { _def?: { typeName?: string; schema?: z.ZodType } })._def
+        ?.typeName === "ZodEffects" &&
+      (currentSchema as unknown as { _def?: { schema?: z.ZodType } })._def?.schema
+    ) {
+      currentSchema = (currentSchema as unknown as { _def: { schema: z.ZodType } })._def.schema;
+      isSensitive ||= sensitive.has(currentSchema);
+      continue;
+    }
+
+    break;
   }
 
   if (isSensitive) {
