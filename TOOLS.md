@@ -41,6 +41,36 @@ Add whatever helps you do your job. This is your cheat sheet.
 
 ---
 
+## ⚠️ 파일 쓰기 경로 제한 (중요!)
+
+**`write`/`edit` 도구는 워크스페이스(`C:\MAIBOT`) 내부에만 쓸 수 있다.**
+
+- `C:\Users\...\JINI_SYNC\...` (Obsidian 볼트) → ❌ write 도구 실패
+- `C:\TEST\...` (프로젝트 폴더) → ❌ write 도구 실패
+- `C:\MAIBOT\...` → ✅ write 도구 정상
+
+**외부 경로에 파일을 쓸 때는 반드시 `exec` (PowerShell)를 사용:**
+
+```powershell
+# Obsidian 노트 쓰기
+$content = @"
+# 제목
+내용...
+"@
+$content | Out-File -FilePath "C:\Users\jini9\OneDrive\Documents\JINI_SYNC\00.DAILY\파일명.md" -Encoding utf8
+
+# 프로젝트 파일 쓰기
+Set-Content -Path "C:\TEST\프로젝트\파일.md" -Value $content -Encoding utf8
+```
+
+**규칙:**
+
+- 워크스페이스 내부 (`C:\MAIBOT\memory\`, `C:\MAIBOT\skills\` 등) → `write`/`edit` 도구 사용
+- 워크스페이스 외부 (Obsidian, `C:\TEST\*` 프로젝트) → `exec` + PowerShell `Out-File`/`Set-Content` 사용
+- 크론 작업에서 Obsidian 노트/리포트 저장 시 이 규칙 반드시 따를 것
+
+---
+
 ## MAIBOT-Specific Tools
 
 ### Development Commands
