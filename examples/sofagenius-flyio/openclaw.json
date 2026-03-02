@@ -1,0 +1,37 @@
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "anthropic/claude-sonnet-4-5",
+        "fallbacks": ["anthropic/claude-haiku-4-5"]
+      },
+      "sandbox": {
+        "mode": "off"
+      },
+      "maxConcurrent": 4
+    },
+    "list": [
+      {
+        "id": "main",
+        "default": true
+      }
+    ]
+  },
+  "auth": {
+    "profiles": {
+      "anthropic:default": {
+        "mode": "token",
+        "provider": "anthropic"
+      }
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "bind": "lan"
+  },
+  "skills": {
+    "load": {
+      "extraDirs": ["/opt/sofagenius-skills"]
+    }
+  }
+}
