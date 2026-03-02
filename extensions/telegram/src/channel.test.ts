@@ -182,4 +182,47 @@ describe("telegramPlugin duplicate token guard", () => {
     );
     expect(result).toMatchObject({ channel: "telegram", messageId: "tg-1" });
   });
+
+  it("ignores accounts with missing tokens during duplicate-token checks", async () => {
+    const cfg = createCfg();
+    cfg.channels!.telegram!.accounts!.ops = {} as never;
+
+    const alertsAccount = telegramPlugin.config.resolveAccount(cfg, "alerts");
+    expect(await telegramPlugin.config.isConfigured!(alertsAccount, cfg)).toBe(true);
+  });
+
+  it("does not crash startup when a resolved account token is undefined", async () => {
+    const monitorTelegramProvider = vi.fn(async () => undefined);
+    const probeTelegram = vi.fn(async () => ({ ok: false }));
+    const runtime = {
+      channel: {
+        telegram: {
+          monitorTelegramProvider,
+          probeTelegram,
+        },
+      },
+      logging: {
+        shouldLogVerbose: () => false,
+      },
+    } as unknown as PluginRuntime;
+    setTelegramRuntime(runtime);
+
+    const cfg = createCfg();
+    const ctx = createStartAccountCtx({
+      cfg,
+      accountId: "ops",
+      runtime: createRuntimeEnv(),
+    });
+    ctx.account = {
+      ...ctx.account,
+      token: undefined as unknown as string,
+    } as ResolvedTelegramAccount;
+
+    await expect(telegramPlugin.gateway!.startAccount!(ctx)).resolves.toBeUndefined();
+    expect(monitorTelegramProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        token: "",
+      }),
+    );
+  });
 });

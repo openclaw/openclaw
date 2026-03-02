@@ -146,7 +146,7 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(toolResult.toolUseId).toBe("callabcitem123");
   });
 
-  it("does not sanitize tool IDs in images-only mode", async () => {
+  it("sanitizes tool IDs in images-only mode when explicitly enabled", async () => {
     const input = [
       {
         role: "assistant",
@@ -169,10 +169,10 @@ describe("sanitizeSessionMessagesImages", () => {
 
     const assistant = out[0] as unknown as { content?: Array<{ type?: string; id?: string }> };
     const toolCall = assistant.content?.find((b) => b.type === "toolCall");
-    expect(toolCall?.id).toBe("call_123|fc_456");
+    expect(toolCall?.id).toBe("call123fc456");
 
     const toolResult = out[1] as unknown as { toolCallId?: string };
-    expect(toolResult.toolCallId).toBe("call_123|fc_456");
+    expect(toolResult.toolCallId).toBe("call123fc456");
   });
   it("filters whitespace-only assistant text blocks", async () => {
     const input = [
