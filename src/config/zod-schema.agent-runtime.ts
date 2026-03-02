@@ -11,6 +11,13 @@ import {
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
+// Regex for validating domain patterns in urlAllowlist
+// Valid: example.com, *.github.com, *.example.co.uk, localhost, ::1, [::1], 2001:db8::1
+// Invalid: "", https://example.com, example.com/path, *, *.
+// IPv6: bare (::1) and bracketed ([::1]) forms are both accepted; wildcards are not supported for IPv6.
+const DOMAIN_PATTERN_REGEX =
+  /^(\*\.)?[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$|^\[?[0-9a-fA-F:]+\]?$/;
+
 export const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
@@ -320,6 +327,14 @@ export const ToolsWebFetchSchema = z
 
 export const ToolsWebSchema = z
   .object({
+    urlAllowlist: z
+      .array(
+        z.string().regex(DOMAIN_PATTERN_REGEX, {
+          message:
+            'Invalid domain pattern. Valid: "example.com", "*.github.com". Invalid: "", "https://example.com", "example.com/path", "*", "*."',
+        }),
+      )
+      .optional(),
     search: ToolsWebSearchSchema,
     fetch: ToolsWebFetchSchema,
   })

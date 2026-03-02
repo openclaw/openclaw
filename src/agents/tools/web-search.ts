@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
+import { matchesHostnameAllowlist, normalizeHostnameAllowlist } from "../../infra/net/ssrf.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import type { AnyAgentTool } from "./common.js";
@@ -19,8 +20,12 @@ import {
   readResponseText,
   resolveCacheTtlMs,
   resolveTimeoutSeconds,
+  resolveUrlAllowlist,
   writeCache,
 } from "./web-shared.js";
+
+// Re-export for backwards compatibility
+export { resolveUrlAllowlist } from "./web-shared.js";
 
 const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
@@ -88,6 +93,27 @@ type WebSearchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer
     ? Search
     : undefined
   : undefined;
+
+export function filterResultsByAllowlist(
+  results: Array<{ url?: string; siteName?: string }>,
+  allowlist: string[],
+): Array<{ url?: string; siteName?: string }> {
+  if (allowlist.length === 0) {
+    return results;
+  }
+  const normalizedAllowlist = normalizeHostnameAllowlist(allowlist);
+  return results.filter((result) => {
+    if (!result.url) {
+      return true; // Keep entries without URL
+    }
+    try {
+      const hostname = new URL(result.url).hostname;
+      return matchesHostnameAllowlist(hostname, normalizedAllowlist);
+    } catch {
+      return false; // Block entries with unparseable URLs (safe default for restrictive environments)
+    }
+  });
+}
 
 type BraveSearchResult = {
   title?: string;
@@ -1153,6 +1179,7 @@ async function runWebSearch(params: {
   geminiModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
+  urlAllowlist?: string[];
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
     params.provider === "brave"
@@ -1167,6 +1194,19 @@ async function runWebSearch(params: {
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
+    // Apply allowlist filtering to cache hits to ensure current allowlist is respected
+    if (params.urlAllowlist && params.urlAllowlist.length > 0 && cached.value.results) {
+      const filteredResults = filterResultsByAllowlist(
+        cached.value.results as Array<{ url?: string; siteName?: string }>,
+        params.urlAllowlist,
+      );
+      return {
+        ...cached.value,
+        results: filteredResults,
+        count: filteredResults.length,
+        cached: true,
+      };
+    }
     return { ...cached.value, cached: true };
   }
 
@@ -1338,7 +1378,13 @@ async function runWebSearch(params: {
     },
   );
 
-  const payload = {
+  // Filter results by urlAllowlist if configured
+  const filteredResults = params.urlAllowlist
+    ? filterResultsByAllowlist(mapped, params.urlAllowlist)
+    : mapped;
+
+  // Store unfiltered results in cache to avoid issues when allowlist changes
+  const unfilteredPayload = {
     query: params.query,
     provider: params.provider,
     count: mapped.length,
@@ -1351,8 +1397,14 @@ async function runWebSearch(params: {
     },
     results: mapped,
   };
-  writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
-  return payload;
+  writeCache(SEARCH_CACHE, cacheKey, unfilteredPayload, params.cacheTtlMs);
+
+  // Return filtered results
+  return {
+    ...unfilteredPayload,
+    count: filteredResults.length,
+    results: filteredResults,
+  };
 }
 
 export function createWebSearchTool(options?: {
@@ -1369,6 +1421,7 @@ export function createWebSearchTool(options?: {
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
+  const urlAllowlist = resolveUrlAllowlist(options?.config?.tools?.web);
 
   const description =
     provider === "perplexity"
@@ -1470,6 +1523,7 @@ export function createWebSearchTool(options?: {
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
+        urlAllowlist,
       });
       return jsonResult(result);
     },
@@ -1494,4 +1548,6 @@ export const __testing = {
   resolveKimiBaseUrl,
   extractKimiCitations,
   resolveRedirectUrl,
+  resolveUrlAllowlist,
+  filterResultsByAllowlist,
 } as const;
