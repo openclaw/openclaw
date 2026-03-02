@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,10 +8,12 @@ import { __testing, loadOpenClawPlugins } from "./loader.js";
 
 type TempPlugin = { dir: string; file: string; id: string };
 
-const fixtureRoot = path.join(os.tmpdir(), `openclaw-plugin-${randomUUID()}`);
+const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-"));
 let tempDirIndex = 0;
 const prevBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
+let cachedBundledTelegramDir = "";
+let cachedBundledMemoryDir = "";
 const BUNDLED_TELEGRAM_PLUGIN_BODY = `export default { id: "telegram", register(api) {
   api.registerChannel({
     plugin: {
@@ -70,6 +71,20 @@ function loadBundledMemoryPluginRegistry(options?: {
   pluginBody?: string;
   pluginFilename?: string;
 }) {
+  if (!options && cachedBundledMemoryDir) {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = cachedBundledMemoryDir;
+    return loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          slots: {
+            memory: "memory-core",
+          },
+        },
+      },
+    });
+  }
+
   const bundledDir = makeTempDir();
   let pluginDir = bundledDir;
   let pluginFilename = options?.pluginFilename ?? "memory-core.js";
@@ -101,6 +116,9 @@ function loadBundledMemoryPluginRegistry(options?: {
     dir: pluginDir,
     filename: pluginFilename,
   });
+  if (!options) {
+    cachedBundledMemoryDir = bundledDir;
+  }
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
   return loadOpenClawPlugins({
@@ -116,14 +134,16 @@ function loadBundledMemoryPluginRegistry(options?: {
 }
 
 function setupBundledTelegramPlugin() {
-  const bundledDir = makeTempDir();
-  writePlugin({
-    id: "telegram",
-    body: BUNDLED_TELEGRAM_PLUGIN_BODY,
-    dir: bundledDir,
-    filename: "telegram.js",
-  });
-  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+  if (!cachedBundledTelegramDir) {
+    cachedBundledTelegramDir = makeTempDir();
+    writePlugin({
+      id: "telegram",
+      body: BUNDLED_TELEGRAM_PLUGIN_BODY,
+      dir: cachedBundledTelegramDir,
+      filename: "telegram.js",
+    });
+  }
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = cachedBundledTelegramDir;
 }
 
 function expectTelegramLoaded(registry: ReturnType<typeof loadOpenClawPlugins>) {
@@ -209,6 +229,9 @@ afterAll(() => {
     fs.rmSync(fixtureRoot, { recursive: true, force: true });
   } catch {
     // ignore cleanup failures
+  } finally {
+    cachedBundledTelegramDir = "";
+    cachedBundledMemoryDir = "";
   }
 });
 
