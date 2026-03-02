@@ -20,6 +20,7 @@ vi.mock("../process/exec.js", () => ({
 let installPluginFromArchive: typeof import("./install.js").installPluginFromArchive;
 let installPluginFromDir: typeof import("./install.js").installPluginFromDir;
 let installPluginFromNpmSpec: typeof import("./install.js").installPluginFromNpmSpec;
+let installPluginFromPath: typeof import("./install.js").installPluginFromPath;
 let runCommandWithTimeout: typeof import("../process/exec.js").runCommandWithTimeout;
 let suiteTempRoot = "";
 let tempDirCounter = 0;
@@ -308,8 +309,12 @@ afterAll(() => {
 });
 
 beforeAll(async () => {
-  ({ installPluginFromArchive, installPluginFromDir, installPluginFromNpmSpec } =
-    await import("./install.js"));
+  ({
+    installPluginFromArchive,
+    installPluginFromDir,
+    installPluginFromNpmSpec,
+    installPluginFromPath,
+  } = await import("./install.js"));
   ({ runCommandWithTimeout } = await import("../process/exec.js"));
 });
 
@@ -595,6 +600,37 @@ describe("installPluginFromDir", () => {
     }
     expect(res.pluginId).toBe("memory-cognee");
     expect(res.targetDir).toBe(path.join(extensionsDir, "memory-cognee"));
+  });
+});
+
+describe("installPluginFromPath", () => {
+  it("blocks hardlink alias overwrites when installing a plain file plugin", async () => {
+    const baseDir = makeTempDir();
+    const extensionsDir = path.join(baseDir, "extensions");
+    const outsideDir = path.join(baseDir, "outside");
+    fs.mkdirSync(extensionsDir, { recursive: true });
+    fs.mkdirSync(outsideDir, { recursive: true });
+
+    const sourcePath = path.join(baseDir, "payload.js");
+    fs.writeFileSync(sourcePath, "console.log('SAFE');\n", "utf-8");
+    const victimPath = path.join(outsideDir, "victim.js");
+    fs.writeFileSync(victimPath, "ORIGINAL", "utf-8");
+
+    const targetPath = path.join(extensionsDir, "payload.js");
+    fs.linkSync(victimPath, targetPath);
+
+    const result = await installPluginFromPath({
+      path: sourcePath,
+      extensionsDir,
+      mode: "update",
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error.toLowerCase()).toMatch(/hardlink|path alias escape/);
+    expect(fs.readFileSync(victimPath, "utf-8")).toBe("ORIGINAL");
   });
 });
 
