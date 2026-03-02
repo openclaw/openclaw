@@ -59,6 +59,19 @@ After it finishes:
 - Paste the token into the Control UI (Settings → token).
 - Need the URL again? Run `docker compose run --rm openclaw-cli dashboard --no-open`.
 
+### Automation/CI (non-interactive, no TTY noise)
+
+For scripts and CI, disable Compose pseudo-TTY allocation with `-T`:
+
+```bash
+docker compose run -T --rm openclaw-cli gateway probe
+docker compose run -T --rm openclaw-cli devices list --json
+```
+
+If your automation exports no Claude session vars, leaving them unset now resolves to
+empty values by default in `docker-compose.yml` to avoid repeated "variable is not set"
+warnings.
+
 It writes config/workspace on the host:
 
 - `~/.openclaw/`
