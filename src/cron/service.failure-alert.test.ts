@@ -195,4 +195,71 @@ describe("CronService failure alerts", () => {
     cron.stop();
     await store.cleanup();
   });
+
+  it("threads failure alert mode/accountId and skips best-effort jobs", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "temporary upstream error",
+    }));
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      cronConfig: {
+        failureAlert: {
+          enabled: true,
+          after: 1,
+          mode: "webhook",
+          accountId: "global-account",
+        },
+      },
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const normalJob = await cron.add({
+      name: "normal alert job",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run report" },
+      delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+    });
+    const bestEffortJob = await cron.add({
+      name: "best effort alert job",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run report" },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "19098680",
+        bestEffort: true,
+      },
+    });
+
+    await cron.run(normalJob.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    expect(sendCronFailureAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "webhook",
+        accountId: "global-account",
+      }),
+    );
+
+    await cron.run(bestEffortJob.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+
+    cron.stop();
+    await store.cleanup();
+  });
 });

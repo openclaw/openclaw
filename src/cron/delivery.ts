@@ -1,7 +1,7 @@
 import type { CliDeps } from "../cli/deps.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
-import { loadConfig } from "../config/config.js";
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
@@ -153,18 +153,21 @@ export function resolveFailureDestination(
     const jobTo = normalizeTo(jobFailureDest.to);
     const jobAccountId = normalizeAccountId(jobFailureDest.accountId);
     const jobMode = normalizeFailureMode(jobFailureDest.mode);
+    const hasJobChannelField = "channel" in jobFailureDest;
+    const hasJobToField = "to" in jobFailureDest;
+    const hasJobAccountIdField = "accountId" in jobFailureDest;
 
     // Track if 'to' was explicitly set at job level
-    const jobToExplicit = "to" in jobFailureDest && jobFailureDest.to !== undefined;
+    const jobToExplicitValue = hasJobToField && jobTo !== undefined;
 
-    // Only override if explicitly set (not undefined)
-    if (jobChannel !== undefined) {
+    // Respect explicit clears from partial patches.
+    if (hasJobChannelField) {
       channel = jobChannel;
     }
-    if (jobTo !== undefined) {
+    if (hasJobToField) {
       to = jobTo;
     }
-    if (jobAccountId !== undefined) {
+    if (hasJobAccountIdField) {
       accountId = jobAccountId;
     }
     if (jobMode !== undefined) {
@@ -173,7 +176,7 @@ export function resolveFailureDestination(
       // But preserve explicit 'to' that was set at job level
       // Treat undefined global mode as "announce" for comparison
       const globalMode = globalConfig?.mode ?? "announce";
-      if (!jobToExplicit && globalMode !== jobMode) {
+      if (!jobToExplicitValue && globalMode !== jobMode) {
         to = undefined;
       }
       mode = jobMode;
@@ -237,12 +240,12 @@ const cronDeliveryLogger = getChildLogger({ subsystem: "cron-delivery" });
 
 export async function sendFailureNotificationAnnounce(
   deps: CliDeps,
+  cfg: OpenClawConfig,
   agentId: string,
   jobId: string,
   target: { channel?: string; to?: string; accountId?: string },
   message: string,
 ): Promise<void> {
-  const cfg = loadConfig();
   const resolvedTarget = await resolveDeliveryTarget(cfg, agentId, {
     channel: target.channel as CronMessageChannel | undefined,
     to: target.to,

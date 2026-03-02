@@ -694,4 +694,40 @@ describe("cron cli", () => {
     });
     expect(runOpts.timeout).toBe("45000");
   });
-});
+
+  it("patches failure alert mode/accountId on cron edit", async () => {
+    callGatewayFromCli.mockClear();
+
+    const program = buildProgram();
+
+    await program.parseAsync(
+      [
+        "cron",
+        "edit",
+        "job-1",
+        "--failure-alert-after",
+        "1",
+        "--failure-alert-mode",
+        "webhook",
+        "--failure-alert-account-id",
+        "bot-a",
+      ],
+      { from: "user" },
+    );
+
+    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
+    const patch = updateCall?.[2] as {
+      patch?: {
+        failureAlert?: {
+          after?: number;
+          mode?: "announce" | "webhook";
+          accountId?: string;
+        };
+      };
+    };
+
+    expect(patch?.patch?.failureAlert?.after).toBe(1);
+    expect(patch?.patch?.failureAlert?.mode).toBe("webhook");
+    expect(patch?.patch?.failureAlert?.accountId).toBe("bot-a");
+  });
+  });

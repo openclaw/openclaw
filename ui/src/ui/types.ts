@@ -491,7 +491,14 @@ export type CronDelivery = {
   to?: string;
   accountId?: string;
   bestEffort?: boolean;
-  failureDestination?: CronFailureAlert;
+  failureDestination?: CronFailureDestination;
+};
+
+export type CronFailureDestination = {
+  channel?: string;
+  to?: string;
+  mode?: "announce" | "webhook";
+  accountId?: string;
 };
 
 export type CronFailureAlert = {
