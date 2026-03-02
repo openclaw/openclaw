@@ -227,6 +227,21 @@ describe("resolveTelegramAccount groups inheritance (#30673)", () => {
     },
   });
 
+  const createDefaultAccountGroupsConfig = (includeDevAccount: boolean): OpenClawConfig => ({
+    channels: {
+      telegram: {
+        groups: { "-100999": { requireMention: true } },
+        accounts: {
+          default: {
+            botToken: "123:default",
+            groups: { "-100123": { requireMention: false } },
+          },
+          ...(includeDevAccount ? { dev: { botToken: "456:dev" } } : {}),
+        },
+      },
+    },
+  });
+
   it("inherits channel-level groups in single-account setup", () => {
     const resolved = resolveTelegramAccount({
       cfg: {
@@ -265,20 +280,7 @@ describe("resolveTelegramAccount groups inheritance (#30673)", () => {
 
   it("uses account-level groups even in multi-account setup", () => {
     const resolved = resolveTelegramAccount({
-      cfg: {
-        channels: {
-          telegram: {
-            groups: { "-100999": { requireMention: true } },
-            accounts: {
-              default: {
-                botToken: "123:default",
-                groups: { "-100123": { requireMention: false } },
-              },
-              dev: { botToken: "456:dev" },
-            },
-          },
-        },
-      },
+      cfg: createDefaultAccountGroupsConfig(true),
       accountId: "default",
     });
 
@@ -287,19 +289,7 @@ describe("resolveTelegramAccount groups inheritance (#30673)", () => {
 
   it("account-level groups takes priority over channel-level in single-account setup", () => {
     const resolved = resolveTelegramAccount({
-      cfg: {
-        channels: {
-          telegram: {
-            groups: { "-100999": { requireMention: true } },
-            accounts: {
-              default: {
-                botToken: "123:default",
-                groups: { "-100123": { requireMention: false } },
-              },
-            },
-          },
-        },
-      },
+      cfg: createDefaultAccountGroupsConfig(false),
       accountId: "default",
     });
 
