@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const fsMocks = vi.hoisted(() => ({
   access: vi.fn(),
+  realpath: vi.fn(async (target: string) => target),
 }));
 
 vi.mock("node:fs/promises", () => ({
-  default: { access: fsMocks.access },
+  default: { access: fsMocks.access, realpath: fsMocks.realpath },
   access: fsMocks.access,
+  realpath: fsMocks.realpath,
 }));
 
 import {
@@ -47,6 +49,30 @@ describe("resolvePreferredNodePath", () => {
 
     expect(result).toBe(fnmNode);
     expect(execFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes Homebrew Cellar execPath to stable symlink", async () => {
+    mockNodePathPresent(darwinNode);
+    const cellarNode = "/opt/homebrew/Cellar/node/25.7.0/bin/node";
+
+    fsMocks.realpath.mockImplementation(async (target: string) => {
+      if (target === cellarNode || target === darwinNode) {
+        return cellarNode;
+      }
+      return target;
+    });
+
+    const execFile = vi.fn().mockResolvedValue({ stdout: "25.7.0\n", stderr: "" });
+
+    const result = await resolvePreferredNodePath({
+      env: {},
+      runtime: "node",
+      platform: "darwin",
+      execFile,
+      execPath: cellarNode,
+    });
+
+    expect(result).toBe(darwinNode);
   });
 
   it("falls back to system node when execPath version is unsupported", async () => {

@@ -79,6 +79,41 @@ async function resolveNodeVersion(
   }
 }
 
+async function preferStableHomebrewNodePath(params: {
+  nodePath: string;
+  env: Record<string, string | undefined>;
+  platform: NodeJS.Platform;
+}): Promise<string> {
+  if (params.platform !== "darwin") {
+    return params.nodePath;
+  }
+
+  const normalized = normalizeForCompare(params.nodePath, params.platform);
+  const cellarMarker = "/cellar/node/";
+  if (!normalized.toLowerCase().includes(cellarMarker)) {
+    return params.nodePath;
+  }
+
+  const brewSymlink = params.nodePath.startsWith("/usr/local/")
+    ? "/usr/local/bin/node"
+    : "/opt/homebrew/bin/node";
+
+  try {
+    const symlinkRealpath = await fs.realpath(brewSymlink);
+    const nodeRealpath = await fs.realpath(params.nodePath);
+    if (
+      normalizeForCompare(symlinkRealpath, params.platform) ===
+      normalizeForCompare(nodeRealpath, params.platform)
+    ) {
+      return brewSymlink;
+    }
+  } catch {
+    // Keep the original path when the stable symlink is unavailable.
+  }
+
+  return params.nodePath;
+}
+
 export type SystemNodeInfo = {
   path: string;
   version: string | null;
@@ -172,7 +207,11 @@ export async function resolvePreferredNodePath(params: {
     const execFileImpl = params.execFile ?? execFileAsync;
     const version = await resolveNodeVersion(currentExecPath, execFileImpl);
     if (isSupportedNodeVersion(version)) {
-      return currentExecPath;
+      return preferStableHomebrewNodePath({
+        nodePath: currentExecPath,
+        env: params.env ?? process.env,
+        platform,
+      });
     }
   }
 
