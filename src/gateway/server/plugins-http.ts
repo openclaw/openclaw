@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { canonicalizePathVariant } from "../security-path.js";
+import { hasSecurityPathCanonicalizationAnomaly } from "../security-path.js";
 import { isProtectedPluginRoutePath } from "../security-path.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -37,7 +38,9 @@ export function shouldEnforceGatewayAuthForPluginPath(
   pathname: string,
 ): boolean {
   return (
-    isProtectedPluginRoutePath(pathname) || isRegisteredPluginHttpRoutePath(registry, pathname)
+    hasSecurityPathCanonicalizationAnomaly(pathname) ||
+    isProtectedPluginRoutePath(pathname) ||
+    isRegisteredPluginHttpRoutePath(registry, pathname)
   );
 }
 
