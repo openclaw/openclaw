@@ -907,7 +907,7 @@ export async function handleFeishuMessage(params: {
           try {
             await sendMessageFeishu({
               cfg,
-              to: `user:${ctx.senderOpenId}`,
+              to: `chat:${ctx.chatId}`,
               text: core.channel.pairing.buildPairingReply({
                 channel: "feishu",
                 idLine: `Your Feishu user id: ${ctx.senderOpenId}`,
