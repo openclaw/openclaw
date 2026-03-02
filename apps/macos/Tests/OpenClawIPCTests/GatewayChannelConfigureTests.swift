@@ -1,5 +1,5 @@
-import OpenClawKit
 import Foundation
+import OpenClawKit
 import os
 import Testing
 @testable import OpenClaw
@@ -20,7 +20,9 @@ import Testing
             self.helloDelayMs = helloDelayMs
         }
 
-        func snapshotCancelCount() -> Int { self.cancelCount.withLock { $0 } }
+        func snapshotCancelCount() -> Int {
+            self.cancelCount.withLock { $0 }
+        }
 
         func resume() {
             self.state = .running
@@ -83,7 +85,6 @@ import Testing
             let handler = self.pendingReceiveHandler.withLock { $0 }
             handler?(Result<URLSessionWebSocketTask.Message, Error>.success(.data(data)))
         }
-
     }
 
     private final class FakeWebSocketSession: WebSocketSessioning, @unchecked Sendable {
@@ -95,7 +96,10 @@ import Testing
             self.helloDelayMs = helloDelayMs
         }
 
-        func snapshotMakeCount() -> Int { self.makeCount.withLock { $0 } }
+        func snapshotMakeCount() -> Int {
+            self.makeCount.withLock { $0 }
+        }
+
         func snapshotCancelCount() -> Int {
             self.tasks.withLock { tasks in
                 tasks.reduce(0) { $0 + $1.snapshotCancelCount() }
@@ -122,13 +126,18 @@ import Testing
             self.token.withLock { $0 = token }
         }
 
-        func snapshotToken() -> String? { self.token.withLock { $0 } }
-        func setToken(_ value: String?) { self.token.withLock { $0 = value } }
+        func snapshotToken() -> String? {
+            self.token.withLock { $0 }
+        }
+
+        func setToken(_ value: String?) {
+            self.token.withLock { $0 = value }
+        }
     }
 
     @Test func requestReusesSingleWebSocketForSameConfig() async throws {
         let session = FakeWebSocketSession()
-        let url = URL(string: "ws://example.invalid")!
+        let url = try #require(URL(string: "ws://example.invalid"))
         let cfg = ConfigSource(token: nil)
         let conn = GatewayConnection(
             configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
@@ -144,7 +153,7 @@ import Testing
 
     @Test func requestReconfiguresAndCancelsOnTokenChange() async throws {
         let session = FakeWebSocketSession()
-        let url = URL(string: "ws://example.invalid")!
+        let url = try #require(URL(string: "ws://example.invalid"))
         let cfg = ConfigSource(token: "a")
         let conn = GatewayConnection(
             configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
@@ -161,7 +170,7 @@ import Testing
 
     @Test func concurrentRequestsStillUseSingleWebSocket() async throws {
         let session = FakeWebSocketSession(helloDelayMs: 150)
-        let url = URL(string: "ws://example.invalid")!
+        let url = try #require(URL(string: "ws://example.invalid"))
         let cfg = ConfigSource(token: nil)
         let conn = GatewayConnection(
             configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
@@ -176,7 +185,7 @@ import Testing
 
     @Test func subscribeReplaysLatestSnapshot() async throws {
         let session = FakeWebSocketSession()
-        let url = URL(string: "ws://example.invalid")!
+        let url = try #require(URL(string: "ws://example.invalid"))
         let cfg = ConfigSource(token: nil)
         let conn = GatewayConnection(
             configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
@@ -197,7 +206,7 @@ import Testing
 
     @Test func subscribeEmitsSeqGapBeforeEvent() async throws {
         let session = FakeWebSocketSession()
-        let url = URL(string: "ws://example.invalid")!
+        let url = try #require(URL(string: "ws://example.invalid"))
         let cfg = ConfigSource(token: nil)
         let conn = GatewayConnection(
             configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
