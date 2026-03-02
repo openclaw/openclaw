@@ -325,4 +325,107 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
     expect(state.chatMessages).toEqual([existingMessage]);
   });
+
+  it("drops NO_REPLY final payload from another run", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-user",
+      chatStream: "Working...",
+      chatStreamStartedAt: 123,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-announce",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([]);
+    expect(state.chatRunId).toBe("run-user");
+    expect(state.chatStream).toBe("Working...");
+  });
+
+  it("drops NO_REPLY final payload from own run", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "NO_REPLY",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([]);
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+  });
+
+  it("does not persist NO_REPLY stream text on final without message", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "NO_REPLY",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([]);
+  });
+
+  it("does not persist NO_REPLY stream text on abort", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "NO_REPLY",
+      chatStreamStartedAt: 100,
+    });
+    const payload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "aborted",
+      message: "not-an-assistant-message",
+    } as unknown as ChatEventPayload;
+
+    expect(handleChatEvent(state, payload)).toBe("aborted");
+    expect(state.chatMessages).toEqual([]);
+  });
+
+  it("keeps user messages containing NO_REPLY text", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-user",
+      chatStream: "Working...",
+      chatStreamStartedAt: 123,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-announce",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      },
+    };
+
+    // User messages with NO_REPLY text should NOT be filtered — only assistant messages.
+    // normalizeFinalAssistantMessage returns null for user role, so this falls through.
+    expect(handleChatEvent(state, payload)).toBe("final");
+  });
 });

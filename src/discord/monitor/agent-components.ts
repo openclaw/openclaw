@@ -871,11 +871,7 @@ async function dispatchDiscordComponentEvent(params: {
         normalizeEntry: (entry) => {
           const normalized = normalizeDiscordAllowList([entry], ["discord:", "user:", "pk:"]);
           const candidate = normalized?.ids.values().next().value;
-<<<<<<< HEAD
-          return candidate && /^\d+$/.test(candidate) ? candidate : undefined;
-=======
           return typeof candidate === "string" && /^\d+$/.test(candidate) ? candidate : undefined;
->>>>>>> e7a85a513 (fix(types): resolve pre-existing TS errors in agent-components and pairing-store)
         },
       })
     : null;

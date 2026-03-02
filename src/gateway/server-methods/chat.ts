@@ -7,6 +7,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
@@ -186,16 +187,56 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
   return { message: changed ? entry : message, changed };
 }
 
+/**
+ * Extract the visible text from an assistant history message for silent-token checks.
+ * Returns `undefined` for non-assistant messages or messages with no extractable text.
+ * When `entry.text` is present it takes precedence over `entry.content` to avoid
+ * dropping messages that carry real text alongside a stale `content: "NO_REPLY"`.
+ */
+function extractAssistantTextForSilentCheck(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const entry = message as Record<string, unknown>;
+  if (entry.role !== "assistant") {
+    return undefined;
+  }
+  if (typeof entry.text === "string") {
+    return entry.text;
+  }
+  if (typeof entry.content === "string") {
+    return entry.content;
+  }
+  if (Array.isArray(entry.content)) {
+    const texts = entry.content
+      .filter(
+        (b: unknown): b is Record<string, unknown> =>
+          !!b && typeof b === "object" && (b as Record<string, unknown>).type === "text",
+      )
+      .map((b) => (b as Record<string, unknown>).text)
+      .filter((t): t is string => typeof t === "string");
+    return texts.length > 0 ? texts.join("\n") : undefined;
+  }
+  return undefined;
+}
+
 function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
   if (messages.length === 0) {
     return messages;
   }
   let changed = false;
-  const next = messages.map((message) => {
+  const next: unknown[] = [];
+  for (const message of messages) {
     const res = sanitizeChatHistoryMessage(message);
     changed ||= res.changed;
-    return res.message;
-  });
+    // Drop assistant messages whose entire visible text is the silent reply token.
+    const text = extractAssistantTextForSilentCheck(res.message);
+    if (text !== undefined && isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+      changed = true;
+      continue;
+    }
+    next.push(res.message);
+  }
   return changed ? next : messages;
 }
 
