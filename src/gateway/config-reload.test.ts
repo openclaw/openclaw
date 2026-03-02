@@ -147,6 +147,18 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartChannels).toEqual(expected);
   });
 
+  it("restarts heartbeat when model-related config changes", () => {
+    const plan = buildGatewayReloadPlan([
+      "models.providers.openai.models",
+      "agents.defaults.model",
+    ]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartHeartbeat).toBe(true);
+    expect(plan.hotReasons).toEqual(
+      expect.arrayContaining(["models.providers.openai.models", "agents.defaults.model"]),
+    );
+  });
+
   it("treats gateway.remote as no-op", () => {
     const plan = buildGatewayReloadPlan(["gateway.remote.url"]);
     expect(plan.restartGateway).toBe(false);
