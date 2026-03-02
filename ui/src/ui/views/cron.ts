@@ -1279,6 +1279,31 @@ export function renderCron(props: CronProps) {
                                   Optional recipient override for failure alerts.
                                 </div>
                               </label>
+                              <label class="field">
+                                ${renderFieldLabel("Alert mode")}
+                                <select
+                                  .value=${props.form.failureAlertDeliveryMode || "announce"}
+                                  @change=${(e: Event) =>
+                                    props.onFormChange({
+                                      failureAlertDeliveryMode: (e.target as HTMLSelectElement)
+                                        .value as CronFormState["failureAlertDeliveryMode"],
+                                    })}
+                                >
+                                  <option value="announce">Announce (via channel)</option>
+                                  <option value="webhook">Webhook (HTTP POST)</option>
+                                </select>
+                              </label>
+                              <label class="field">
+                                ${renderFieldLabel("Alert account ID")}
+                                <input
+                                  .value=${props.form.failureAlertAccountId}
+                                  @input=${(e: Event) =>
+                                    props.onFormChange({
+                                      failureAlertAccountId: (e.target as HTMLInputElement).value,
+                                    })}
+                                  placeholder="Account ID for multi-account setups"
+                                />
+                              </label>
                             `
                           : nothing
                       }
