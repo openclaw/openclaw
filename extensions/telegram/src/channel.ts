@@ -316,7 +316,10 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
   },
   outbound: {
     deliveryMode: "direct",
-    chunker: (text, limit) => getTelegramRuntime().channel.text.chunkMarkdownText(text, limit),
+    chunker: (text, limit) =>
+      getTelegramRuntime()
+        .channel.telegram.markdownToTelegramChunks(text, limit)
+        .map((chunk) => chunk.text),
     chunkerMode: "markdown",
     textChunkLimit: 4000,
     pollMaxOptions: 10,

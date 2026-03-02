@@ -183,6 +183,25 @@ describe("telegramPlugin duplicate token guard", () => {
     expect(result).toMatchObject({ channel: "telegram", messageId: "tg-1" });
   });
 
+  it("uses html-aware telegram chunking for outbound text splitting", () => {
+    const markdownToTelegramChunks = vi.fn(() => [
+      { text: "chunk-1", html: "<b>chunk-1</b>" },
+      { text: "chunk-2", html: "<b>chunk-2</b>" },
+    ]);
+    setTelegramRuntime({
+      channel: {
+        telegram: {
+          markdownToTelegramChunks,
+        },
+      },
+    } as unknown as PluginRuntime);
+
+    const chunks = telegramPlugin.outbound!.chunker!("hello", 4000);
+
+    expect(markdownToTelegramChunks).toHaveBeenCalledWith("hello", 4000);
+    expect(chunks).toEqual(["chunk-1", "chunk-2"]);
+  });
+
   it("ignores accounts with missing tokens during duplicate-token checks", async () => {
     const cfg = createCfg();
     cfg.channels!.telegram!.accounts!.ops = {} as never;
