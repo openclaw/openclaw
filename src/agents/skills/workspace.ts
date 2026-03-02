@@ -656,8 +656,20 @@ export async function syncSkillsToWorkspace(params: {
       bundledSkillsDir: params.bundledSkillsDir,
     });
 
-    await fsp.rm(targetSkillsDir, { recursive: true, force: true });
-    await fsp.mkdir(targetSkillsDir, { recursive: true });
+    // Clear contents without removing the directory itself to preserve
+    // its inode — Docker bind mounts reference the inode, so rm + mkdir
+    // would silently break the mount inside the container.
+    try {
+      const existing = await fsp.readdir(targetSkillsDir);
+      await Promise.all(
+        existing.map((entry) =>
+          fsp.rm(path.join(targetSkillsDir, entry), { recursive: true, force: true }),
+        ),
+      );
+    } catch {
+      // Directory doesn't exist yet — create it.
+      await fsp.mkdir(targetSkillsDir, { recursive: true });
+    }
 
     const usedDirNames = new Set<string>();
     for (const entry of entries) {
