@@ -289,12 +289,12 @@ describe("config cli", () => {
     });
   });
 
-  describe("config path", () => {
+  describe("config file", () => {
     it("prints the active config file path", async () => {
       const resolved: OpenClawConfig = { gateway: { port: 18789 } };
       setSnapshot(resolved, resolved);
 
-      await runConfigCommand(["config", "path"]);
+      await runConfigCommand(["config", "file"]);
 
       expect(mockLog).toHaveBeenCalledWith("/tmp/openclaw.json");
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
@@ -306,7 +306,7 @@ describe("config cli", () => {
       snapshot.path = "/home/user/.openclaw/openclaw.json";
       mockReadConfigFileSnapshot.mockResolvedValueOnce(snapshot);
 
-      await runConfigCommand(["config", "path"]);
+      await runConfigCommand(["config", "file"]);
 
       expect(mockLog).toHaveBeenCalledWith("/home/user/.openclaw/openclaw.json");
     });
