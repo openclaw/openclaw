@@ -5,6 +5,7 @@ import {
   LineConfigSchema,
   processLineMessage,
   resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveChannelAccountConfigBasePath,
   resolveDefaultGroupPolicy,
   type ChannelPlugin,
   type ChannelStatusIssue,
@@ -148,12 +149,11 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
       const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(
-        (cfg.channels?.line as LineConfig | undefined)?.accounts?.[resolvedAccountId],
-      );
-      const basePath = useAccountPath
-        ? `channels.line.accounts.${resolvedAccountId}.`
-        : "channels.line.";
+      const basePath = resolveChannelAccountConfigBasePath({
+        cfg,
+        channelKey: "line",
+        accountId: resolvedAccountId,
+      });
       return {
         policy: account.config.dmPolicy ?? "pairing",
         allowFrom: account.config.allowFrom ?? [],

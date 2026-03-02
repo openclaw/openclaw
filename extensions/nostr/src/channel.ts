@@ -4,6 +4,7 @@ import {
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   formatPairingApproveHint,
+  resolveChannelAccountConfigBasePath,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk";
 import type { NostrProfile } from "./config-schema.js";
@@ -95,12 +96,18 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   },
 
   security: {
-    resolveDmPolicy: ({ account }) => {
+    resolveDmPolicy: ({ cfg, accountId, account }) => {
+      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const basePath = resolveChannelAccountConfigBasePath({
+        cfg,
+        channelKey: "nostr",
+        accountId: resolvedAccountId,
+      });
       return {
         policy: account.config.dmPolicy ?? "pairing",
         allowFrom: account.config.allowFrom ?? [],
-        policyPath: "channels.nostr.dmPolicy",
-        allowFromPath: "channels.nostr.allowFrom",
+        policyPath: `${basePath}dmPolicy`,
+        allowFromPath: basePath,
         approveHint: formatPairingApproveHint("nostr"),
         normalizeEntry: (raw) => {
           try {

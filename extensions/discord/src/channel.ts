@@ -21,6 +21,7 @@ import {
   PAIRING_APPROVED_MESSAGE,
   resolveDiscordAccount,
   resolveDefaultDiscordAccountId,
+  resolveChannelAccountConfigBasePath,
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
@@ -119,14 +120,15 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
       const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(cfg.channels?.discord?.accounts?.[resolvedAccountId]);
-      const allowFromPath = useAccountPath
-        ? `channels.discord.accounts.${resolvedAccountId}.dm.`
-        : "channels.discord.dm.";
+      const basePath = resolveChannelAccountConfigBasePath({
+        cfg,
+        channelKey: "discord",
+        accountId: resolvedAccountId,
+      });
       return {
         policy: account.config.dm?.policy ?? "pairing",
         allowFrom: account.config.dm?.allowFrom ?? [],
-        allowFromPath,
+        allowFromPath: `${basePath}dm.`,
         approveHint: formatPairingApproveHint("discord"),
         normalizeEntry: (raw) => raw.replace(/^(discord|user):/i, "").replace(/^<@!?(\d+)>$/, "$1"),
       };

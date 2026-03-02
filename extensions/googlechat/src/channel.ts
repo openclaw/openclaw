@@ -10,6 +10,7 @@ import {
   normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
+  resolveChannelAccountConfigBasePath,
   resolveGoogleChatGroupRequireMention,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -186,14 +187,15 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
       const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(cfg.channels?.["googlechat"]?.accounts?.[resolvedAccountId]);
-      const allowFromPath = useAccountPath
-        ? `channels.googlechat.accounts.${resolvedAccountId}.dm.`
-        : "channels.googlechat.dm.";
+      const basePath = resolveChannelAccountConfigBasePath({
+        cfg,
+        channelKey: "googlechat",
+        accountId: resolvedAccountId,
+      });
       return {
         policy: account.config.dm?.policy ?? "pairing",
         allowFrom: account.config.dm?.allowFrom ?? [],
-        allowFromPath,
+        allowFromPath: `${basePath}dm.`,
         approveHint: formatPairingApproveHint("googlechat"),
         normalizeEntry: (raw) => formatAllowFromEntry(raw),
       };

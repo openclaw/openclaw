@@ -8,6 +8,7 @@ import {
   normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
   resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveChannelAccountConfigBasePath,
   resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
@@ -156,17 +157,19 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     formatAllowFrom: ({ allowFrom }) => normalizeMatrixAllowList(allowFrom),
   },
   security: {
-    resolveDmPolicy: ({ account }) => {
-      const accountId = account.accountId;
-      const prefix =
-        accountId && accountId !== "default"
-          ? `channels.matrix.accounts.${accountId}.dm`
-          : "channels.matrix.dm";
+    resolveDmPolicy: ({ cfg, accountId, account }) => {
+      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const basePath = resolveChannelAccountConfigBasePath({
+        cfg,
+        channelKey: "matrix",
+        accountId: resolvedAccountId,
+      });
+      const dmPath = `${basePath}dm.`;
       return {
         policy: account.config.dm?.policy ?? "pairing",
         allowFrom: account.config.dm?.allowFrom ?? [],
-        policyPath: `${prefix}.policy`,
-        allowFromPath: `${prefix}.allowFrom`,
+        policyPath: `${dmPath}policy`,
+        allowFromPath: dmPath,
         approveHint: formatPairingApproveHint("matrix"),
         normalizeEntry: (raw) => normalizeMatrixUserId(raw),
       };

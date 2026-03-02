@@ -16,6 +16,7 @@ import {
   normalizeAccountId,
   normalizeSlackMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
+  resolveChannelAccountConfigBasePath,
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
   resolveSlackReplyToMode,
@@ -169,14 +170,15 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
       const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(cfg.channels?.slack?.accounts?.[resolvedAccountId]);
-      const allowFromPath = useAccountPath
-        ? `channels.slack.accounts.${resolvedAccountId}.dm.`
-        : "channels.slack.dm.";
+      const basePath = resolveChannelAccountConfigBasePath({
+        cfg,
+        channelKey: "slack",
+        accountId: resolvedAccountId,
+      });
       return {
         policy: account.dm?.policy ?? "pairing",
         allowFrom: account.dm?.allowFrom ?? [],
-        allowFromPath,
+        allowFromPath: `${basePath}dm.`,
         approveHint: formatPairingApproveHint("slack"),
         normalizeEntry: (raw) => raw.replace(/^(slack|user):/i, ""),
       };

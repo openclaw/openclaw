@@ -3,6 +3,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // Mock external dependencies
 vi.mock("openclaw/plugin-sdk", () => ({
   DEFAULT_ACCOUNT_ID: "default",
+  resolveChannelAccountConfigBasePath: vi.fn(
+    (params: { channelKey: string; accountId: string }) =>
+      `channels.${params.channelKey}.`,
+  ),
   setAccountEnabledInConfigSection: vi.fn((_opts: any) => ({})),
   registerPluginHttpRoute: vi.fn(() => vi.fn()),
   buildChannelConfigSchema: vi.fn((schema: any) => ({ schema })),

@@ -16,6 +16,7 @@ import {
   normalizeE164,
   normalizeSignalMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
+  resolveChannelAccountConfigBasePath,
   resolveChannelMediaMaxBytes,
   resolveDefaultSignalAccountId,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -152,10 +153,11 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
       const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(cfg.channels?.signal?.accounts?.[resolvedAccountId]);
-      const basePath = useAccountPath
-        ? `channels.signal.accounts.${resolvedAccountId}.`
-        : "channels.signal.";
+      const basePath = resolveChannelAccountConfigBasePath({
+        cfg,
+        channelKey: "signal",
+        accountId: resolvedAccountId,
+      });
       return {
         policy: account.config.dmPolicy ?? "pairing",
         allowFrom: account.config.allowFrom ?? [],

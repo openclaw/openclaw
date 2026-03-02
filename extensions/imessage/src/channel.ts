@@ -17,6 +17,7 @@ import {
   resolveChannelMediaMaxBytes,
   resolveDefaultIMessageAccountId,
   resolveIMessageAccount,
+  resolveChannelAccountConfigBasePath,
   resolveIMessageConfigAllowFrom,
   resolveIMessageConfigDefaultTo,
   resolveIMessageGroupRequireMention,
@@ -128,10 +129,11 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
       const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(cfg.channels?.imessage?.accounts?.[resolvedAccountId]);
-      const basePath = useAccountPath
-        ? `channels.imessage.accounts.${resolvedAccountId}.`
-        : "channels.imessage.";
+      const basePath = resolveChannelAccountConfigBasePath({
+        cfg,
+        channelKey: "imessage",
+        accountId: resolvedAccountId,
+      });
       return {
         policy: account.config.dmPolicy ?? "pairing",
         allowFrom: account.config.allowFrom ?? [],

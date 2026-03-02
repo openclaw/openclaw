@@ -6,6 +6,7 @@
 
 import {
   DEFAULT_ACCOUNT_ID,
+  resolveChannelAccountConfigBasePath,
   setAccountEnabledInConfigSection,
   registerPluginHttpRoute,
   buildChannelConfigSchema,
@@ -105,11 +106,11 @@ export function createSynologyChatPlugin() {
         account: ResolvedSynologyChatAccount;
       }) => {
         const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-        const channelCfg = (cfg as any).channels?.["synology-chat"];
-        const useAccountPath = Boolean(channelCfg?.accounts?.[resolvedAccountId]);
-        const basePath = useAccountPath
-          ? `channels.synology-chat.accounts.${resolvedAccountId}.`
-          : "channels.synology-chat.";
+        const basePath = resolveChannelAccountConfigBasePath({
+          cfg,
+          channelKey: "synology-chat",
+          accountId: resolvedAccountId,
+        });
         return {
           policy: account.dmPolicy ?? "allowlist",
           allowFrom: account.allowedUserIds ?? [],
