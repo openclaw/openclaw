@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { HEARTBEAT_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
@@ -35,6 +36,7 @@ import { resolveOutboundSessionRoute } from "./outbound-session.js";
 import {
   formatOutboundPayloadLog,
   normalizeOutboundPayloads,
+  normalizeReplyPayloadsForDelivery,
   normalizeOutboundPayloadsForJson,
 } from "./payloads.js";
 import { runResolveOutboundTargetCoreTests } from "./targets.shared-test.js";
@@ -1145,6 +1147,26 @@ describe("normalizeOutboundPayloads", () => {
       { text: "final answer" },
     ]);
     expect(normalized).toEqual([{ text: "final answer", mediaUrls: [] }]);
+  });
+});
+
+describe("normalizeReplyPayloadsForDelivery", () => {
+  it("filters heartbeat-only and silent-only payloads before channel delivery", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([{ text: HEARTBEAT_TOKEN }, { text: "NO_REPLY" }]),
+    ).toEqual([]);
+  });
+
+  it("strips heartbeat text and preserves media-only payloads", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([
+        { text: HEARTBEAT_TOKEN, mediaUrl: "https://x.test/a.png" },
+        { text: `${HEARTBEAT_TOKEN} hello`, mediaUrl: "https://x.test/b.png" },
+      ]),
+    ).toMatchObject([
+      { text: "", mediaUrl: "https://x.test/a.png", mediaUrls: ["https://x.test/a.png"] },
+      { text: "hello", mediaUrl: "https://x.test/b.png", mediaUrls: ["https://x.test/b.png"] },
+    ]);
   });
 });
 
