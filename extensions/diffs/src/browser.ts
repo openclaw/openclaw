@@ -189,7 +189,6 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
               bottom: "0",
               left: "0",
             },
-            pageRanges: "1",
           });
           return params.outputPath;
         }

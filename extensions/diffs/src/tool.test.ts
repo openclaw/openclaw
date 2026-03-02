@@ -39,6 +39,18 @@ describe("diffs tool", () => {
     expect((result?.details as Record<string, unknown>).viewerUrl).toBeDefined();
   });
 
+  it("does not expose reserved format in the tool schema", async () => {
+    const tool = createDiffsTool({
+      api: createApi(),
+      store,
+      defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
+    });
+
+    const parameters = tool.parameters as { properties?: Record<string, unknown> };
+    expect(parameters.properties).toBeDefined();
+    expect(parameters.properties).not.toHaveProperty("format");
+  });
+
   it("returns an image artifact in image mode", async () => {
     const cleanupSpy = vi.spyOn(store, "scheduleCleanup");
     const screenshotter = {

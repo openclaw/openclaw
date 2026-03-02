@@ -89,7 +89,6 @@ const DiffsToolSchema = Type.Object(
     imageQuality: Type.Optional(
       stringEnum(DIFF_IMAGE_QUALITY_PRESETS, "Deprecated alias for fileQuality."),
     ),
-    format: Type.Optional(stringEnum(DIFF_OUTPUT_FORMATS, "Deprecated alias for fileFormat.")),
     imageFormat: Type.Optional(stringEnum(DIFF_OUTPUT_FORMATS, "Deprecated alias for fileFormat.")),
     imageScale: Type.Optional(
       Type.Number({
@@ -126,6 +125,10 @@ const DiffsToolSchema = Type.Object(
 );
 
 type DiffsToolParams = Static<typeof DiffsToolSchema>;
+type DiffsToolRawParams = DiffsToolParams & {
+  // Keep backward compatibility for direct calls that still pass `format`.
+  format?: DiffOutputFormat;
+};
 
 export function createDiffsTool(params: {
   api: OpenClawPluginApi;
@@ -140,7 +143,7 @@ export function createDiffsTool(params: {
       "Create a read-only diff viewer from before/after text or a unified patch. Returns a gateway viewer URL for canvas use and can also render the same diff to a PNG or PDF.",
     parameters: DiffsToolSchema,
     execute: async (_toolCallId, rawParams) => {
-      const toolParams = rawParams as DiffsToolParams;
+      const toolParams = rawParams as DiffsToolRawParams;
       const input = normalizeDiffInput(toolParams);
       const mode = normalizeMode(toolParams.mode, params.defaults.mode);
       const theme = normalizeTheme(toolParams.theme, params.defaults.theme);
