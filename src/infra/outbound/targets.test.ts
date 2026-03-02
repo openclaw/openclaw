@@ -179,6 +179,49 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.threadId).toBe(999);
   });
 
+  it("does not inherit stale origin threadId when delivery route has no thread", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-origin-thread-stale",
+        updatedAt: 1,
+        lastChannel: "slack",
+        lastTo: "channel:C123",
+        origin: {
+          provider: "slack",
+          to: "channel:C123",
+          threadId: "1739142736.000100",
+        },
+      },
+      requestedChannel: "last",
+    });
+
+    expect(resolved.channel).toBe("slack");
+    expect(resolved.to).toBe("channel:C123");
+    expect(resolved.threadId).toBeUndefined();
+  });
+
+  it("prefers persisted delivery threadId over stale origin threadId", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-persisted-thread",
+        updatedAt: 1,
+        lastChannel: "slack",
+        lastTo: "channel:C123",
+        lastThreadId: "1739142000.000001",
+        origin: {
+          provider: "slack",
+          to: "channel:C123",
+          threadId: "1739141000.000001",
+        },
+      },
+      requestedChannel: "last",
+    });
+
+    expect(resolved.channel).toBe("slack");
+    expect(resolved.to).toBe("channel:C123");
+    expect(resolved.threadId).toBe("1739142000.000001");
+  });
+
   it("does not inherit lastThreadId in heartbeat mode", () => {
     const resolved = resolveSessionDeliveryTarget({
       entry: {

@@ -36,6 +36,10 @@ const mergeOrigin = (
   if (next?.accountId) {
     merged.accountId = next.accountId;
   }
+  // Clear stale thread metadata when a fresh origin update arrives without a thread id.
+  if (next && !Object.prototype.hasOwnProperty.call(next, "threadId")) {
+    delete merged.threadId;
+  }
   if (next?.threadId != null && next.threadId !== "") {
     merged.threadId = next.threadId;
   }
