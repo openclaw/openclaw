@@ -31,6 +31,18 @@ const PLUGIN_REQUIRED_COMMANDS = new Set([
 ]);
 const CONFIG_GUARD_BYPASS_COMMANDS = new Set(["doctor", "completion", "secrets"]);
 const JSON_PARSE_ONLY_COMMANDS = new Set(["config set"]);
+let configGuardModulePromise: Promise<typeof import("./config-guard.js")> | undefined;
+let pluginRegistryModulePromise: Promise<typeof import("../plugin-registry.js")> | undefined;
+
+function loadConfigGuardModule() {
+  configGuardModulePromise ??= import("./config-guard.js");
+  return configGuardModulePromise;
+}
+
+function loadPluginRegistryModule() {
+  pluginRegistryModulePromise ??= import("../plugin-registry.js");
+  return pluginRegistryModulePromise;
+}
 
 function getRootCommand(command: Command): Command {
   let current = command;
@@ -92,7 +104,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       return;
     }
     const suppressDoctorStdout = isJsonOutputMode(commandPath, argv);
-    const { ensureConfigReady } = await import("./config-guard.js");
+    const { ensureConfigReady } = await loadConfigGuardModule();
     await ensureConfigReady({
       runtime: defaultRuntime,
       commandPath,
@@ -100,7 +112,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     });
     // Load plugins for commands that need channel access
     if (PLUGIN_REQUIRED_COMMANDS.has(commandPath[0])) {
-      const { ensurePluginRegistryLoaded } = await import("../plugin-registry.js");
+      const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
       ensurePluginRegistryLoaded();
     }
   });
