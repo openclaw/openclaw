@@ -48,7 +48,11 @@ import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.j
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
-import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
+import {
+  resolveOriginMessageProvider,
+  resolveOriginMessageTo,
+  resolveRunDeliveryTarget,
+} from "./origin-routing.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
@@ -142,14 +146,36 @@ export async function runReplyAgent(params: {
   const pendingToolTasks = new Set<Promise<void>>();
   const blockReplyTimeoutMs = opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
 
+  const sourceTargetTo = resolveOriginMessageTo({
+    originatingTo: sessionCtx.OriginatingTo,
+    to: sessionCtx.To,
+  });
+  const deliveryTarget = resolveRunDeliveryTarget({
+    relayMode: followupRun.relayMode,
+    relayOutput: followupRun.relayOutput,
+    originatingChannel: followupRun.originatingChannel ?? sessionCtx.OriginatingChannel,
+    originatingTo: followupRun.originatingTo ?? sourceTargetTo,
+    originatingAccountId: followupRun.originatingAccountId ?? sessionCtx.AccountId,
+    originatingThreadId: followupRun.originatingThreadId ?? sessionCtx.MessageThreadId,
+  });
+  const useRelayRunRouting =
+    deliveryTarget.relayMode === "read-only" && deliveryTarget.viaRelayOutput;
+  const replyOriginatingChannel = deliveryTarget.channel ?? sessionCtx.OriginatingChannel;
+  const replyOriginatingTo = deliveryTarget.to ?? sourceTargetTo;
+  const replyAccountId = deliveryTarget.accountId ?? sessionCtx.AccountId;
+  const currentMessageId = useRelayRunRouting
+    ? deliveryTarget.threadId != null
+      ? String(deliveryTarget.threadId)
+      : undefined
+    : (sessionCtx.MessageSidFull ?? sessionCtx.MessageSid);
   const replyToChannel = resolveOriginMessageProvider({
-    originatingChannel: sessionCtx.OriginatingChannel,
+    originatingChannel: replyOriginatingChannel,
     provider: sessionCtx.Surface ?? sessionCtx.Provider,
   }) as OriginatingChannelType | undefined;
   const replyToMode = resolveReplyToMode(
     followupRun.run.config,
     replyToChannel,
-    sessionCtx.AccountId,
+    replyAccountId,
     sessionCtx.ChatType,
   );
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
@@ -484,17 +510,14 @@ export async function runReplyAgent(params: {
       directlySentBlockKeys,
       replyToMode,
       replyToChannel,
-      currentMessageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+      currentMessageId,
       messageProvider: followupRun.run.messageProvider,
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
-      originatingChannel: sessionCtx.OriginatingChannel,
-      originatingTo: resolveOriginMessageTo({
-        originatingTo: sessionCtx.OriginatingTo,
-        to: sessionCtx.To,
-      }),
-      accountId: sessionCtx.AccountId,
+      originatingChannel: replyOriginatingChannel,
+      originatingTo: replyOriginatingTo,
+      accountId: replyAccountId,
     });
     const { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;

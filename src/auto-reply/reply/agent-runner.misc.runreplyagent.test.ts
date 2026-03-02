@@ -1107,6 +1107,155 @@ describe("runReplyAgent messaging tool suppression", () => {
   });
 });
 
+describe("runReplyAgent read-only relay immediate routing", () => {
+  function createRelayRun(params?: {
+    relayOutput?: FollowupRun["relayOutput"];
+    sessionCtxOverrides?: Partial<TemplateContext>;
+    runOverrides?: Partial<FollowupRun["run"]>;
+  }) {
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:source",
+      To: "channel:source",
+      AccountId: "source-account",
+      MessageSid: "source-message-id",
+      MessageThreadId: "source-thread-id",
+      ...params?.sessionCtxOverrides,
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      relayMode: "read-only",
+      relayOutput: params?.relayOutput ?? {
+        channel: "slack",
+        to: "channel:relay-room",
+        accountId: "relay-account",
+        threadId: "171234.567",
+      },
+      originatingChannel: "discord",
+      originatingTo: "channel:source",
+      originatingAccountId: "source-account",
+      originatingThreadId: "source-thread-id",
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "discord",
+        agentAccountId: "source-account",
+        messageThreadId: "source-thread-id",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+        ...params?.runOverrides,
+      },
+    } as unknown as FollowupRun;
+
+    return runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      defaultModel: "anthropic/claude-opus-4-5",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+  }
+
+  it("suppresses final payloads when messaging tools already sent to relay target", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "already sent" }],
+      messagingToolSentTexts: ["different message"],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:relay-room",
+          accountId: "relay-account",
+        },
+      ],
+      meta: {},
+    });
+
+    const result = await createRelayRun();
+
+    expect(result).toBeUndefined();
+  });
+
+  it("overrides embedded threading tool context to relay channel identity", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    await createRelayRun();
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    expect(call?.messageProvider).toBe("slack");
+    expect(call?.messageTo).toBe("channel:relay-room");
+    expect(call?.agentAccountId).toBe("relay-account");
+    expect(call?.messageThreadId).toBe("171234.567");
+    expect(call?.currentChannelProvider).toBe("slack");
+    expect(call?.currentChannelId).toBe("relay-room");
+    expect(call?.currentThreadTs).toBe("171234.567");
+    expect(call?.readOnlySource).toEqual({
+      channel: "discord",
+      to: "channel:source",
+      accountId: "source-account",
+    });
+  });
+
+  it("threads final replies with relay metadata instead of source message ids", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "thread me" }],
+      meta: {},
+    });
+
+    const result = await createRelayRun({
+      relayOutput: {
+        channel: "whatsapp",
+        to: "+15550002222",
+        accountId: "relay-account",
+        threadId: "relay-message-id",
+      },
+    });
+    const payload = Array.isArray(result) ? result[0] : result;
+
+    expect(payload).toMatchObject({
+      text: "thread me",
+      replyToId: "relay-message-id",
+    });
+    expect(payload?.replyToId).not.toBe("source-message-id");
+  });
+});
+
 describe("runReplyAgent reminder commitment guard", () => {
   function createRun(params?: { sessionKey?: string; omitSessionKey?: boolean }) {
     const typing = createMockTypingController();

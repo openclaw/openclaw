@@ -37,6 +37,7 @@ import {
 } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
+  buildThreadingToolContext,
   buildEmbeddedRunBaseParams,
   buildEmbeddedRunContexts,
   resolveModelFallbackOptions,
@@ -311,6 +312,19 @@ export async function runAgentTurnWithFallback(params: {
             hasRepliedRef: params.opts?.hasRepliedRef,
             provider,
           });
+          const relayThreadingContext = useRelayRunRouting
+            ? buildThreadingToolContext({
+                sessionCtx: {
+                  ...params.sessionCtx,
+                  Provider: deliveryTarget.channel ?? params.sessionCtx.Provider,
+                  To: deliveryTarget.to ?? params.sessionCtx.To,
+                  AccountId: deliveryTarget.accountId ?? params.sessionCtx.AccountId,
+                  MessageThreadId: deliveryTarget.threadId ?? params.sessionCtx.MessageThreadId,
+                } as TemplateContext,
+                config: params.followupRun.run.config,
+                hasRepliedRef: params.opts?.hasRepliedRef,
+              })
+            : undefined;
           const runBaseParams = buildEmbeddedRunBaseParams({
             run: params.followupRun.run,
             provider,
@@ -328,6 +342,7 @@ export async function runAgentTurnWithFallback(params: {
                   messageTo: deliveryTarget.to,
                   agentAccountId: deliveryTarget.accountId ?? embeddedContext.agentAccountId,
                   messageThreadId: deliveryTarget.threadId ?? embeddedContext.messageThreadId,
+                  ...relayThreadingContext,
                 }
               : {}),
             readOnlySource,
