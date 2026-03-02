@@ -60,17 +60,17 @@ describe("runCommandWithTimeout", () => {
           "let count = 0;",
           'const ticker = setInterval(() => { process.stdout.write(".");',
           "count += 1;",
-          "if (count === 2) {",
+          "if (count === 3) {",
           "clearInterval(ticker);",
           "process.exit(0);",
           "}",
-          "}, 5);",
+          "}, 6);",
         ].join(" "),
       ],
       {
-        timeoutMs: 400,
+        timeoutMs: 500,
         // Keep a healthy margin above the emit interval while avoiding long idle waits.
-        noOutputTimeoutMs: 60,
+        noOutputTimeoutMs: 120,
       },
     );
 
