@@ -165,6 +165,71 @@ export async function openFileWithinRoot(params: {
   return opened;
 }
 
+export async function readFileWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  rejectHardlinks?: boolean;
+  maxBytes?: number;
+}): Promise<SafeLocalReadResult> {
+  const opened = await openFileWithinRoot({
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
+    rejectHardlinks: params.rejectHardlinks,
+  });
+  try {
+    if (params.maxBytes !== undefined && opened.stat.size > params.maxBytes) {
+      throw new SafeOpenError(
+        "too-large",
+        `file exceeds limit of ${params.maxBytes} bytes (got ${opened.stat.size})`,
+      );
+    }
+    const buffer = await opened.handle.readFile();
+    return {
+      buffer,
+      realPath: opened.realPath,
+      stat: opened.stat,
+    };
+  } finally {
+    await opened.handle.close().catch(() => {});
+  }
+}
+
+export async function readPathWithinRoot(params: {
+  rootDir: string;
+  filePath: string;
+  rejectHardlinks?: boolean;
+  maxBytes?: number;
+}): Promise<SafeLocalReadResult> {
+  const rootDir = path.resolve(params.rootDir);
+  const candidatePath = path.isAbsolute(params.filePath)
+    ? path.resolve(params.filePath)
+    : path.resolve(rootDir, params.filePath);
+  const relativePath = path.relative(rootDir, candidatePath);
+  return await readFileWithinRoot({
+    rootDir,
+    relativePath,
+    rejectHardlinks: params.rejectHardlinks,
+    maxBytes: params.maxBytes,
+  });
+}
+
+export function createRootScopedReadFile(params: {
+  rootDir: string;
+  rejectHardlinks?: boolean;
+  maxBytes?: number;
+}): (filePath: string) => Promise<Buffer> {
+  const rootDir = path.resolve(params.rootDir);
+  return async (filePath: string) => {
+    const safeRead = await readPathWithinRoot({
+      rootDir,
+      filePath,
+      rejectHardlinks: params.rejectHardlinks,
+      maxBytes: params.maxBytes,
+    });
+    return safeRead.buffer;
+  };
+}
+
 export async function readLocalFileSafely(params: {
   filePath: string;
   maxBytes?: number;

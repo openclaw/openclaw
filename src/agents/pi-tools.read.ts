@@ -3,7 +3,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
-import { SafeOpenError, openFileWithinRoot, writeFileWithinRoot } from "../infra/fs-safe.js";
+import {
+  SafeOpenError,
+  openFileWithinRoot,
+  readFileWithinRoot,
+  writeFileWithinRoot,
+} from "../infra/fs-safe.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
@@ -823,15 +828,11 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
   return {
     readFile: async (absolutePath: string) => {
       const relative = toRelativePathInRoot(root, absolutePath);
-      const opened = await openFileWithinRoot({
+      const safeRead = await readFileWithinRoot({
         rootDir: root,
         relativePath: relative,
       });
-      try {
-        return await opened.handle.readFile();
-      } finally {
-        await opened.handle.close().catch(() => {});
-      }
+      return safeRead.buffer;
     },
     writeFile: async (absolutePath: string, content: string) => {
       const relative = toRelativePathInRoot(root, absolutePath);
