@@ -584,6 +584,51 @@ describe("secrets runtime snapshot", () => {
     );
   });
 
+  it("treats gateway.auth.password ref as active when mode is unset and no token is configured", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        gateway: {
+          auth: {
+            password: { source: "env", provider: "default", id: "GATEWAY_PASSWORD_REF" },
+          },
+        },
+      }),
+      env: {
+        GATEWAY_PASSWORD_REF: "resolved-gateway-password",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.gateway?.auth?.password).toBe("resolved-gateway-password");
+    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain("gateway.auth.password");
+  });
+
+  it("treats gateway.auth.password ref as inactive when auth mode is trusted-proxy", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            password: { source: "env", provider: "default", id: "GATEWAY_PASSWORD_REF" },
+          },
+        },
+      }),
+      env: {
+        GATEWAY_PASSWORD_REF: "resolved-gateway-password",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.gateway?.auth?.password).toEqual({
+      source: "env",
+      provider: "default",
+      id: "GATEWAY_PASSWORD_REF",
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).toContain("gateway.auth.password");
+  });
+
   it("treats gateway.remote refs as inactive in local mode without remote url", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({

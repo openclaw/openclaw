@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js";
 import {
   collectSecretInputAssignment,
@@ -195,14 +196,32 @@ function collectGatewayAssignments(params: {
   }
   const auth = isRecord(gateway.auth) ? gateway.auth : undefined;
   if (auth) {
+    const envToken =
+      typeof params.context.env.OPENCLAW_GATEWAY_TOKEN === "string" &&
+      params.context.env.OPENCLAW_GATEWAY_TOKEN.trim().length > 0
+        ? params.context.env.OPENCLAW_GATEWAY_TOKEN.trim()
+        : typeof params.context.env.CLAWDBOT_GATEWAY_TOKEN === "string" &&
+            params.context.env.CLAWDBOT_GATEWAY_TOKEN.trim().length > 0
+          ? params.context.env.CLAWDBOT_GATEWAY_TOKEN.trim()
+          : undefined;
+    const authMode = typeof auth.mode === "string" ? auth.mode : undefined;
+    const tokenConfigured = hasConfiguredSecretInput(auth.token, params.defaults);
+    const passwordActive =
+      authMode === "password" ||
+      (authMode !== "token" &&
+        authMode !== "none" &&
+        authMode !== "trusted-proxy" &&
+        !envToken &&
+        !tokenConfigured);
     collectSecretInputAssignment({
       value: auth.password,
       path: "gateway.auth.password",
       expected: "string",
       defaults: params.defaults,
       context: params.context,
-      active: auth.mode === "password",
-      inactiveReason: 'gateway.auth.mode is not "password".',
+      active: passwordActive,
+      inactiveReason:
+        'gateway.auth.password is inactive unless password auth can win (gateway.auth.mode="password", or mode is unset with no token configured).',
       apply: (value) => {
         auth.password = value;
       },
