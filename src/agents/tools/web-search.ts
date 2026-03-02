@@ -249,6 +249,10 @@ type GeminiGroundingResponse = {
           title?: string;
         };
       }>;
+      groundingSupports?: Array<{
+        segment?: { startIndex?: number; endIndex?: number; text?: string };
+        groundingChunkIndices?: number[];
+      }>;
       searchEntryPoint?: {
         renderedContent?: string;
       };
@@ -621,6 +625,9 @@ async function runGeminiSearch(params: {
         },
       ],
       tools: [{ google_search: {} }],
+      generationConfig: {
+        maxOutputTokens: 16364,
+      },
     }),
     signal: withTimeout(undefined, params.timeoutSeconds * 1000),
   });
@@ -647,7 +654,7 @@ async function runGeminiSearch(params: {
   }
 
   const candidate = data.candidates?.[0];
-  const content =
+  let content =
     candidate?.content?.parts
       ?.map((p) => p.text)
       .filter(Boolean)
@@ -674,6 +681,14 @@ async function runGeminiSearch(params: {
       }),
     );
     citations.push(...resolved);
+  }
+
+  // Append a References footer so the LLM sees citation URLs inline in the content.
+  if (citations.length > 0) {
+    const refsLines = citations.map(
+      (c, i) => `[${i + 1}] ${c.title ? `${c.title}: ` : ""}${c.url}`,
+    );
+    content = `${content}\n\nReferences:\n${refsLines.join("\n")}`;
   }
 
   return { content, citations };

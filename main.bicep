@@ -179,35 +179,6 @@ const fs = require('fs');
   fs[f + 'Sync'] = () => {};
   if (fs.promises && fs.promises[f]) fs.promises[f] = async () => {};
 });
-// Gemini grounding citation patch: inject References into API response content
-const _origFetch = globalThis.fetch;
-globalThis.fetch = async function(...args) {
-  const res = await _origFetch.apply(this, args);
-  const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
-  if (url.indexOf('generativelanguage.googleapis.com') === -1 || url.indexOf(':generateContent') === -1) {
-    return res;
-  }
-  const _origJson = res.json.bind(res);
-  res.json = async function() {
-    const data = await _origJson();
-    try {
-      const cand = data && data.candidates && data.candidates[0];
-      const chunks = (cand && cand.groundingMetadata && cand.groundingMetadata.groundingChunks) || [];
-      const webChunks = chunks.filter(function(c) { return c && c.web && c.web.uri; });
-      if (webChunks.length > 0 && cand.content && cand.content.parts && cand.content.parts.length > 0) {
-        const refs = webChunks.map(function(c, i) {
-          return '[' + (i+1) + '] ' + (c.web.title || 'Source') + ': ' + c.web.uri;
-        }).join('\n');
-        const last = cand.content.parts[cand.content.parts.length - 1];
-        if (last && typeof last.text === 'string') {
-          last.text += '\n\nReferences:\n' + refs;
-        }
-      }
-    } catch(e) { /* ignore patch errors */ }
-    return data;
-  };
-  return res;
-};
 EOF
 mkdir -p /home/node/.openclaw/workspace
 cat << 'AGENTS_EOF' > /home/node/.openclaw/workspace/AGENTS.md
