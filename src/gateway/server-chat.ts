@@ -1,6 +1,10 @@
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import {
+  isSilentReplyPrefixText,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+} from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
@@ -289,6 +293,10 @@ export function createAgentEventHandler({
       return;
     }
     if (isSilentReplyText(cleaned, SILENT_REPLY_TOKEN)) {
+      return;
+    }
+    // Suppress partial NO_REPLY tokens during streaming (e.g. "NO" before full "NO_REPLY" arrives)
+    if (isSilentReplyPrefixText(cleaned, SILENT_REPLY_TOKEN)) {
       return;
     }
     chatRunState.buffers.set(clientRunId, cleaned);
