@@ -344,6 +344,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       }
       await params.stopDraftLane(lane);
       const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
+      // Native draft: pause briefly after sending the permanent message so the
+      // Telegram client has time to render it before a new draft bubble arrives
+      // (prevents the next message's draft from visually overwriting this one).
+      if (isNativeDraftStream && delivered) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
       return delivered ? "sent" : "skipped";
     }
 
