@@ -383,6 +383,8 @@ describe("isPrivateOrLoopbackHost", () => {
   it("rejects unspecified IPv6 address (::)", () => {
     expect(isPrivateOrLoopbackHost("[::]")).toBe(false);
     expect(isPrivateOrLoopbackHost("::")).toBe(false);
+    expect(isPrivateOrLoopbackHost("0:0::0")).toBe(false);
+    expect(isPrivateOrLoopbackHost("[0:0::0]")).toBe(false);
     expect(isPrivateOrLoopbackHost("[0000:0000:0000:0000:0000:0000:0000:0000]")).toBe(false);
   });
 
@@ -459,6 +461,18 @@ describe("isSecureWebSocketUrl", () => {
 
     for (const input of allowedWhenOptedIn) {
       expect(isSecureWebSocketUrl(input, { allowPrivateWs: true }), input).toBe(true);
+    }
+  });
+
+  it("still rejects non-unicast IPv6 ws:// even when opt-in is enabled", () => {
+    const disallowedWhenOptedIn = [
+      "ws://[::]:18789",
+      "ws://[0:0::0]:18789",
+      "ws://[ff02::1]:18789",
+    ];
+
+    for (const input of disallowedWhenOptedIn) {
+      expect(isSecureWebSocketUrl(input, { allowPrivateWs: true }), input).toBe(false);
     }
   });
 });
