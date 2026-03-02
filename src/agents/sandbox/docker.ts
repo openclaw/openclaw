@@ -1,5 +1,11 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { DockerMountLike } from "./docker-bind-source-map.js";
+import {
+  mapContainerPathToDockerHostPath,
+  resolveAllowedBindSourceRoots,
+} from "./docker-bind-source-map.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
 type ExecDockerRawOptions = {
@@ -391,6 +397,35 @@ function appendCustomBinds(args: string[], cfg: SandboxDockerConfig): void {
   }
 }
 
+async function readDockerSelfMounts(): Promise<DockerMountLike[] | null> {
+  if (!fs.existsSync("/.dockerenv")) {
+    return null;
+  }
+  const containerRef = process.env.HOSTNAME?.trim();
+  if (!containerRef) {
+    return null;
+  }
+  const result = await execDocker(["inspect", "-f", "{{json .Mounts}}", containerRef], {
+    allowFailure: true,
+  });
+  if (result.code !== 0) {
+    return null;
+  }
+  const raw = result.stdout.trim();
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed as DockerMountLike[];
+  } catch {
+    return null;
+  }
+}
+
 async function createSandboxContainer(params: {
   name: string;
   cfg: SandboxDockerConfig;
@@ -403,24 +438,41 @@ async function createSandboxContainer(params: {
   const { name, cfg, workspaceDir, scopeKey } = params;
   await ensureDockerImage(cfg.image);
 
+  const selfMounts = await readDockerSelfMounts();
+  const bindWorkspaceDir =
+    selfMounts?.length && workspaceDir.startsWith("/")
+      ? mapContainerPathToDockerHostPath({ containerPath: workspaceDir, mounts: selfMounts })
+      : workspaceDir;
+  const bindAgentWorkspaceDir =
+    selfMounts?.length && params.agentWorkspaceDir.startsWith("/")
+      ? mapContainerPathToDockerHostPath({
+          containerPath: params.agentWorkspaceDir,
+          mounts: selfMounts,
+        })
+      : params.agentWorkspaceDir;
+
+  const bindSourceRoots = selfMounts?.length
+    ? resolveAllowedBindSourceRoots({
+        containerRoots: [workspaceDir, params.agentWorkspaceDir],
+        mounts: selfMounts,
+      })
+    : [workspaceDir, params.agentWorkspaceDir];
+
   const args = buildSandboxCreateArgs({
     name,
     cfg,
     scopeKey,
     configHash: params.configHash,
     includeBinds: false,
-    bindSourceRoots: [workspaceDir, params.agentWorkspaceDir],
+    bindSourceRoots,
   });
   args.push("--workdir", cfg.workdir);
   const mainMountSuffix =
     params.workspaceAccess === "ro" && workspaceDir === params.agentWorkspaceDir ? ":ro" : "";
-  args.push("-v", `${workspaceDir}:${cfg.workdir}${mainMountSuffix}`);
+  args.push("-v", `${bindWorkspaceDir}:${cfg.workdir}${mainMountSuffix}`);
   if (params.workspaceAccess !== "none" && workspaceDir !== params.agentWorkspaceDir) {
     const agentMountSuffix = params.workspaceAccess === "ro" ? ":ro" : "";
-    args.push(
-      "-v",
-      `${params.agentWorkspaceDir}:${SANDBOX_AGENT_WORKSPACE_MOUNT}${agentMountSuffix}`,
-    );
+    args.push("-v", `${bindAgentWorkspaceDir}:${SANDBOX_AGENT_WORKSPACE_MOUNT}${agentMountSuffix}`);
   }
   appendCustomBinds(args, cfg);
   args.push(cfg.image, "sleep", "infinity");
