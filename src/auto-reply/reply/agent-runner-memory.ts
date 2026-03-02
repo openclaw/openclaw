@@ -128,23 +128,72 @@ function resolveSessionLogPath(
   }
 }
 
-async function readSessionLogByteSize(
-  sessionId?: string,
-  sessionEntry?: SessionEntry,
-  sessionKey?: string,
-  opts?: { storePath?: string },
-): Promise<number | undefined> {
-  const logPath = resolveSessionLogPath(sessionId, sessionEntry, sessionKey, opts);
+function deriveTranscriptUsageSnapshot(
+  usage: ReturnType<typeof normalizeUsage> | undefined,
+): SessionTranscriptUsageSnapshot | undefined {
+  if (!usage) {
+    return undefined;
+  }
+  const promptTokens = derivePromptTokens(usage);
+  const outputRaw = usage.output;
+  const outputTokens =
+    typeof outputRaw === "number" && Number.isFinite(outputRaw) && outputRaw > 0
+      ? outputRaw
+      : undefined;
+  if (!(typeof promptTokens === "number") && !(typeof outputTokens === "number")) {
+    return undefined;
+  }
+  return {
+    promptTokens,
+    outputTokens,
+  };
+}
+
+type SessionLogSnapshot = {
+  byteSize?: number;
+  usage?: SessionTranscriptUsageSnapshot;
+};
+
+async function readSessionLogSnapshot(params: {
+  sessionId?: string;
+  sessionEntry?: SessionEntry;
+  sessionKey?: string;
+  opts?: { storePath?: string };
+  includeByteSize: boolean;
+  includeUsage: boolean;
+}): Promise<SessionLogSnapshot> {
+  const logPath = resolveSessionLogPath(
+    params.sessionId,
+    params.sessionEntry,
+    params.sessionKey,
+    params.opts,
+  );
   if (!logPath) {
-    return undefined;
+    return {};
   }
-  try {
-    const stat = await fs.promises.stat(logPath);
-    const size = Math.floor(stat.size);
-    return Number.isFinite(size) && size >= 0 ? size : undefined;
-  } catch {
-    return undefined;
+
+  const snapshot: SessionLogSnapshot = {};
+
+  if (params.includeByteSize) {
+    try {
+      const stat = await fs.promises.stat(logPath);
+      const size = Math.floor(stat.size);
+      snapshot.byteSize = Number.isFinite(size) && size >= 0 ? size : undefined;
+    } catch {
+      snapshot.byteSize = undefined;
+    }
   }
+
+  if (params.includeUsage) {
+    try {
+      const lastUsage = await readLastNonzeroUsageFromSessionLog(logPath);
+      snapshot.usage = deriveTranscriptUsageSnapshot(lastUsage);
+    } catch {
+      snapshot.usage = undefined;
+    }
+  }
+
+  return snapshot;
 }
 
 async function readLastNonzeroUsageFromSessionLog(logPath: string) {
@@ -185,35 +234,15 @@ export async function readPromptTokensFromSessionLog(
   sessionKey?: string,
   opts?: { storePath?: string },
 ): Promise<SessionTranscriptUsageSnapshot | undefined> {
-  const logPath = resolveSessionLogPath(sessionId, sessionEntry, sessionKey, opts);
-  if (!logPath) {
-    return undefined;
-  }
-
-  try {
-    const lastUsage = await readLastNonzeroUsageFromSessionLog(logPath);
-    if (!lastUsage) {
-      return undefined;
-    }
-
-    const promptTokens = derivePromptTokens(lastUsage);
-    const outputRaw = lastUsage.output;
-    const outputTokens =
-      typeof outputRaw === "number" && Number.isFinite(outputRaw) && outputRaw > 0
-        ? outputRaw
-        : undefined;
-
-    if (!(typeof promptTokens === "number") && !(typeof outputTokens === "number")) {
-      return undefined;
-    }
-
-    return {
-      promptTokens,
-      outputTokens,
-    };
-  } catch {
-    return undefined;
-  }
+  const snapshot = await readSessionLogSnapshot({
+    sessionId,
+    sessionEntry,
+    sessionKey,
+    opts,
+    includeByteSize: false,
+    includeUsage: true,
+  });
+  return snapshot.usage;
 }
 
 export async function runMemoryFlushIfNeeded(params: {
@@ -294,34 +323,33 @@ export async function runMemoryFlushIfNeeded(params: {
     (persistedPromptTokens ?? 0) + promptTokenEstimate >=
       flushThreshold - TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS;
 
-  const shouldReadTranscript =
-    canAttemptFlush && entry && (!hasFreshPersistedPromptTokens || shouldReadTranscriptForOutput);
+  const shouldReadTranscript = Boolean(
+    canAttemptFlush && entry && (!hasFreshPersistedPromptTokens || shouldReadTranscriptForOutput),
+  );
 
   const forceFlushTranscriptBytes = memoryFlushSettings.forceFlushTranscriptBytes;
-  const shouldCheckTranscriptSizeForForcedFlush =
+  const shouldCheckTranscriptSizeForForcedFlush = Boolean(
     canAttemptFlush &&
     entry &&
     Number.isFinite(forceFlushTranscriptBytes) &&
-    forceFlushTranscriptBytes > 0;
-  const transcriptByteSize = shouldCheckTranscriptSizeForForcedFlush
-    ? await readSessionLogByteSize(
-        params.followupRun.run.sessionId,
-        entry,
-        params.sessionKey ?? params.followupRun.run.sessionKey,
-        { storePath: params.storePath },
-      )
+    forceFlushTranscriptBytes > 0,
+  );
+  const shouldReadSessionLog = shouldReadTranscript || shouldCheckTranscriptSizeForForcedFlush;
+  const sessionLogSnapshot = shouldReadSessionLog
+    ? await readSessionLogSnapshot({
+        sessionId: params.followupRun.run.sessionId,
+        sessionEntry: entry,
+        sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+        opts: { storePath: params.storePath },
+        includeByteSize: shouldCheckTranscriptSizeForForcedFlush,
+        includeUsage: shouldReadTranscript,
+      })
     : undefined;
+  const transcriptByteSize = sessionLogSnapshot?.byteSize;
   const shouldForceFlushByTranscriptSize =
     typeof transcriptByteSize === "number" && transcriptByteSize >= forceFlushTranscriptBytes;
 
-  const transcriptUsageSnapshot = shouldReadTranscript
-    ? await readPromptTokensFromSessionLog(
-        params.followupRun.run.sessionId,
-        entry,
-        params.sessionKey ?? params.followupRun.run.sessionKey,
-        { storePath: params.storePath },
-      )
-    : undefined;
+  const transcriptUsageSnapshot = sessionLogSnapshot?.usage;
   const transcriptPromptTokens = transcriptUsageSnapshot?.promptTokens;
   const transcriptOutputTokens = transcriptUsageSnapshot?.outputTokens;
   const hasReliableTranscriptPromptTokens =
