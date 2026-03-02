@@ -495,6 +495,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     const dataMessage = envelope.dataMessage ?? envelope.editMessage?.dataMessage;
+
     const reaction = deps.isSignalReactionMessage(envelope.reactionMessage)
       ? envelope.reactionMessage
       : deps.isSignalReactionMessage(dataMessage?.reaction)
@@ -508,9 +509,17 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const messageText = normalizedMessage.trim();
 
     const quoteText = dataMessage?.quote?.text?.trim() ?? "";
-    const hasBodyContent =
-      Boolean(messageText || quoteText) || Boolean(!reaction && dataMessage?.attachments?.length);
-    const senderDisplay = formatSignalSenderDisplay(sender);
+
+    // Guard: if dataMessage carries a reaction field but isSignalReactionMessage()
+    // returned null (e.g. targetAuthor/targetAuthorUuid absent in some signal-cli versions),
+    // and there is no real body content, surface it as a system event (matching the
+    // Discord reaction pattern) rather than leaking through as <media:unknown>.
+    const bareReaction = dataMessage?.reaction;
+    // Note: some signal-cli builds attach a null-contentType attachment alongside
+    // the reaction field (e.g. thumbnail of the reacted-to message). We intentionally
+    // omit the attachments check so those are caught here rather than leaking as
+    // <media:unknown>.
+    // Resolve full access state early — shared by bare reaction path and normal dispatch.
     const { resolveAccessDecision, dmAccess, effectiveDmAllow, effectiveGroupAllow } =
       await resolveSignalAccessState({
         accountId: deps.accountId,
@@ -520,6 +529,84 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         groupAllowFrom: deps.groupAllowFrom,
         sender,
       });
+
+    const hasBareReactionField = !reaction && Boolean(bareReaction) && !messageText && !quoteText;
+    if (hasBareReactionField && bareReaction) {
+      const senderDisplayBare = formatSignalSenderDisplay(sender);
+      const emojiLabel = (bareReaction as { emoji?: string | null }).emoji?.trim() || "emoji";
+      const isRemove = Boolean((bareReaction as { isRemove?: boolean | null }).isRemove);
+      const targetTimestamp = (bareReaction as { targetSentTimestamp?: number | null })
+        .targetSentTimestamp;
+      logVerbose(`signal: bare reaction (${emojiLabel}) from ${senderDisplayBare}`);
+      if (!isRemove) {
+        // P2: prefer group info from the reaction payload itself; fall back to dataMessage.groupInfo.
+        const bareReactionGroupInfo =
+          (bareReaction as { groupInfo?: { groupId?: string; groupName?: string } | null })
+            .groupInfo ?? dataMessage?.groupInfo;
+        const groupId = bareReactionGroupInfo?.groupId ?? undefined;
+        const groupName = bareReactionGroupInfo?.groupName ?? undefined;
+        const isGroup = Boolean(groupId);
+        // Apply full access policy (dmPolicy/groupPolicy) — same as handleReactionOnlyInbound.
+        const bareAccessDecision = resolveAccessDecision(isGroup);
+        if (bareAccessDecision.decision !== "allow") {
+          logVerbose(
+            `signal: bare reaction from unauthorized sender ${senderDisplayBare}, dropping (${bareAccessDecision.reasonCode ?? "policy"})`,
+          );
+          return;
+        }
+        // Apply notification-mode gating (off/own/all/allowlist).
+        const bareReactionTargets = deps.resolveSignalReactionTargets(bareReaction);
+        const shouldNotifyBare = deps.shouldEmitSignalReactionNotification({
+          mode: deps.reactionMode,
+          account: deps.account,
+          targets: bareReactionTargets,
+          sender,
+          allowlist: deps.reactionAllowlist,
+        });
+        if (!shouldNotifyBare) {
+          logVerbose(`signal: bare reaction suppressed (reactionMode=${deps.reactionMode})`);
+          return;
+        }
+        const senderName = envelope.sourceName ?? senderDisplayBare;
+        const senderPeerIdBare = resolveSignalPeerId(sender);
+        const routeBare = resolveAgentRoute({
+          cfg: deps.cfg,
+          channel: "signal",
+          accountId: deps.accountId,
+          peer: {
+            kind: isGroup ? "group" : "direct",
+            id: isGroup ? (groupId ?? "unknown") : senderPeerIdBare,
+          },
+        });
+        const messageId = typeof targetTimestamp === "number" ? String(targetTimestamp) : "unknown";
+        const groupLabel = isGroup ? `${groupName ?? "Signal Group"} id:${groupId}` : undefined;
+        const text = deps.buildSignalReactionSystemEventText({
+          emojiLabel,
+          actorLabel: senderName,
+          messageId,
+          groupLabel,
+        });
+        enqueueSystemEvent(text, {
+          sessionKey: routeBare.sessionKey,
+          contextKey: [
+            "signal",
+            "reaction",
+            "added",
+            messageId,
+            senderPeerIdBare,
+            emojiLabel,
+            groupId ?? "",
+          ]
+            .filter(Boolean)
+            .join(":"),
+        });
+      }
+      return;
+    }
+
+    const hasBodyContent =
+      Boolean(messageText || quoteText) || Boolean(!reaction && dataMessage?.attachments?.length);
+    const senderDisplay = formatSignalSenderDisplay(sender);
 
     if (
       reaction &&
@@ -759,10 +846,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (mediaPaths.length > 1) {
       placeholder = formatAttachmentSummaryPlaceholder(mediaTypes);
     } else {
-      const kind = kindFromMime(mediaType ?? undefined);
-      if (kind) {
+      // Only set placeholder when we actually resolved a mediaType.
+      // kindFromMime(undefined) returns "unknown" which is truthy — guard against
+      // that case so null-body messages (e.g. blank reaction envelopes) aren't dispatched
+      // with <media:unknown> as the body.
+      const kind = mediaType ? kindFromMime(mediaType) : undefined;
+      if (kind && kind !== "unknown") {
         placeholder = `<media:${kind}>`;
-      } else if (attachments.length) {
+      } else if (kind === "unknown" || (!kind && dataMessage.attachments?.length)) {
         placeholder = "<media:attachment>";
       }
     }
