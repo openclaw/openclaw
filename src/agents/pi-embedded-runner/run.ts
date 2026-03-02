@@ -161,14 +161,15 @@ const mergeUsageIntoAccumulator = (
   target.lastInput = usage.input ?? 0;
 };
 
+const hasUsageAccumulatorValues = (usage: UsageAccumulator): boolean =>
+  usage.input > 0 ||
+  usage.output > 0 ||
+  usage.cacheRead > 0 ||
+  usage.cacheWrite > 0 ||
+  usage.total > 0;
+
 const toNormalizedUsage = (usage: UsageAccumulator) => {
-  const hasUsage =
-    usage.input > 0 ||
-    usage.output > 0 ||
-    usage.cacheRead > 0 ||
-    usage.cacheWrite > 0 ||
-    usage.total > 0;
-  if (!hasUsage) {
+  if (!hasUsageAccumulatorValues(usage)) {
     return undefined;
   }
   // Use the LAST API call's cache fields for context-size calculation.
@@ -186,6 +187,19 @@ const toNormalizedUsage = (usage: UsageAccumulator) => {
     cacheRead: usage.lastCacheRead || undefined,
     cacheWrite: usage.lastCacheWrite || undefined,
     total: lastPromptTokens + usage.output || undefined,
+  };
+};
+
+const toTurnUsage = (usage: UsageAccumulator) => {
+  if (!hasUsageAccumulatorValues(usage)) {
+    return undefined;
+  }
+  return {
+    input: usage.input || undefined,
+    output: usage.output || undefined,
+    cacheRead: usage.cacheRead || undefined,
+    cacheWrite: usage.cacheWrite || undefined,
+    total: usage.total || undefined,
   };
 };
 
@@ -1207,6 +1221,7 @@ export async function runEmbeddedPiAgent(
           if (usage && lastTurnTotal && lastTurnTotal > 0) {
             usage.total = lastTurnTotal;
           }
+          const turnUsage = toTurnUsage(usageAccumulator);
           // Extract the last individual API call's usage for context-window
           // utilization display. The accumulated `usage` sums input tokens
           // across all calls (tool-use loops, compaction retries), which
@@ -1219,6 +1234,7 @@ export async function runEmbeddedPiAgent(
             provider: lastAssistant?.provider ?? provider,
             model: lastAssistant?.model ?? model.id,
             usage,
+            turnUsage,
             lastCallUsage: lastCallUsage ?? undefined,
             promptTokens,
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,

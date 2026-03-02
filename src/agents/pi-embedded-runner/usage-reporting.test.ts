@@ -10,7 +10,7 @@ describe("runEmbeddedPiAgent usage reporting", () => {
     vi.clearAllMocks();
   });
 
-  it("reports total usage from the last turn instead of accumulated total", async () => {
+  it("reports context usage from last turn and turnUsage from accumulated total", async () => {
     // Simulate a multi-turn run result.
     // Turn 1: Input 100, Output 50. Total 150.
     // Turn 2: Input 150, Output 50. Total 200.
@@ -57,5 +57,11 @@ describe("runEmbeddedPiAgent usage reporting", () => {
     // Check if total matches the last turn's total (200)
     // If the bug exists, it will likely be 350
     expect(usage?.total).toBe(200);
+
+    // turnUsage should preserve accumulated per-turn totals for billing/reporting.
+    const turnUsage = result.meta.agentMeta?.turnUsage;
+    expect(turnUsage?.input).toBe(250);
+    expect(turnUsage?.output).toBe(100);
+    expect(turnUsage?.total).toBe(350);
   });
 });

@@ -1412,6 +1412,26 @@ describe("runReplyAgent response usage footer", () => {
     expect(String(payload?.text ?? "")).toContain("Usage:");
     expect(String(payload?.text ?? "")).not.toContain("· session ");
   });
+
+  it("prefers turnUsage for response usage footer when available", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          turnUsage: { input: 30, output: 7 },
+          usage: { input: 12, output: 3 },
+          lastCallUsage: { input: 5, output: 1 },
+        },
+      },
+    });
+
+    const sessionKey = "agent:main:whatsapp:dm:+1000";
+    const res = await createRun({ responseUsage: "tokens", sessionKey });
+    const payload = Array.isArray(res) ? res[0] : res;
+    expect(String(payload?.text ?? "")).toContain("Usage: 30 in / 7 out");
+  });
 });
 
 describe("runReplyAgent transient HTTP retry", () => {

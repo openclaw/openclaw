@@ -15,6 +15,18 @@ export type EmbeddedPiAgentMeta = {
     total?: number;
   };
   /**
+   * Accumulated usage for the whole turn across all API calls (tool loops,
+   * retries, and compaction retries). Use this for per-turn billing/usage
+   * reporting shown to users.
+   */
+  turnUsage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  };
+  /**
    * Usage from the last individual API call (not accumulated across tool-use
    * loops or compaction retries). Used for context-window utilization display
    * (`totalTokens` in sessions.json) because the accumulated `usage.input`
