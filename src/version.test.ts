@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   readVersionFromBuildInfoForModuleUrl,
   readVersionFromPackageJsonForModuleUrl,
+  resolveBundledCliVersion,
   resolveRuntimeServiceVersion,
   resolveVersionFromModuleUrl,
 } from "./version.js";
@@ -131,5 +132,32 @@ describe("version resolution", () => {
         "fallback",
       ),
     ).toBe("fallback");
+  });
+
+  it("prefers module metadata over OPENCLAW_BUNDLED_VERSION", async () => {
+    await withTempDir(async (root) => {
+      await writeJsonFixture(root, "package.json", { name: "openclaw", version: "1.2.3" });
+      const moduleUrl = await ensureModuleFixture(root);
+      expect(
+        resolveBundledCliVersion({
+          moduleUrl,
+          env: { OPENCLAW_BUNDLED_VERSION: "0.0.0-stale" },
+          fallback: "fallback",
+        }),
+      ).toBe("1.2.3");
+    });
+  });
+
+  it("falls back to OPENCLAW_BUNDLED_VERSION when module metadata is missing", async () => {
+    await withTempDir(async (root) => {
+      const moduleUrl = await ensureModuleFixture(root);
+      expect(
+        resolveBundledCliVersion({
+          moduleUrl,
+          env: { OPENCLAW_BUNDLED_VERSION: "9.9.9-bundled" },
+          fallback: "fallback",
+        }),
+      ).toBe("9.9.9-bundled");
+    });
   });
 });
