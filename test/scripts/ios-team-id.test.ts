@@ -117,18 +117,18 @@ exit 1`,
     const profilesDir = path.join(homeDir, "Library", "MobileDevice", "Provisioning Profiles");
     await mkdir(profilesDir, { recursive: true });
     await writeFile(path.join(profilesDir, "one.mobileprovision"), "stub1");
-
-    const fallbackResult = runScript(homeDir);
-    expect(fallbackResult.ok).toBe(true);
-    expect(fallbackResult.stdout).toBe("AAAAA11111");
-
-    await writeFile(path.join(profilesDir, "two.mobileprovision"), "stub2");
     await writeExecutable(
       path.join(binDir, "fake-python"),
       `#!/usr/bin/env bash
 printf 'AAAAA11111\\t0\\tAlpha Team\\r\\n'
 printf 'BBBBB22222\\t0\\tBeta Team\\r\\n'`,
     );
+
+    const fallbackResult = runScript(homeDir, {
+      IOS_PYTHON_BIN: path.join(binDir, "fake-python"),
+    });
+    expect(fallbackResult.ok).toBe(true);
+    expect(fallbackResult.stdout).toBe("AAAAA11111");
 
     const crlfResult = runScript(homeDir, {
       IOS_PYTHON_BIN: path.join(binDir, "fake-python"),
