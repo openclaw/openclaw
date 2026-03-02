@@ -34,7 +34,7 @@ import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../conf
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "../routing/session-key.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   firstDefined,
@@ -188,6 +188,17 @@ export const buildTelegramMessageContext = async ({
     },
     parentPeer,
   });
+  // Fail closed for named Telegram accounts when route resolution falls back to
+  // default-agent routing. This prevents cross-account DM/session contamination.
+  if (route.accountId !== DEFAULT_ACCOUNT_ID && route.matchedBy === "default") {
+    logInboundDrop({
+      log: logVerbose,
+      channel: "telegram",
+      reason: "non-default account requires explicit binding",
+      target: route.accountId,
+    });
+    return null;
+  }
   const baseSessionKey = route.sessionKey;
   // DMs: use raw messageThreadId for thread sessions (not forum topic ids)
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
