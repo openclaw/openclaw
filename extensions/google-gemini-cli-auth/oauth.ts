@@ -224,14 +224,30 @@ function generatePkce(): { verifier: string; challenge: string } {
   return { verifier, challenge };
 }
 
-function resolvePlatform(): "WINDOWS" | "MACOS" | "LINUX" {
-  if (process.platform === "win32") {
-    return "WINDOWS";
+type ClientMetadataPlatform =
+  | "PLATFORM_UNSPECIFIED"
+  | "DARWIN_AMD64"
+  | "DARWIN_ARM64"
+  | "LINUX_AMD64"
+  | "LINUX_ARM64"
+  | "WINDOWS_AMD64";
+
+function resolvePlatform(): ClientMetadataPlatform {
+  const { platform, arch } = process;
+  if (platform === "darwin") {
+    if (arch === "arm64") return "DARWIN_ARM64";
+    if (arch === "x64") return "DARWIN_AMD64";
+    return "PLATFORM_UNSPECIFIED";
   }
-  if (process.platform === "linux") {
-    return "LINUX";
+  if (platform === "linux") {
+    if (arch === "arm64") return "LINUX_ARM64";
+    if (arch === "x64") return "LINUX_AMD64";
+    return "PLATFORM_UNSPECIFIED";
   }
-  return "MACOS";
+  if (platform === "win32" && arch === "x64") {
+    return "WINDOWS_AMD64";
+  }
+  return "PLATFORM_UNSPECIFIED";
 }
 
 async function fetchWithTimeout(
@@ -466,7 +482,7 @@ async function discoverProject(accessToken: string): Promise<string> {
   const envProject = process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT_ID;
   const platform = resolvePlatform();
   const metadata = {
-    ideType: "ANTIGRAVITY",
+    ideType: "GEMINI_CLI",
     platform,
     pluginType: "GEMINI",
   };
@@ -493,6 +509,7 @@ async function discoverProject(accessToken: string): Promise<string> {
   } = {};
   let activeEndpoint = CODE_ASSIST_ENDPOINT_PROD;
   let loadError: Error | undefined;
+  let loadStatus: number | undefined;
   for (const endpoint of LOAD_CODE_ASSIST_ENDPOINTS) {
     try {
       const response = await fetchWithTimeout(`${endpoint}/v1internal:loadCodeAssist`, {
@@ -502,11 +519,30 @@ async function discoverProject(accessToken: string): Promise<string> {
       });
 
       if (!response.ok) {
+        loadStatus = response.status;
         const errorPayload = await response.json().catch(() => null);
         if (isVpcScAffected(errorPayload)) {
           data = { currentTier: { id: TIER_STANDARD } };
           activeEndpoint = endpoint;
           loadError = undefined;
+          break;
+        }
+        // The 400 body may still carry project/tier data for already-provisioned accounts.
+        const projectFromError =
+          errorPayload?.cloudaicompanionProject?.id ??
+          errorPayload?.response?.cloudaicompanionProject?.id ??
+          (typeof errorPayload?.cloudaicompanionProject === "string"
+            ? errorPayload.cloudaicompanionProject
+            : undefined);
+        if (projectFromError || errorPayload?.currentTier || errorPayload?.allowedTiers) {
+          data = {
+            cloudaicompanionProject: projectFromError ?? errorPayload.cloudaicompanionProject,
+            currentTier: errorPayload.currentTier,
+            allowedTiers: errorPayload.allowedTiers,
+          };
+          activeEndpoint = endpoint;
+          loadError = undefined;
+          loadStatus = undefined;
           break;
         }
         loadError = new Error(`loadCodeAssist failed: ${response.status} ${response.statusText}`);
@@ -516,8 +552,12 @@ async function discoverProject(accessToken: string): Promise<string> {
       data = (await response.json()) as typeof data;
       activeEndpoint = endpoint;
       loadError = undefined;
+      loadStatus = undefined;
       break;
     } catch (err) {
+      // A transport error (timeout, network failure, etc.) is not a 400 response.
+      // Clear loadStatus so we don't misfire the 400→free-tier fallback below.
+      loadStatus = undefined;
       loadError = err instanceof Error ? err : new Error("loadCodeAssist failed", { cause: err });
     }
   }
@@ -530,23 +570,35 @@ async function discoverProject(accessToken: string): Promise<string> {
     if (envProject) {
       return envProject;
     }
-    throw loadError;
+    if (loadStatus === 400) {
+      data = {
+        allowedTiers: [{ id: TIER_FREE, isDefault: true }],
+      };
+    } else {
+      throw loadError;
+    }
   }
 
+  // Helper used in both the currentTier and standalone-project paths below.
+  const resolvedProject = (() => {
+    const p = data.cloudaicompanionProject;
+    if (typeof p === "string" && p) return p;
+    if (typeof p === "object" && p?.id) return p.id;
+    return undefined;
+  })();
+
   if (data.currentTier) {
-    const project = data.cloudaicompanionProject;
-    if (typeof project === "string" && project) {
-      return project;
-    }
-    if (typeof project === "object" && project?.id) {
-      return project.id;
-    }
-    if (envProject) {
-      return envProject;
-    }
+    if (resolvedProject) return resolvedProject;
+    if (envProject) return envProject;
     throw new Error(
       "This account requires GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID to be set.",
     );
+  }
+
+  // If loadCodeAssist returned a project ID without tier info (e.g. 400 body
+  // for an already-provisioned account), return it directly — no onboarding needed.
+  if (resolvedProject) {
+    return resolvedProject;
   }
 
   const tier = getDefaultTier(data.allowedTiers);
@@ -575,6 +627,29 @@ async function discoverProject(accessToken: string): Promise<string> {
   });
 
   if (!onboardResponse.ok) {
+    // 400 may mean the account is already provisioned or not eligible for onboarding.
+    // Try to extract a project from the body before giving up.
+    if (onboardResponse.status === 400) {
+      const errorBody = await onboardResponse.json().catch(() => null);
+      const projectFromBody =
+        errorBody?.cloudaicompanionProject?.id ??
+        errorBody?.response?.cloudaicompanionProject?.id ??
+        (typeof errorBody?.cloudaicompanionProject === "string"
+          ? errorBody.cloudaicompanionProject
+          : undefined);
+      if (projectFromBody) {
+        return projectFromBody;
+      }
+      if (envProject) {
+        return envProject;
+      }
+      // Include the raw body so users/maintainers can diagnose the missing project.
+      throw new Error(
+        "Could not provision a Google Cloud project for this account. " +
+          "Set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID and try again. " +
+          `(onboardUser 400 body: ${JSON.stringify(errorBody)})`,
+      );
+    }
     throw new Error(`onboardUser failed: ${onboardResponse.status} ${onboardResponse.statusText}`);
   }
 
