@@ -134,6 +134,16 @@ export type CronJob = {
   description?: string;
   enabled: boolean;
   deleteAfterRun?: boolean;
+  /**
+   * Execution priority hint for time-sensitive jobs.
+   * - "normal" (default): job runs in standard queue order.
+   * - "interrupt": job bypasses normal queue ordering and runs immediately
+   *   when triggered. Use only for irreversible, time-windowed actions
+   *   (e.g. responding to a verification challenge with a 5-minute window).
+   *
+   * Most jobs should use "normal". Overusing "interrupt" defeats its purpose.
+   */
+  interruptPriority?: "normal" | "interrupt";
   createdAtMs: number;
   updatedAtMs: number;
   schedule: CronSchedule;
