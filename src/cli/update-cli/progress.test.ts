@@ -33,6 +33,7 @@ describe("inferUpdateFailureHints", () => {
     );
     const hints = inferUpdateFailureHints(result);
     expect(hints.join("\n")).toContain("EACCES");
+    expect(hints.join("\n")).toContain("npm update -g openclaw@latest");
     expect(hints.join("\n")).toContain("npm config set prefix ~/.local");
   });
 
@@ -42,15 +43,17 @@ describe("inferUpdateFailureHints", () => {
       "node-pre-gyp ERR!\n@discordjs/opus\nnode-gyp rebuild failed",
     );
     const hints = inferUpdateFailureHints(result);
+    expect(hints.join("\n")).toContain("npm update -g openclaw@latest");
     expect(hints.join("\n")).toContain("--omit=optional");
   });
 
-  it("does not return npm hints for non-npm install modes", () => {
+  it("returns manager-specific fallback hint for non-npm install modes", () => {
     const result = makeResult(
       "global update",
       "npm ERR! code EACCES\nnpm ERR! Error: EACCES: permission denied",
       "pnpm",
     );
-    expect(inferUpdateFailureHints(result)).toEqual([]);
+    const hints = inferUpdateFailureHints(result);
+    expect(hints).toEqual(["Fallback: run pnpm add -g openclaw@latest directly."]);
   });
 });

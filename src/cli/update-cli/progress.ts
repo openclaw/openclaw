@@ -37,7 +37,7 @@ function getStepLabel(step: UpdateStepInfo): string {
 }
 
 export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
-  if (result.status !== "error" || result.mode !== "npm") {
+  if (result.status !== "error") {
     return [];
   }
   const failedStep = [...result.steps].toReversed().find((step) => step.exitCode !== 0);
@@ -47,8 +47,21 @@ export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
 
   const stderr = (failedStep.stderrTail ?? "").toLowerCase();
   const hints: string[] = [];
+  const failedGlobalUpdate = failedStep.name.startsWith("global update");
 
-  if (failedStep.name.startsWith("global update") && stderr.includes("eacces")) {
+  if (failedGlobalUpdate) {
+    if (result.mode === "npm") {
+      hints.push("Fallback: run npm update -g openclaw@latest directly.");
+    } else if (result.mode === "pnpm") {
+      hints.push("Fallback: run pnpm add -g openclaw@latest directly.");
+    }
+  }
+
+  if (result.mode !== "npm") {
+    return hints;
+  }
+
+  if (failedGlobalUpdate && stderr.includes("eacces")) {
     hints.push(
       "Detected permission failure (EACCES). Re-run with a writable global prefix or sudo (for system-managed Node installs).",
     );
@@ -56,7 +69,7 @@ export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
   }
 
   if (
-    failedStep.name.startsWith("global update") &&
+    failedGlobalUpdate &&
     (stderr.includes("node-gyp") ||
       stderr.includes("@discordjs/opus") ||
       stderr.includes("prebuild"))
