@@ -12,7 +12,7 @@ Model discovery, scanning, and configuration (default model, fallbacks, auth pro
 
 Related:
 
-- Providers + models: [Models](/providers/models)
+- Providers + models: [Models](/providers)
 - Provider auth setup: [Getting started](/start/getting-started)
 
 ## Common commands
