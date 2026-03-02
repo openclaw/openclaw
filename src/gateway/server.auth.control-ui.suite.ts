@@ -3,7 +3,6 @@ import { WebSocket } from "ws";
 import {
   approvePendingPairingIfNeeded,
   BACKEND_GATEWAY_CLIENT,
-  buildDeviceAuthPayload,
   connectReq,
   configureTrustedProxyControlUiAuth,
   CONTROL_UI_CLIENT,
@@ -64,6 +63,32 @@ export function registerControlUiAndPairingSuite(): void {
     },
   ];
 
+  const buildSignedDeviceForIdentity = async (params: {
+    identityPath: string;
+    client: { id: string; mode: string };
+    nonce: string;
+    scopes: string[];
+    role?: "operator" | "node";
+  }) => {
+    const { device } = await createSignedDevice({
+      token: "secret",
+      scopes: params.scopes,
+      clientId: params.client.id,
+      clientMode: params.client.mode,
+      role: params.role ?? "operator",
+      identityPath: params.identityPath,
+      nonce: params.nonce,
+    });
+    return device;
+  };
+
+  const expectStatusAndHealthOk = async (ws: WebSocket) => {
+    const status = await rpcReq(ws, "status");
+    expect(status.ok).toBe(true);
+    const health = await rpcReq(ws, "health");
+    expect(health.ok).toBe(true);
+  };
+
   for (const tc of trustedProxyControlUiCases) {
     test(tc.name, async () => {
       await configureTrustedProxyControlUiAuth();
@@ -104,10 +129,7 @@ export function registerControlUiAndPairingSuite(): void {
           return;
         }
         if (tc.expectStatusChecks) {
-          const status = await rpcReq(ws, "status");
-          expect(status.ok).toBe(true);
-          const health = await rpcReq(ws, "health");
-          expect(health.ok).toBe(true);
+          await expectStatusAndHealthOk(ws);
         }
         ws.close();
       });
@@ -122,18 +144,10 @@ export function registerControlUiAndPairingSuite(): void {
     const res = await connectReq(ws, {
       token: "secret",
       device: null,
-      client: {
-        id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-        version: "1.0.0",
-        platform: "web",
-        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-      },
+      client: { ...CONTROL_UI_CLIENT },
     });
     expect(res.ok).toBe(true);
-    const status = await rpcReq(ws, "status");
-    expect(status.ok).toBe(true);
-    const health = await rpcReq(ws, "health");
-    expect(health.ok).toBe(true);
+    await expectStatusAndHealthOk(ws);
     ws.close();
     await server.close();
     restoreGatewayToken(prevToken);
@@ -147,15 +161,10 @@ export function registerControlUiAndPairingSuite(): void {
       const res = await connectReq(ws, {
         password: "secret",
         device: null,
-        client: {
-          ...CONTROL_UI_CLIENT,
-        },
+        client: { ...CONTROL_UI_CLIENT },
       });
       expect(res.ok).toBe(true);
-      const status = await rpcReq(ws, "status");
-      expect(status.ok).toBe(true);
-      const health = await rpcReq(ws, "health");
-      expect(health.ok).toBe(true);
+      await expectStatusAndHealthOk(ws);
       ws.close();
     });
   });
@@ -408,39 +417,13 @@ export function registerControlUiAndPairingSuite(): void {
     const { mkdtemp } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const { buildDeviceAuthPayload } = await import("./device-auth.js");
-    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
-      await import("../infra/device-identity.js");
+    const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
     const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
     const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-scope-"));
-    const identity = loadOrCreateDeviceIdentity(join(identityDir, "device.json"));
-    const client = {
-      id: GATEWAY_CLIENT_NAMES.TEST,
-      version: "1.0.0",
-      platform: "test",
-      mode: GATEWAY_CLIENT_MODES.TEST,
-    };
-    const buildDevice = (scopes: string[], nonce: string) => {
-      const signedAtMs = Date.now();
-      const payload = buildDeviceAuthPayload({
-        deviceId: identity.deviceId,
-        clientId: client.id,
-        clientMode: client.mode,
-        role: "operator",
-        scopes,
-        signedAtMs,
-        token: "secret",
-        nonce,
-      });
-      return {
-        id: identity.deviceId,
-        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-        signature: signDevicePayload(identity.privateKeyPem, payload),
-        signedAt: signedAtMs,
-        nonce,
-      };
-    };
+    const identityPath = join(identityDir, "device.json");
+    const identity = loadOrCreateDeviceIdentity(identityPath);
+    const client = { ...TEST_OPERATOR_CLIENT };
     ws.close();
 
     const wsRemoteRead = await openWs(port, { host: "gateway.example" });
@@ -449,7 +432,12 @@ export function registerControlUiAndPairingSuite(): void {
       token: "secret",
       scopes: ["operator.read"],
       client,
-      device: buildDevice(["operator.read"], initialNonce),
+      device: await buildSignedDeviceForIdentity({
+        identityPath,
+        client,
+        scopes: ["operator.read"],
+        nonce: initialNonce,
+      }),
     });
     expect(initial.ok).toBe(false);
     expect(initial.error?.message ?? "").toContain("pairing required");
@@ -469,7 +457,12 @@ export function registerControlUiAndPairingSuite(): void {
       token: "secret",
       scopes: ["operator.admin"],
       client,
-      device: buildDevice(["operator.admin"], nonce2),
+      device: await buildSignedDeviceForIdentity({
+        identityPath,
+        client,
+        scopes: ["operator.admin"],
+        nonce: nonce2,
+      }),
     });
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toContain("pairing required");
@@ -491,35 +484,15 @@ export function registerControlUiAndPairingSuite(): void {
     const { mkdtemp } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const { buildDeviceAuthPayload } = await import("./device-auth.js");
-    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
+    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
       await import("../infra/device-identity.js");
     const { approveDevicePairing, getPairedDevice, listDevicePairing, requestDevicePairing } =
       await import("../infra/device-pairing.js");
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
     const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-token-scope-"));
-    const identity = loadOrCreateDeviceIdentity(join(identityDir, "device.json"));
+    const identityPath = join(identityDir, "device.json");
+    const identity = loadOrCreateDeviceIdentity(identityPath);
     const devicePublicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
-    const buildDevice = (scopes: string[], nonce: string) => {
-      const signedAtMs = Date.now();
-      const payload = buildDeviceAuthPayload({
-        deviceId: identity.deviceId,
-        clientId: CONTROL_UI_CLIENT.id,
-        clientMode: CONTROL_UI_CLIENT.mode,
-        role: "operator",
-        scopes,
-        signedAtMs,
-        token: "secret",
-        nonce,
-      });
-      return {
-        id: identity.deviceId,
-        publicKey: devicePublicKey,
-        signature: signDevicePayload(identity.privateKeyPem, payload),
-        signedAt: signedAtMs,
-        nonce,
-      };
-    };
     const seeded = await requestDevicePairing({
       deviceId: identity.deviceId,
       publicKey: devicePublicKey,
@@ -540,7 +513,12 @@ export function registerControlUiAndPairingSuite(): void {
       token: "secret",
       scopes: ["operator.admin"],
       client: { ...CONTROL_UI_CLIENT },
-      device: buildDevice(["operator.admin"], nonce2),
+      device: await buildSignedDeviceForIdentity({
+        identityPath,
+        client: CONTROL_UI_CLIENT,
+        scopes: ["operator.admin"],
+        nonce: nonce2,
+      }),
     });
     expect(upgraded.ok).toBe(true);
     const pending = await listDevicePairing();
@@ -557,40 +535,15 @@ export function registerControlUiAndPairingSuite(): void {
     const { mkdtemp } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
-      await import("../infra/device-identity.js");
+    const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
     const { approveDevicePairing, getPairedDevice, listDevicePairing } =
       await import("../infra/device-pairing.js");
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
     ws.close();
     const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-scope-"));
-    const identity = loadOrCreateDeviceIdentity(join(identityDir, "device.json"));
-    const client = {
-      id: GATEWAY_CLIENT_NAMES.TEST,
-      version: "1.0.0",
-      platform: "test",
-      mode: GATEWAY_CLIENT_MODES.TEST,
-    };
-    const buildDevice = (role: "operator" | "node", scopes: string[], nonce: string) => {
-      const signedAtMs = Date.now();
-      const payload = buildDeviceAuthPayload({
-        deviceId: identity.deviceId,
-        clientId: client.id,
-        clientMode: client.mode,
-        role,
-        scopes,
-        signedAtMs,
-        token: "secret",
-        nonce,
-      });
-      return {
-        id: identity.deviceId,
-        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-        signature: signDevicePayload(identity.privateKeyPem, payload),
-        signedAt: signedAtMs,
-        nonce,
-      };
-    };
+    const identityPath = join(identityDir, "device.json");
+    const identity = loadOrCreateDeviceIdentity(identityPath);
+    const client = { ...TEST_OPERATOR_CLIENT };
     const connectWithNonce = async (role: "operator" | "node", scopes: string[]) => {
       const socket = new WebSocket(`ws://127.0.0.1:${port}`, {
         headers: { host: "gateway.example" },
@@ -609,7 +562,13 @@ export function registerControlUiAndPairingSuite(): void {
         role,
         scopes,
         client,
-        device: buildDevice(role, scopes, String(nonce)),
+        device: await buildSignedDeviceForIdentity({
+          identityPath,
+          client,
+          role,
+          scopes,
+          nonce: String(nonce),
+        }),
       });
       socket.close();
       return result;
@@ -656,45 +615,25 @@ export function registerControlUiAndPairingSuite(): void {
     const { mkdtemp } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
-      await import("../infra/device-identity.js");
+    const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
     const { listDevicePairing } = await import("../infra/device-pairing.js");
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
     const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-scope-"));
-    const identity = loadOrCreateDeviceIdentity(join(identityDir, "device.json"));
-    const client = {
-      id: GATEWAY_CLIENT_NAMES.TEST,
-      version: "1.0.0",
-      platform: "test",
-      mode: GATEWAY_CLIENT_MODES.TEST,
-    };
-    const buildDevice = (scopes: string[], nonce: string) => {
-      const signedAtMs = Date.now();
-      const payload = buildDeviceAuthPayload({
-        deviceId: identity.deviceId,
-        clientId: client.id,
-        clientMode: client.mode,
-        role: "operator",
-        scopes,
-        signedAtMs,
-        token: "secret",
-        nonce,
-      });
-      return {
-        id: identity.deviceId,
-        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-        signature: signDevicePayload(identity.privateKeyPem, payload),
-        signedAt: signedAtMs,
-        nonce,
-      };
-    };
+    const identityPath = join(identityDir, "device.json");
+    const identity = loadOrCreateDeviceIdentity(identityPath);
+    const client = { ...TEST_OPERATOR_CLIENT };
 
     const initialNonce = await readConnectChallengeNonce(ws);
     const initial = await connectReq(ws, {
       token: "secret",
       scopes: ["operator.admin"],
       client,
-      device: buildDevice(["operator.admin"], initialNonce),
+      device: await buildSignedDeviceForIdentity({
+        identityPath,
+        client,
+        scopes: ["operator.admin"],
+        nonce: initialNonce,
+      }),
     });
     if (!initial.ok) {
       await approvePendingPairingIfNeeded();
@@ -708,7 +647,12 @@ export function registerControlUiAndPairingSuite(): void {
       token: "secret",
       scopes: ["operator.read"],
       client,
-      device: buildDevice(["operator.read"], nonce2),
+      device: await buildSignedDeviceForIdentity({
+        identityPath,
+        client,
+        scopes: ["operator.read"],
+        nonce: nonce2,
+      }),
     });
     expect(res.ok).toBe(true);
     ws2.close();
@@ -724,15 +668,15 @@ export function registerControlUiAndPairingSuite(): void {
     const { mkdtemp } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const { buildDeviceAuthPayload } = await import("./device-auth.js");
-    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
+    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
       await import("../infra/device-identity.js");
     const { resolvePairingPaths, readJsonFile } = await import("../infra/pairing-files.js");
     const { writeJsonAtomic } = await import("../infra/json-files.js");
     const { approveDevicePairing, getPairedDevice, listDevicePairing, requestDevicePairing } =
       await import("../infra/device-pairing.js");
     const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-legacy-meta-"));
-    const identity = loadOrCreateDeviceIdentity(join(identityDir, "device.json"));
+    const identityPath = join(identityDir, "device.json");
+    const identity = loadOrCreateDeviceIdentity(identityPath);
     const deviceId = identity.deviceId;
     const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
     const pending = await requestDevicePairing({
@@ -757,26 +701,6 @@ export function registerControlUiAndPairingSuite(): void {
     delete legacy.scopes;
     await writeJsonAtomic(pairedPath, paired);
 
-    const buildDevice = (nonce: string) => {
-      const signedAtMs = Date.now();
-      const payload = buildDeviceAuthPayload({
-        deviceId,
-        clientId: TEST_OPERATOR_CLIENT.id,
-        clientMode: TEST_OPERATOR_CLIENT.mode,
-        role: "operator",
-        scopes: ["operator.read"],
-        signedAtMs,
-        token: "secret",
-        nonce,
-      });
-      return {
-        id: deviceId,
-        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-        signature: signDevicePayload(identity.privateKeyPem, payload),
-        signedAt: signedAtMs,
-        nonce,
-      };
-    };
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
     let ws2: WebSocket | undefined;
     try {
@@ -789,7 +713,12 @@ export function registerControlUiAndPairingSuite(): void {
         token: "secret",
         scopes: ["operator.read"],
         client: TEST_OPERATOR_CLIENT,
-        device: buildDevice(reconnectNonce),
+        device: await buildSignedDeviceForIdentity({
+          identityPath,
+          client: TEST_OPERATOR_CLIENT,
+          scopes: ["operator.read"],
+          nonce: reconnectNonce,
+        }),
       });
       expect(reconnect.ok).toBe(true);
 
@@ -812,23 +741,21 @@ export function registerControlUiAndPairingSuite(): void {
     const { join } = await import("node:path");
     const { readJsonFile, resolvePairingPaths } = await import("../infra/pairing-files.js");
     const { writeJsonAtomic } = await import("../infra/json-files.js");
-    const { buildDeviceAuthPayload } = await import("./device-auth.js");
-    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
+    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
       await import("../infra/device-identity.js");
     const { approveDevicePairing, getPairedDevice, listDevicePairing, requestDevicePairing } =
       await import("../infra/device-pairing.js");
-    const { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } =
-      await import("../utils/message-channel.js");
     const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-legacy-"));
-    const identity = loadOrCreateDeviceIdentity(join(identityDir, "device.json"));
+    const identityPath = join(identityDir, "device.json");
+    const identity = loadOrCreateDeviceIdentity(identityPath);
     const devicePublicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
     const seeded = await requestDevicePairing({
       deviceId: identity.deviceId,
       publicKey: devicePublicKey,
       role: "operator",
       scopes: ["operator.read"],
-      clientId: GATEWAY_CLIENT_NAMES.TEST,
-      clientMode: GATEWAY_CLIENT_MODES.TEST,
+      clientId: TEST_OPERATOR_CLIENT.id,
+      clientMode: TEST_OPERATOR_CLIENT.mode,
       displayName: "legacy-upgrade-test",
       platform: "test",
     });
@@ -848,32 +775,7 @@ export function registerControlUiAndPairingSuite(): void {
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
     let ws2: WebSocket | undefined;
     try {
-      const client = {
-        id: GATEWAY_CLIENT_NAMES.TEST,
-        version: "1.0.0",
-        platform: "test",
-        mode: GATEWAY_CLIENT_MODES.TEST,
-      };
-      const buildDevice = (scopes: string[], nonce: string) => {
-        const signedAtMs = Date.now();
-        const payload = buildDeviceAuthPayload({
-          deviceId: identity.deviceId,
-          clientId: client.id,
-          clientMode: client.mode,
-          role: "operator",
-          scopes,
-          signedAtMs,
-          token: "secret",
-          nonce,
-        });
-        return {
-          id: identity.deviceId,
-          publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-          signature: signDevicePayload(identity.privateKeyPem, payload),
-          signedAt: signedAtMs,
-          nonce,
-        };
-      };
+      const client = { ...TEST_OPERATOR_CLIENT };
 
       ws.close();
 
@@ -884,7 +786,12 @@ export function registerControlUiAndPairingSuite(): void {
         token: "secret",
         scopes: ["operator.admin"],
         client,
-        device: buildDevice(["operator.admin"], upgradeNonce),
+        device: await buildSignedDeviceForIdentity({
+          identityPath,
+          client,
+          scopes: ["operator.admin"],
+          nonce: upgradeNonce,
+        }),
       });
       expect(upgraded.ok).toBe(true);
       wsUpgrade.close();

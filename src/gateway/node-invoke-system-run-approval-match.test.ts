@@ -19,6 +19,29 @@ function expectMismatch(
   expect(result.code).toBe(code);
 }
 
+function expectV1BindingMatch(params: {
+  argv: string[];
+  requestCommand: string;
+  commandArgv?: string[];
+}) {
+  const result = evaluateSystemRunApprovalMatch({
+    argv: params.argv,
+    request: {
+      host: "node",
+      command: params.requestCommand,
+      commandArgv: params.commandArgv,
+      systemRunBinding: buildSystemRunApprovalBinding({
+        argv: params.argv,
+        cwd: null,
+        agentId: null,
+        sessionKey: null,
+      }).binding,
+    },
+    binding: defaultBinding,
+  });
+  expect(result).toEqual({ ok: true });
+}
+
 describe("evaluateSystemRunApprovalMatch", () => {
   test("rejects approvals that do not carry v1 binding", () => {
     const result = evaluateSystemRunApprovalMatch({
@@ -33,21 +56,10 @@ describe("evaluateSystemRunApprovalMatch", () => {
   });
 
   test("enforces exact argv binding in v1 object", () => {
-    const result = evaluateSystemRunApprovalMatch({
+    expectV1BindingMatch({
       argv: ["echo", "SAFE"],
-      request: {
-        host: "node",
-        command: "echo SAFE",
-        systemRunBinding: buildSystemRunApprovalBinding({
-          argv: ["echo", "SAFE"],
-          cwd: null,
-          agentId: null,
-          sessionKey: null,
-        }).binding,
-      },
-      binding: defaultBinding,
+      requestCommand: "echo SAFE",
     });
-    expect(result).toEqual({ ok: true });
   });
 
   test("rejects argv mismatch in v1 object", () => {
@@ -124,21 +136,10 @@ describe("evaluateSystemRunApprovalMatch", () => {
   });
 
   test("uses v1 binding even when legacy command text diverges", () => {
-    const result = evaluateSystemRunApprovalMatch({
+    expectV1BindingMatch({
       argv: ["echo", "SAFE"],
-      request: {
-        host: "node",
-        command: "echo STALE",
-        commandArgv: ["echo STALE"],
-        systemRunBinding: buildSystemRunApprovalBinding({
-          argv: ["echo", "SAFE"],
-          cwd: null,
-          agentId: null,
-          sessionKey: null,
-        }).binding,
-      },
-      binding: defaultBinding,
+      requestCommand: "echo STALE",
+      commandArgv: ["echo STALE"],
     });
-    expect(result).toEqual({ ok: true });
   });
 });
