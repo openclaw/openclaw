@@ -33,6 +33,7 @@ import {
 } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { applyConfigEnvVars } from "../../config/env-vars.js";
 import {
   resolveSessionTranscriptPath,
   setSessionRuntimeModel,
@@ -99,6 +100,10 @@ export async function runCronIsolatedAgentTurn(params: {
   agentId?: string;
   lane?: string;
 }): Promise<RunCronAgentTurnResult> {
+  // Ensure config env vars are applied to process.env before resolving API keys.
+  // This fixes issue #29886 where isolated sessions (cron/subagents) could not
+  // access built-in provider env vars from openclaw.json.
+  applyConfigEnvVars(params.cfg);
   const abortSignal = params.abortSignal ?? params.signal;
   const isAborted = () => abortSignal?.aborted === true;
   const abortReason = () => {
