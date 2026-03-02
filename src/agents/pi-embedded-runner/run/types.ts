@@ -3,7 +3,10 @@ import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
-import type { PluginHookBeforeAgentStartResult } from "../../../plugins/types.js";
+import type {
+  PluginHookBeforeAgentStartResult,
+  PluginHookLlmCallAuthInfo,
+} from "../../../plugins/types.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { RunEmbeddedPiAgentParams } from "./params.js";
@@ -19,6 +22,7 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   model: Model<Api>;
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
+  llmCallAuth: PluginHookLlmCallAuthInfo;
   thinkLevel: ThinkLevel;
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
 };

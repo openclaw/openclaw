@@ -14,6 +14,7 @@ import {
 import { createEmbeddedPiSessionEventHandler } from "./pi-embedded-subscribe.handlers.js";
 import type {
   EmbeddedPiSubscribeContext,
+  ObservedLlmCall,
   EmbeddedPiSubscribeState,
 } from "./pi-embedded-subscribe.handlers.types.js";
 import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
@@ -86,6 +87,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     cacheWrite: 0,
     total: 0,
   };
+  const llmCalls: ObservedLlmCall[] = [];
   let compactionCount = 0;
 
   const assistantTexts = state.assistantTexts;
@@ -270,6 +272,26 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
     usageTotals.total += usageTotal;
   };
+  const recordLlmCall = (message: AgentMessage) => {
+    if (message?.role !== "assistant") {
+      return;
+    }
+    const provider =
+      typeof (message as { provider?: unknown }).provider === "string"
+        ? ((message as { provider?: string }).provider ?? undefined)
+        : undefined;
+    const model =
+      typeof (message as { model?: unknown }).model === "string"
+        ? ((message as { model?: string }).model ?? undefined)
+        : undefined;
+    const usage = normalizeUsage((message as { usage?: unknown }).usage as UsageLike | undefined);
+    llmCalls.push({
+      provider,
+      model,
+      usage: hasNonzeroUsage(usage) ? usage : undefined,
+    });
+  };
+  const getLlmCalls = () => llmCalls.slice();
   const getUsageTotals = () => {
     const hasUsage =
       usageTotals.input > 0 ||
@@ -622,8 +644,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     resolveCompactionRetry,
     maybeResolveCompactionWait,
     recordAssistantUsage,
+    recordLlmCall,
     incrementCompactionCount,
     getUsageTotals,
+    getLlmCalls,
     getCompactionCount: () => compactionCount,
   };
 
@@ -678,6 +702,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     didSendViaMessagingTool: () => messagingToolSentTexts.length > 0,
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
     getUsageTotals,
+    getLlmCalls,
     getCompactionCount: () => compactionCount,
     waitForCompactionRetry: () => {
       // Reject after unsubscribe so callers treat it as cancellation, not success

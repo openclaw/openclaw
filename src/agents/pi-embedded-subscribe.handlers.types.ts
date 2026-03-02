@@ -30,6 +30,12 @@ export type ToolCallSummary = {
   actionFingerprint?: string;
 };
 
+export type ObservedLlmCall = {
+  provider?: string;
+  model?: string;
+  usage?: NormalizedUsage;
+};
+
 export type EmbeddedPiSubscribeState = {
   assistantTexts: string[];
   toolMetas: Array<{ toolName?: string; meta?: string }>;
@@ -120,8 +126,10 @@ export type EmbeddedPiSubscribeContext = {
   resolveCompactionRetry: () => void;
   maybeResolveCompactionWait: () => void;
   recordAssistantUsage: (usage: unknown) => void;
+  recordLlmCall?: (message: AgentMessage) => void;
   incrementCompactionCount: () => void;
   getUsageTotals: () => NormalizedUsage | undefined;
+  getLlmCalls?: () => ObservedLlmCall[];
   getCompactionCount: () => number;
 };
 

@@ -357,6 +357,35 @@ Notes:
 - Plugin-managed hooks show up in `openclaw hooks list` with `plugin:<id>`.
 - You cannot enable/disable plugin-managed hooks via `openclaw hooks`; enable/disable the plugin instead.
 
+### `agent_end` payload auth metadata
+
+`agent_end` hook events keep their existing fields and now optionally include:
+
+```ts
+type AuthMethod = "oauth" | "api_key" | "none" | "unknown";
+
+type AgentEndLlmCall = {
+  provider: string;
+  model: string;
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+  };
+  auth: {
+    method: AuthMethod;
+    profileId?: string;
+    profileType?: string;
+    source?: "auth_profile" | "env" | "inline" | "none" | "unknown";
+  };
+};
+```
+
+`llmCalls` is optional and additive for backward compatibility.
+
+Security note: this includes credential metadata only and never includes raw tokens, refresh tokens, client secrets, or full API keys.
+
 ## Provider plugins (model auth)
 
 Plugins can register **model provider auth** flows so users can run OAuth or

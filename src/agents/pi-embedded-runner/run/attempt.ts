@@ -15,8 +15,11 @@ import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
+  PluginHookAgentEndEvent,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
+  PluginHookLlmCallAuthInfo,
+  PluginHookLlmCallSummary,
 } from "../../../plugins/types.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
@@ -52,6 +55,7 @@ import {
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
+import type { ObservedLlmCall } from "../../pi-embedded-subscribe.handlers.types.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
@@ -417,6 +421,82 @@ export function resolveAttemptFsWorkspaceOnly(params: {
     cfg: params.config,
     agentId: params.sessionAgentId,
   });
+}
+
+export function buildAgentEndLlmCalls(params: {
+  observedCalls: ObservedLlmCall[];
+  provider: string;
+  model: string;
+  auth: PluginHookLlmCallAuthInfo;
+  usageFallback?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+  };
+}): PluginHookLlmCallSummary[] | undefined {
+  const mapped = params.observedCalls.map((call) => ({
+    provider: call.provider ?? params.provider,
+    model: call.model ?? params.model,
+    usage: call.usage
+      ? {
+          input: call.usage.input,
+          output: call.usage.output,
+          cacheRead: call.usage.cacheRead,
+          cacheWrite: call.usage.cacheWrite,
+        }
+      : undefined,
+    auth: { ...params.auth },
+  }));
+
+  if (mapped.length > 0) {
+    return mapped;
+  }
+
+  if (!params.usageFallback) {
+    return undefined;
+  }
+
+  const hasUsage = [
+    params.usageFallback.input,
+    params.usageFallback.output,
+    params.usageFallback.cacheRead,
+    params.usageFallback.cacheWrite,
+  ].some((value) => typeof value === "number" && Number.isFinite(value) && value > 0);
+
+  if (!hasUsage) {
+    return undefined;
+  }
+
+  return [
+    {
+      provider: params.provider,
+      model: params.model,
+      usage: {
+        input: params.usageFallback.input,
+        output: params.usageFallback.output,
+        cacheRead: params.usageFallback.cacheRead,
+        cacheWrite: params.usageFallback.cacheWrite,
+      },
+      auth: { ...params.auth },
+    },
+  ];
+}
+
+export function buildAgentEndHookEvent(params: {
+  messages: AgentMessage[];
+  success: boolean;
+  error?: string;
+  durationMs?: number;
+  llmCalls?: PluginHookLlmCallSummary[];
+}): PluginHookAgentEndEvent {
+  return {
+    messages: params.messages,
+    success: params.success,
+    error: params.error,
+    durationMs: params.durationMs,
+    llmCalls: params.llmCalls,
+  };
 }
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
@@ -1200,6 +1280,7 @@ export async function runEmbeddedAttempt(
         didSendViaMessagingTool,
         getLastToolError,
         getUsageTotals,
+        getLlmCalls,
         getCompactionCount,
       } = subscription;
 
@@ -1521,6 +1602,13 @@ export async function runEmbeddedAttempt(
               : undefined,
         });
         anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError);
+        const llmCalls = buildAgentEndLlmCalls({
+          observedCalls: getLlmCalls(),
+          provider: params.provider,
+          model: params.modelId,
+          auth: params.llmCallAuth,
+          usageFallback: getUsageTotals(),
+        });
 
         // Run agent_end hooks to allow plugins to analyze the conversation
         // This is fire-and-forget, so we don't await
@@ -1528,12 +1616,13 @@ export async function runEmbeddedAttempt(
         if (hookRunner?.hasHooks("agent_end")) {
           hookRunner
             .runAgentEnd(
-              {
+              buildAgentEndHookEvent({
                 messages: messagesSnapshot,
                 success: !aborted && !promptError,
                 error: promptError ? describeUnknownError(promptError) : undefined,
                 durationMs: Date.now() - promptStartedAt,
-              },
+                llmCalls,
+              }),
               {
                 agentId: hookAgentId,
                 sessionKey: params.sessionKey,

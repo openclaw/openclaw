@@ -1,6 +1,9 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
+  buildAgentEndHookEvent,
+  buildAgentEndLlmCalls,
   isOllamaCompatProvider,
   resolveAttemptFsWorkspaceOnly,
   resolveOllamaBaseUrlForRun,
@@ -122,6 +125,93 @@ describe("resolveAttemptFsWorkspaceOnly", () => {
         sessionAgentId: "main",
       }),
     ).toBe(false);
+  });
+});
+
+describe("buildAgentEndLlmCalls", () => {
+  it("maps observed calls and injects normalized auth metadata", () => {
+    expect(
+      buildAgentEndLlmCalls({
+        observedCalls: [
+          {
+            provider: "openai",
+            model: "gpt-5",
+            usage: { input: 12, output: 7, cacheRead: 0, cacheWrite: 0, total: 19 },
+          },
+        ],
+        provider: "openai",
+        model: "gpt-5",
+        auth: {
+          method: "oauth",
+          profileId: "openai:work",
+          profileType: "oauth",
+          source: "auth_profile",
+        },
+      }),
+    ).toEqual([
+      {
+        provider: "openai",
+        model: "gpt-5",
+        usage: { input: 12, output: 7, cacheRead: 0, cacheWrite: 0 },
+        auth: {
+          method: "oauth",
+          profileId: "openai:work",
+          profileType: "oauth",
+          source: "auth_profile",
+        },
+      },
+    ]);
+  });
+
+  it("falls back to attempt usage when no observed calls were captured", () => {
+    expect(
+      buildAgentEndLlmCalls({
+        observedCalls: [],
+        provider: "openai",
+        model: "gpt-5",
+        auth: { method: "api_key", source: "env" },
+        usageFallback: { input: 1, output: 2 },
+      }),
+    ).toEqual([
+      {
+        provider: "openai",
+        model: "gpt-5",
+        usage: { input: 1, output: 2, cacheRead: undefined, cacheWrite: undefined },
+        auth: { method: "api_key", source: "env" },
+      },
+    ]);
+  });
+});
+
+describe("buildAgentEndHookEvent", () => {
+  it("keeps existing agent_end fields unchanged and adds optional llmCalls", () => {
+    expect(
+      buildAgentEndHookEvent({
+        messages: [{ role: "assistant", content: "done" }] as unknown as AgentMessage[],
+        success: true,
+        error: undefined,
+        durationMs: 42,
+        llmCalls: [
+          {
+            provider: "openai",
+            model: "gpt-5",
+            auth: { method: "none", source: "none" },
+          },
+        ],
+      }),
+    ).toEqual({
+      messages: [{ role: "assistant", content: "done" }],
+      success: true,
+      error: undefined,
+      durationMs: 42,
+      llmCalls: [
+        {
+          provider: "openai",
+          model: "gpt-5",
+          auth: { method: "none", source: "none" },
+        },
+      ],
+    });
   });
 });
 

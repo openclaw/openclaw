@@ -399,12 +399,34 @@ export type PluginHookLlmOutputEvent = {
   };
 };
 
+export type PluginHookAuthMethod = "oauth" | "api_key" | "none" | "unknown";
+
+export type PluginHookLlmCallAuthInfo = {
+  method: PluginHookAuthMethod;
+  profileId?: string;
+  profileType?: string;
+  source?: "auth_profile" | "env" | "inline" | "none" | "unknown";
+};
+
+export type PluginHookLlmCallSummary = {
+  provider: string;
+  model: string;
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+  };
+  auth: PluginHookLlmCallAuthInfo;
+};
+
 // agent_end hook
 export type PluginHookAgentEndEvent = {
   messages: unknown[];
   success: boolean;
   error?: string;
   durationMs?: number;
+  llmCalls?: PluginHookLlmCallSummary[];
 };
 
 // Compaction hooks

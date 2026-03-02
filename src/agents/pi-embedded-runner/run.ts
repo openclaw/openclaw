@@ -55,6 +55,7 @@ import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
+import { resolveLlmCallAuthInfo } from "./run/auth-attribution.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
@@ -712,6 +713,18 @@ export async function runEmbeddedPiAgent(
           const prompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
 
+          const authSnapshot = apiKeyInfo as ApiKeyInfo | null;
+          const llmCallAuth = resolveLlmCallAuthInfo({
+            provider,
+            resolvedAuth: authSnapshot
+              ? {
+                  mode: authSnapshot.mode,
+                  profileId: authSnapshot.profileId ?? lastProfileId,
+                  source: authSnapshot.source,
+                }
+              : undefined,
+          });
+
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
@@ -743,6 +756,7 @@ export async function runEmbeddedPiAgent(
             model,
             authStorage,
             modelRegistry,
+            llmCallAuth,
             agentId: workspaceResolution.agentId,
             legacyBeforeAgentStartResult,
             thinkLevel,
