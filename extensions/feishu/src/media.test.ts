@@ -36,7 +36,12 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-import { downloadImageFeishu, downloadMessageResourceFeishu, sendMediaFeishu } from "./media.js";
+import {
+  downloadImageFeishu,
+  downloadMessageResourceFeishu,
+  sendMediaFeishu,
+  uploadFileFeishu,
+} from "./media.js";
 
 function expectPathIsolatedToTmpRoot(pathValue: string, key: string): void {
   expect(pathValue).not.toContain(key);
@@ -265,6 +270,24 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(fileCreateMock).not.toHaveBeenCalled();
     expect(messageCreateMock).not.toHaveBeenCalled();
     expect(messageReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("encodes non-ASCII/special upload file names before calling feishu sdk", async () => {
+    await uploadFileFeishu({
+      cfg: {} as any,
+      file: Buffer.from("doc"),
+      fileName: "测试文件—特殊字符（2026-03-02）.md",
+      fileType: "pdf",
+    });
+
+    expect(fileCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          file_name:
+            "%E6%B5%8B%E8%AF%95%E6%96%87%E4%BB%B6%E2%80%94%E7%89%B9%E6%AE%8A%E5%AD%97%E7%AC%A6%EF%BC%882026-03-02%EF%BC%89.md",
+        }),
+      }),
+    );
   });
 
   it("uses isolated temp paths for image downloads", async () => {

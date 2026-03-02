@@ -20,6 +20,20 @@ export type DownloadMessageResourceResult = {
   fileName?: string;
 };
 
+const FEISHU_SAFE_FILE_NAME_RE = /^[A-Za-z0-9._-]+$/;
+const RFC5987_EXTRA_ESCAPE_RE = /[!'()*]/g;
+
+function encodeFeishuUploadFileName(fileName: string): string {
+  // Keep common ASCII names readable; encode names with spaces/non-ASCII/special chars.
+  if (FEISHU_SAFE_FILE_NAME_RE.test(fileName)) {
+    return fileName;
+  }
+  return encodeURIComponent(fileName).replace(
+    RFC5987_EXTRA_ESCAPE_RE,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
 async function readFeishuResponseBuffer(params: {
   response: unknown;
   tmpDirPrefix: string;
@@ -226,6 +240,7 @@ export async function uploadFileFeishu(params: {
   }
 
   const client = createFeishuClient(account);
+  const encodedFileName = encodeFeishuUploadFileName(fileName);
 
   // SDK accepts Buffer directly or fs.ReadStream for file paths
   // Using Readable.from(buffer) causes issues with form-data library
@@ -235,7 +250,7 @@ export async function uploadFileFeishu(params: {
   const response = await client.im.file.create({
     data: {
       file_type: fileType,
-      file_name: fileName,
+      file_name: encodedFileName,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
       file: fileData as any,
       ...(duration !== undefined && { duration }),
