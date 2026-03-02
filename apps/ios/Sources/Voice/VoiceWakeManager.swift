@@ -216,22 +216,7 @@ final class VoiceWakeManager: NSObject {
         self.isEnabled = false
         self.isListening = false
         self.statusText = "Off"
-
-        self.tapDrainTask?.cancel()
-        self.tapDrainTask = nil
-        self.tapQueue?.clear()
-        self.tapQueue = nil
-
-        self.recognitionTask?.cancel()
-        self.recognitionTask = nil
-        self.recognitionRequest = nil
-
-        if self.audioEngine.isRunning {
-            self.audioEngine.stop()
-            self.audioEngine.inputNode.removeTap(onBus: 0)
-        }
-
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        self.tearDownRecognitionPipeline()
     }
 
     /// Temporarily releases the microphone so other subsystems (e.g. camera video capture) can record audio.
@@ -241,22 +226,7 @@ final class VoiceWakeManager: NSObject {
 
         self.isListening = false
         self.statusText = "Paused"
-
-        self.tapDrainTask?.cancel()
-        self.tapDrainTask = nil
-        self.tapQueue?.clear()
-        self.tapQueue = nil
-
-        self.recognitionTask?.cancel()
-        self.recognitionTask = nil
-        self.recognitionRequest = nil
-
-        if self.audioEngine.isRunning {
-            self.audioEngine.stop()
-            self.audioEngine.inputNode.removeTap(onBus: 0)
-        }
-
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        self.tearDownRecognitionPipeline()
         return true
     }
 
@@ -308,6 +278,24 @@ final class VoiceWakeManager: NSObject {
                 }
             }
         }
+    }
+
+    private func tearDownRecognitionPipeline() {
+        self.tapDrainTask?.cancel()
+        self.tapDrainTask = nil
+        self.tapQueue?.clear()
+        self.tapQueue = nil
+
+        self.recognitionTask?.cancel()
+        self.recognitionTask = nil
+        self.recognitionRequest = nil
+
+        if self.audioEngine.isRunning {
+            self.audioEngine.stop()
+            self.audioEngine.inputNode.removeTap(onBus: 0)
+        }
+
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
     private nonisolated func makeRecognitionResultHandler() -> @Sendable (SFSpeechRecognitionResult?, Error?) -> Void {
@@ -404,16 +392,10 @@ final class VoiceWakeManager: NSObject {
     }
 
     private nonisolated static func microphonePermissionMessage(kind: String) -> String {
-        switch AVAudioApplication.shared.recordPermission {
-        case .denied:
-            return "\(kind) permission denied"
-        case .undetermined:
-            return "\(kind) permission not granted"
-        case .granted:
-            return "\(kind) permission denied"
-        @unknown default:
-            return "\(kind) permission denied"
-        }
+        let status = AVAudioApplication.shared.recordPermission
+        return self.deniedByDefaultPermissionMessage(
+            kind: kind,
+            isUndetermined: status == .undetermined)
     }
 
     private nonisolated static func requestSpeechPermission() async -> Bool {
@@ -463,16 +445,7 @@ final class VoiceWakeManager: NSObject {
         kind: String,
         status: AVAudioSession.RecordPermission) -> String
     {
-        switch status {
-        case .denied:
-            return "\(kind) permission denied"
-        case .undetermined:
-            return "\(kind) permission not granted"
-        case .granted:
-            return "\(kind) permission denied"
-        @unknown default:
-            return "\(kind) permission denied"
-        }
+        self.deniedByDefaultPermissionMessage(kind: kind, isUndetermined: status == .undetermined)
     }
 
     private static func permissionMessage(
@@ -491,6 +464,13 @@ final class VoiceWakeManager: NSObject {
         @unknown default:
             return "\(kind) permission denied"
         }
+    }
+
+    private static func deniedByDefaultPermissionMessage(kind: String, isUndetermined: Bool) -> String {
+        if isUndetermined {
+            return "\(kind) permission not granted"
+        }
+        return "\(kind) permission denied"
     }
 }
 
