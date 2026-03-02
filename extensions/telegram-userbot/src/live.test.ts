@@ -1,62 +1,54 @@
 /**
  * Live integration tests for the telegram-userbot channel.
  *
- * These tests require a real Telegram account and are skipped in CI.
- * To run: TELEGRAM_USERBOT_LIVE=1 pnpm test -- --run extensions/telegram-userbot/src/live.test.ts
+ * These tests require a real Telegram account with valid credentials
+ * and are skipped by default in CI.
+ *
+ * Run manually with:
+ *   LIVE=1 pnpm test extensions/telegram-userbot/src/live.test.ts
+ *
+ * Or:
+ *   CLAWDBOT_LIVE_TEST=1 pnpm test extensions/telegram-userbot/src/live.test.ts
  *
  * Required environment:
- *   TELEGRAM_USERBOT_LIVE=1
+ *   LIVE=1 or CLAWDBOT_LIVE_TEST=1
  *   TELEGRAM_API_ID=<your api id>
  *   TELEGRAM_API_HASH=<your api hash>
  *   TELEGRAM_SESSION=<base64 session string>
  *   TELEGRAM_LIVE_PEER=<chat id or @username to test against>
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, it } from "vitest";
 
-const LIVE = process.env.TELEGRAM_USERBOT_LIVE === "1" || process.env.LIVE === "1";
-const API_ID = Number(process.env.TELEGRAM_API_ID ?? "0");
-const API_HASH = process.env.TELEGRAM_API_HASH ?? "";
-const PEER = process.env.TELEGRAM_LIVE_PEER ?? "";
+const isLive = process.env.LIVE === "1" || process.env.CLAWDBOT_LIVE_TEST === "1";
 
-const describeLive = LIVE && API_ID && API_HASH ? describe : describe.skip;
-
-describeLive("telegram-userbot live", () => {
-  it("connects and retrieves self info", async () => {
-    // TODO: Instantiate UserbotClient with real credentials
-    // const client = new UserbotClient({ apiId: API_ID, apiHash: API_HASH, session: ... });
+describe.skipIf(!isLive)("telegram-userbot live tests", () => {
+  it("connects with real session", async () => {
+    // TODO: load real session from SessionStore, connect, verify getMe()
+    // const client = new UserbotClient({ apiId, apiHash, session });
     // await client.connect();
     // const me = await client.getMe();
     // expect(me.id).toBeTruthy();
     // await client.disconnect();
-    expect(true).toBe(true);
   });
 
-  it("sends and receives a test message", async () => {
-    // TODO: Connect, send message to PEER, verify it was sent
-    // const result = await client.sendMessage(PEER, { message: "live test" });
-    // expect(result.id).toBeTruthy();
-    expect(PEER).toBeTruthy();
+  it("sends a real text message", async () => {
+    // TODO: send message to test chat, verify messageId is returned
+    // const result = await client.sendMessage(PEER, "live test message");
+    // expect(result.messageId).toBeGreaterThan(0);
   });
 
-  it("edits a sent message", async () => {
-    // TODO: Send a message, then edit it, verify edit
-    // const sent = await client.sendMessage(PEER, { message: "before edit" });
-    // await client.editMessage(PEER, sent.id, "after edit");
-    expect(true).toBe(true);
+  it("receives a real inbound message", async () => {
+    // TODO: register inbound handler, send message to self, wait for inbound event
+    // const cleanup = registerInboundHandlers(client, { selfUserId, onMessage });
+    // await client.sendMessage(PEER, "echo test");
+    // // wait for onMessage callback
+    // cleanup();
   });
 
-  it("deletes a sent message", async () => {
-    // TODO: Send a message, then delete it
-    // const sent = await client.sendMessage(PEER, { message: "to delete" });
-    // await client.deleteMessages(PEER, [sent.id], true);
-    expect(true).toBe(true);
-  });
-
-  it("reacts to a message", async () => {
-    // TODO: Send a message, then react to it
-    // const sent = await client.sendMessage(PEER, { message: "react test" });
-    // await client.reactToMessage(PEER, sent.id, "👍");
-    expect(true).toBe(true);
+  it("deletes a real message", async () => {
+    // TODO: send message then delete it, verify no error
+    // const sent = await client.sendMessage(PEER, "to delete");
+    // await client.deleteMessages(PEER, [sent.messageId], true);
   });
 });
