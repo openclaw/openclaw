@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import type { ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
-import { buildSystemRunApprovalBindingV1 } from "../infra/system-run-approval-binding.js";
+import { buildSystemRunApprovalBinding } from "../infra/system-run-approval-binding.js";
 import { evaluateSystemRunApprovalMatch } from "./node-invoke-system-run-approval-match.js";
 
 type FixtureCase = {
@@ -15,7 +15,7 @@ type FixtureCase = {
     cwd?: string | null;
     agentId?: string | null;
     sessionKey?: string | null;
-    bindingV1?: {
+    binding?: {
       argv: string[];
       cwd?: string | null;
       agentId?: string | null;
@@ -57,13 +57,13 @@ function buildRequestPayload(entry: FixtureCase): ExecApprovalRequestPayload {
     agentId: entry.request.agentId ?? null,
     sessionKey: entry.request.sessionKey ?? null,
   };
-  if (entry.request.bindingV1) {
-    payload.systemRunBindingV1 = buildSystemRunApprovalBindingV1({
-      argv: entry.request.bindingV1.argv,
-      cwd: entry.request.bindingV1.cwd,
-      agentId: entry.request.bindingV1.agentId,
-      sessionKey: entry.request.bindingV1.sessionKey,
-      env: entry.request.bindingV1.env,
+  if (entry.request.binding) {
+    payload.systemRunBinding = buildSystemRunApprovalBinding({
+      argv: entry.request.binding.argv,
+      cwd: entry.request.binding.cwd,
+      agentId: entry.request.binding.agentId,
+      sessionKey: entry.request.binding.sessionKey,
+      env: entry.request.binding.env,
     }).binding;
   }
   return payload;

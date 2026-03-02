@@ -1,6 +1,6 @@
 ---
 name: acp-router
-description: Route plain-language requests for Pi, Claude Code, Codex, OpenCode, Gemini CLI, or ACP harness work into either OpenClaw ACP runtime sessions or direct acpx-driven sessions ("telephone game" flow).
+description: Route plain-language requests for Pi, Claude Code, Codex, OpenCode, Gemini CLI, or ACP harness work into either OpenClaw ACP runtime sessions or direct acpx-driven sessions ("telephone game" flow). For coding-agent thread requests, read this skill first, then use only `sessions_spawn` for thread creation.
 user-invocable: false
 ---
 
@@ -16,6 +16,11 @@ Trigger this skill when the user asks OpenClaw to:
 - continue existing harness work
 - relay instructions to an external coding harness
 - keep an external harness conversation in a thread-like conversation
+
+Mandatory preflight for coding-agent thread requests:
+
+- Before creating any thread for Pi/Claude/Codex/OpenCode/Gemini work, read this skill first in the same turn.
+- After reading, follow `OpenClaw ACP runtime path` below; do not use `message(action="thread-create")` for ACP harness thread spawn.
 
 ## Mode selection
 
@@ -54,13 +59,15 @@ If policy rejects the chosen id, report the policy error clearly and ask for the
 
 Required behavior:
 
-1. Use `sessions_spawn` with:
+1. For ACP harness thread spawn requests, read this skill first in the same turn before calling tools.
+2. Use `sessions_spawn` with:
    - `runtime: "acp"`
    - `thread: true`
    - `mode: "session"` (unless user explicitly wants one-shot)
-2. Put requested work in `task` so the ACP session gets it immediately.
-3. Set `agentId` explicitly unless ACP default agent is known.
-4. Do not ask user to run slash commands or CLI when this path works directly.
+3. For ACP harness thread creation, do not use `message` with `action=thread-create`; `sessions_spawn` is the only thread-create path.
+4. Put requested work in `task` so the ACP session gets it immediately.
+5. Set `agentId` explicitly unless ACP default agent is known.
+6. Do not ask user to run slash commands or CLI when this path works directly.
 
 Example:
 

@@ -39,13 +39,15 @@ export type SessionFilePathOptions = {
   sessionsDir?: string;
 };
 
+const MULTI_STORE_PATH_SENTINEL = "(multiple)";
+
 export function resolveSessionFilePathOptions(params: {
   agentId?: string;
   storePath?: string;
 }): SessionFilePathOptions | undefined {
   const agentId = params.agentId?.trim();
   const storePath = params.storePath?.trim();
-  if (storePath) {
+  if (storePath && storePath !== MULTI_STORE_PATH_SENTINEL) {
     const sessionsDir = path.dirname(path.resolve(storePath));
     return agentId ? { sessionsDir, agentId } : { sessionsDir };
   }

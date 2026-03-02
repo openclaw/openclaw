@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
@@ -40,8 +40,9 @@ import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
-import { resolveDefaultModelForAgent } from "../../model-selection.js";
+import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
 import { createOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-stream.js";
+import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import {
   isCloudCodeAssistFormatError,
@@ -74,6 +75,7 @@ import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
+import { normalizeToolName } from "../../tool-policy.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -126,6 +128,216 @@ type PromptBuildHookRunner = {
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentStartResult | undefined>;
 };
+
+export function isOllamaCompatProvider(model: {
+  provider?: string;
+  baseUrl?: string;
+  api?: string;
+}): boolean {
+  const providerId = normalizeProviderId(model.provider ?? "");
+  if (providerId === "ollama") {
+    return true;
+  }
+  if (!model.baseUrl) {
+    return false;
+  }
+  try {
+    const parsed = new URL(model.baseUrl);
+    const hostname = parsed.hostname.toLowerCase();
+    const isLocalhost =
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "::1" ||
+      hostname === "[::1]";
+    if (isLocalhost && parsed.port === "11434") {
+      return true;
+    }
+
+    // Allow remote/LAN Ollama OpenAI-compatible endpoints when the provider id
+    // itself indicates Ollama usage (e.g. "my-ollama").
+    const providerHintsOllama = providerId.includes("ollama");
+    const isOllamaPort = parsed.port === "11434";
+    const isOllamaCompatPath = parsed.pathname === "/" || /^\/v1\/?$/i.test(parsed.pathname);
+    return providerHintsOllama && isOllamaPort && isOllamaCompatPath;
+  } catch {
+    return false;
+  }
+}
+
+export function resolveOllamaCompatNumCtxEnabled(params: {
+  config?: OpenClawConfig;
+  providerId?: string;
+}): boolean {
+  const providerId = params.providerId?.trim();
+  if (!providerId) {
+    return true;
+  }
+  const providers = params.config?.models?.providers;
+  if (!providers) {
+    return true;
+  }
+  const direct = providers[providerId];
+  if (direct) {
+    return direct.injectNumCtxForOpenAICompat ?? true;
+  }
+  const normalized = normalizeProviderId(providerId);
+  for (const [candidateId, candidate] of Object.entries(providers)) {
+    if (normalizeProviderId(candidateId) === normalized) {
+      return candidate.injectNumCtxForOpenAICompat ?? true;
+    }
+  }
+  return true;
+}
+
+export function shouldInjectOllamaCompatNumCtx(params: {
+  model: { api?: string; provider?: string; baseUrl?: string };
+  config?: OpenClawConfig;
+  providerId?: string;
+}): boolean {
+  // Restrict to the OpenAI-compatible adapter path only.
+  if (params.model.api !== "openai-completions") {
+    return false;
+  }
+  if (!isOllamaCompatProvider(params.model)) {
+    return false;
+  }
+  return resolveOllamaCompatNumCtxEnabled({
+    config: params.config,
+    providerId: params.providerId,
+  });
+}
+
+export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: number): StreamFn {
+  const streamFn = baseFn ?? streamSimple;
+  return (model, context, options) =>
+    streamFn(model, context, {
+      ...options,
+      onPayload: (payload: unknown) => {
+        if (!payload || typeof payload !== "object") {
+          options?.onPayload?.(payload);
+          return;
+        }
+        const payloadRecord = payload as Record<string, unknown>;
+        if (!payloadRecord.options || typeof payloadRecord.options !== "object") {
+          payloadRecord.options = {};
+        }
+        (payloadRecord.options as Record<string, unknown>).num_ctx = numCtx;
+        options?.onPayload?.(payload);
+      },
+    });
+}
+
+function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Set<string>): string {
+  const trimmed = rawName.trim();
+  if (!trimmed) {
+    // Keep whitespace-only placeholders unchanged so they do not collapse to
+    // empty names (which can later surface as toolName="" loops).
+    return rawName;
+  }
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return trimmed;
+  }
+  if (allowedToolNames.has(trimmed)) {
+    return trimmed;
+  }
+  const normalized = normalizeToolName(trimmed);
+  if (allowedToolNames.has(normalized)) {
+    return normalized;
+  }
+  const folded = trimmed.toLowerCase();
+  let caseInsensitiveMatch: string | null = null;
+  for (const name of allowedToolNames) {
+    if (name.toLowerCase() !== folded) {
+      continue;
+    }
+    if (caseInsensitiveMatch && caseInsensitiveMatch !== name) {
+      return trimmed;
+    }
+    caseInsensitiveMatch = name;
+  }
+  return caseInsensitiveMatch ?? trimmed;
+}
+
+function trimWhitespaceFromToolCallNamesInMessage(
+  message: unknown,
+  allowedToolNames?: Set<string>,
+): void {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return;
+  }
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typedBlock = block as { type?: unknown; name?: unknown };
+    if (typedBlock.type !== "toolCall" || typeof typedBlock.name !== "string") {
+      continue;
+    }
+    const normalized = normalizeToolCallNameForDispatch(typedBlock.name, allowedToolNames);
+    if (normalized !== typedBlock.name) {
+      typedBlock.name = normalized;
+    }
+  }
+}
+
+function wrapStreamTrimToolCallNames(
+  stream: ReturnType<typeof streamSimple>,
+  allowedToolNames?: Set<string>,
+): ReturnType<typeof streamSimple> {
+  const originalResult = stream.result.bind(stream);
+  stream.result = async () => {
+    const message = await originalResult();
+    trimWhitespaceFromToolCallNamesInMessage(message, allowedToolNames);
+    return message;
+  };
+
+  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
+  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
+    function () {
+      const iterator = originalAsyncIterator();
+      return {
+        async next() {
+          const result = await iterator.next();
+          if (!result.done && result.value && typeof result.value === "object") {
+            const event = result.value as {
+              partial?: unknown;
+              message?: unknown;
+            };
+            trimWhitespaceFromToolCallNamesInMessage(event.partial, allowedToolNames);
+            trimWhitespaceFromToolCallNamesInMessage(event.message, allowedToolNames);
+          }
+          return result;
+        },
+        async return(value?: unknown) {
+          return iterator.return?.(value) ?? { done: true as const, value: undefined };
+        },
+        async throw(error?: unknown) {
+          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
+        },
+      };
+    };
+
+  return stream;
+}
+
+export function wrapStreamFnTrimToolCallNames(
+  baseFn: StreamFn,
+  allowedToolNames?: Set<string>,
+): StreamFn {
+  return (model, context, options) => {
+    const maybeStream = baseFn(model, context, options);
+    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      return Promise.resolve(maybeStream).then((stream) =>
+        wrapStreamTrimToolCallNames(stream, allowedToolNames),
+      );
+    }
+    return wrapStreamTrimToolCallNames(maybeStream, allowedToolNames);
+  };
+}
 
 export async function resolvePromptBuildHookResult(params: {
   prompt: string;
@@ -696,9 +908,40 @@ export async function runEmbeddedAttempt(
           typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl.trim() : "";
         const ollamaBaseUrl = modelBaseUrl || providerBaseUrl || OLLAMA_NATIVE_BASE_URL;
         activeSession.agent.streamFn = createOllamaStreamFn(ollamaBaseUrl);
+      } else if (params.model.api === "openai-responses" && params.provider === "openai") {
+        const wsApiKey = await params.authStorage.getApiKey(params.provider);
+        if (wsApiKey) {
+          activeSession.agent.streamFn = createOpenAIWebSocketStreamFn(wsApiKey, params.sessionId, {
+            signal: runAbortController.signal,
+          });
+        } else {
+          log.warn(`[ws-stream] no API key for provider=${params.provider}; using HTTP transport`);
+          activeSession.agent.streamFn = streamSimple;
+        }
       } else {
         // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
         activeSession.agent.streamFn = streamSimple;
+      }
+
+      // Ollama with OpenAI-compatible API needs num_ctx in payload.options.
+      // Otherwise Ollama defaults to a 4096 context window.
+      const providerIdForNumCtx =
+        typeof params.model.provider === "string" && params.model.provider.trim().length > 0
+          ? params.model.provider
+          : params.provider;
+      const shouldInjectNumCtx = shouldInjectOllamaCompatNumCtx({
+        model: params.model,
+        config: params.config,
+        providerId: providerIdForNumCtx,
+      });
+      if (shouldInjectNumCtx) {
+        const numCtx = Math.max(
+          1,
+          Math.floor(
+            params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+          ),
+        );
+        activeSession.agent.streamFn = wrapOllamaCompatNumCtx(activeSession.agent.streamFn, numCtx);
       }
 
       applyExtraParamsToAgent(
@@ -768,6 +1011,14 @@ export async function runEmbeddedAttempt(
           return inner(model, nextContext as typeof context, options);
         };
       }
+
+      // Some models emit tool names with surrounding whitespace (e.g. " read ").
+      // pi-agent-core dispatches tool calls with exact string matching, so normalize
+      // names on the live response stream before tool execution.
+      activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(
+        activeSession.agent.streamFn,
+        allowedToolNames,
+      );
 
       if (anthropicPayloadLogger) {
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
@@ -1352,6 +1603,7 @@ export async function runEmbeddedAttempt(
         sessionManager,
       });
       session?.dispose();
+      releaseWsSession(params.sessionId);
       await sessionLock.release();
     }
   } finally {

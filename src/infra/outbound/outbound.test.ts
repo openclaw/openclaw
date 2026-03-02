@@ -973,6 +973,42 @@ describe("resolveOutboundSessionRoute", () => {
           from: "slack:group:G123",
         },
       },
+      {
+        name: "Feishu explicit group prefix keeps group routing",
+        cfg: baseConfig,
+        channel: "feishu",
+        target: "group:oc_group_chat",
+        expected: {
+          sessionKey: "agent:main:feishu:group:oc_group_chat",
+          from: "feishu:group:oc_group_chat",
+          to: "oc_group_chat",
+          chatType: "group",
+        },
+      },
+      {
+        name: "Feishu explicit dm prefix keeps direct routing",
+        cfg: perChannelPeerCfg,
+        channel: "feishu",
+        target: "dm:oc_dm_chat",
+        expected: {
+          sessionKey: "agent:main:feishu:direct:oc_dm_chat",
+          from: "feishu:oc_dm_chat",
+          to: "oc_dm_chat",
+          chatType: "direct",
+        },
+      },
+      {
+        name: "Feishu bare oc_ target defaults to direct routing",
+        cfg: perChannelPeerCfg,
+        channel: "feishu",
+        target: "oc_ambiguous_chat",
+        expected: {
+          sessionKey: "agent:main:feishu:direct:oc_ambiguous_chat",
+          from: "feishu:oc_ambiguous_chat",
+          to: "oc_ambiguous_chat",
+          chatType: "direct",
+        },
+      },
     ];
 
     for (const testCase of cases) {
