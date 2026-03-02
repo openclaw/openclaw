@@ -305,17 +305,32 @@ export function resolveExecStartCommand(execStartValue: string): ResolvedExecSta
             pending.unshift(...expanded);
           }
         }
-      } else if (cluster.inlineValue && cluster.isSplitString) {
-        const splitStringValue = consumePossiblyQuotedValue(cluster.inlineValue, pending);
-        const expanded = parseSystemdExecStart(stripSurroundingQuotes(splitStringValue));
-        if (expanded.length > 0) {
-          pending.unshift(...expanded);
+      } else if (cluster.inlineValue) {
+        // Reassemble the inline value in case the tokenizer split a quoted
+        // value with spaces.  For split-string, expand the result; otherwise
+        // just drain the fragments so they don't leak as a command.
+        const reassembled = consumePossiblyQuotedValue(cluster.inlineValue, pending);
+        if (cluster.isSplitString) {
+          const expanded = parseSystemdExecStart(stripSurroundingQuotes(reassembled));
+          if (expanded.length > 0) {
+            pending.unshift(...expanded);
+          }
         }
       }
       continue;
     }
 
     if (envToken.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(envToken)) {
+      // When the part after '=' is a single-quoted value with spaces, the
+      // tokenizer splits it.  Drain the trailing fragments from pending so
+      // they aren't mistaken for the command.
+      const eqIdx = envToken.indexOf("=");
+      if (eqIdx >= 0) {
+        const afterEq = envToken.slice(eqIdx + 1);
+        if (afterEq) {
+          consumePossiblyQuotedValue(afterEq, pending);
+        }
+      }
       continue;
     }
 
