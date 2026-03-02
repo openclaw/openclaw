@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
-import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
 const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
   "auth_permanent",
@@ -262,11 +262,13 @@ export async function markAuthProfileUsed(params: {
 }
 
 export function calculateAuthProfileCooldownMs(errorCount: number): number {
-  const normalized = Math.max(1, errorCount);
-  return Math.min(
-    60 * 60 * 1000, // 1 hour max
-    60 * 1000 * 5 ** Math.min(normalized - 1, 3),
-  );
+  // Flat 30-second cooldown replaces exponential backoff.
+  // Original formula: 60s * 5^(errors-1), capped at 1 hour.
+  // At 3 errors = 25 min, 4 errors = 60 min — far exceeds real provider
+  // rate-limit windows (Anthropic ~60s). The exponential curve makes profiles
+  // unusable long after the provider has cleared the limit.
+  void errorCount; // preserve signature
+  return 30 * 1000;
 }
 
 type ResolvedAuthCooldownConfig = {
@@ -503,7 +505,7 @@ export async function markAuthProfileFailure(params: {
 }
 
 /**
- * Mark a profile as failed/rate-limited. Applies exponential backoff cooldown.
+ * Mark a profile as failed/rate-limited. Applies flat 30-second cooldown.
  * Cooldown times: 1min, 5min, 25min, max 1 hour.
  * Uses store lock to avoid overwriting concurrent usage updates.
  */
