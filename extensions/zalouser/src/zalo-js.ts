@@ -64,7 +64,10 @@ const activeListeners = new Map<string, ActiveZaloListener>();
 const groupContextCache = new Map<string, { value: ZaloGroupContext; expiresAt: number }>();
 
 type ApiTypingCapability = {
-  sendTypingEvent: (threadId: string, type?: ThreadType) => Promise<unknown>;
+  sendTypingEvent: (
+    threadId: string,
+    type?: (typeof ThreadType)[keyof typeof ThreadType],
+  ) => Promise<unknown>;
 };
 
 type StoredZaloCredentials = {
