@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
@@ -312,7 +313,9 @@ export async function runReplyAgent(params: {
       agentId,
       sessionCtx.MessageThreadId,
     );
-    nextEntry.sessionFile = nextSessionFile;
+    // Store only the filename — absolute paths in persisted entries break
+    // cross-agent path validation on restart (see #16090).
+    nextEntry.sessionFile = path.basename(nextSessionFile);
     activeSessionStore[sessionKey] = nextEntry;
     try {
       await updateSessionStore(storePath, (store) => {

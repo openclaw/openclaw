@@ -521,7 +521,7 @@ export async function initSessionState(params: {
       if (forked) {
         sessionId = forked.sessionId;
         sessionEntry.sessionId = forked.sessionId;
-        sessionEntry.sessionFile = forked.sessionFile;
+        sessionEntry.sessionFile = path.basename(forked.sessionFile);
         sessionEntry.forkedFromParent = true;
         log.warn(`forked session created: file=${forked.sessionFile}`);
       }
