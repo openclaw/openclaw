@@ -90,6 +90,7 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
 const BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP = "198.18.0.1";
+let hostHeaderFallbackAcceptedCount = 0;
 
 type HandshakeBrowserSecurityContext = {
   hasBrowserOriginHeader: boolean;
@@ -491,12 +492,14 @@ export function attachGatewayWsMessageHandler(params: {
         const isControlUi = connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
         const isWebchat = isWebchatConnect(connectParams);
         if (enforceOriginCheckForAnyClient || isControlUi || isWebchat) {
+          const hostHeaderOriginFallbackEnabled =
+            configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
           const originCheck = checkBrowserOrigin({
             requestHost,
             origin: requestOrigin,
             allowedOrigins: configSnapshot.gateway?.controlUi?.allowedOrigins,
-            allowHostHeaderOriginFallback:
-              configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
+            allowHostHeaderOriginFallback: hostHeaderOriginFallbackEnabled,
+            isLocalClient,
           });
           if (!originCheck.ok) {
             const errorMessage =
@@ -509,6 +512,17 @@ export function attachGatewayWsMessageHandler(params: {
             sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage);
             close(1008, truncateCloseReason(errorMessage));
             return;
+          }
+          if (originCheck.matchedBy === "host-header-fallback") {
+            hostHeaderFallbackAcceptedCount += 1;
+            logWsControl.warn(
+              `security warning: websocket origin accepted via Host-header fallback conn=${connId} count=${hostHeaderFallbackAcceptedCount} host=${requestHost ?? "n/a"} origin=${requestOrigin ?? "n/a"}`,
+            );
+            if (hostHeaderOriginFallbackEnabled) {
+              logGateway.warn(
+                "security metric: gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback accepted a websocket connect request",
+              );
+            }
           }
         }
 
