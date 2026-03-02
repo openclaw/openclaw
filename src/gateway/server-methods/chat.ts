@@ -7,6 +7,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
@@ -197,6 +198,49 @@ function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
     return res.message;
   });
   return changed ? next : messages;
+}
+
+function isSilentAssistantHistoryMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  if ((entry.role ?? "") !== "assistant") {
+    return false;
+  }
+  if (typeof entry.text === "string" && isSilentReplyText(entry.text, SILENT_REPLY_TOKEN)) {
+    return true;
+  }
+  if (typeof entry.content === "string") {
+    return isSilentReplyText(entry.content, SILENT_REPLY_TOKEN);
+  }
+  if (!Array.isArray(entry.content) || entry.content.length === 0) {
+    return false;
+  }
+  const textBlocks = entry.content
+    .map((block) => {
+      if (!block || typeof block !== "object") {
+        return undefined;
+      }
+      const typed = block as { type?: unknown; text?: unknown };
+      if (typed.type !== "text" || typeof typed.text !== "string") {
+        return undefined;
+      }
+      return typed.text;
+    })
+    .filter((value): value is string => typeof value === "string");
+  if (textBlocks.length !== entry.content.length) {
+    return false;
+  }
+  return isSilentReplyText(textBlocks.join("\n"), SILENT_REPLY_TOKEN);
+}
+
+function dropSilentAssistantHistoryMessages(messages: unknown[]): unknown[] {
+  if (messages.length === 0) {
+    return messages;
+  }
+  const filtered = messages.filter((message) => !isSilentAssistantHistoryMessage(message));
+  return filtered.length === messages.length ? messages : filtered;
 }
 
 function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
@@ -550,10 +594,11 @@ export const chatHandlers: GatewayRequestHandlers = {
     const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
     const sanitized = stripEnvelopeFromMessages(sliced);
     const normalized = sanitizeChatHistoryMessages(sanitized);
+    const filtered = dropSilentAssistantHistoryMessages(normalized);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
     const replaced = replaceOversizedChatHistoryMessages({
-      messages: normalized,
+      messages: filtered,
       maxSingleMessageBytes: perMessageHardCap,
     });
     const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
