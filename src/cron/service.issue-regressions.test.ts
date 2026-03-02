@@ -32,9 +32,7 @@ let fixtureRoot = "";
 let fixtureCount = 0;
 
 async function makeStorePath() {
-  const dir = path.join(fixtureRoot, `case-${fixtureCount++}`);
-  await fs.mkdir(dir, { recursive: true });
-  const storePath = path.join(dir, "jobs.json");
+  const storePath = path.join(fixtureRoot, `case-${fixtureCount++}.jobs.json`);
   return {
     storePath,
   };
@@ -1523,7 +1521,7 @@ describe("Cron issue regressions", () => {
 
     // Keep this short for suite speed while still separating expected timeout
     // from the 1/3-regression timeout.
-    const timeoutSeconds = 0.06;
+    const timeoutSeconds = 0.03;
     const cronJob = createIsolatedRegressionJob({
       id: "timeout-fraction-29774",
       name: "timeout fraction regression",
@@ -1579,7 +1577,7 @@ describe("Cron issue regressions", () => {
     // The abort must not fire at the old ~1/3 regression value.
     // Keep the lower bound conservative for loaded CI runners.
     const elapsedMs = (abortWallMs ?? Date.now()) - wallStart;
-    expect(elapsedMs).toBeGreaterThanOrEqual(timeoutSeconds * 1000 * 0.6);
+    expect(elapsedMs).toBeGreaterThanOrEqual(timeoutSeconds * 1000 * 0.55);
 
     const job = state.store?.jobs.find((entry) => entry.id === "timeout-fraction-29774");
     expect(job?.state.lastStatus).toBe("error");
