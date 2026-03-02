@@ -43,12 +43,12 @@ import {
   type MattermostPost,
   type MattermostUser,
 } from "./client.js";
-import { isMattermostSenderAllowed, normalizeMattermostAllowList } from "./monitor-auth.js";
 import {
   createMattermostInteractionHandler,
   setInteractionCallbackUrl,
   setInteractionSecret,
 } from "./interactions.js";
+import { isMattermostSenderAllowed, normalizeMattermostAllowList } from "./monitor-auth.js";
 import {
   createDedupeCache,
   formatInboundFromLabel,
