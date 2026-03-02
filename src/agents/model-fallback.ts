@@ -101,6 +101,10 @@ function hasTopLevelTransportMessageHint(message: string): boolean {
   return hasDnsTransportPhrase(message) || TOP_LEVEL_TRANSPORT_PHRASE_RE.test(message);
 }
 
+function isIterableUnknown(value: unknown): value is Iterable<unknown> {
+  return typeof value === "object" && value !== null && Symbol.iterator in value;
+}
+
 function hasTransportFailureHint(err: unknown): boolean {
   const queue: Array<{ value: unknown; depth: number }> = [{ value: err, depth: 0 }];
   const seen = new Set<object>();
@@ -140,6 +144,7 @@ function hasTransportFailureHint(err: unknown): boolean {
       reason?: unknown;
       original?: unknown;
       error?: unknown;
+      errors?: unknown;
     };
 
     const code = typeof candidate.code === "string" ? candidate.code : candidate.errno;
@@ -167,6 +172,11 @@ function hasTransportFailureHint(err: unknown): boolean {
     }
     if (candidate.error) {
       queue.push({ value: candidate.error, depth: depth + 1 });
+    }
+    if (candidate.errors && isIterableUnknown(candidate.errors)) {
+      for (const nested of candidate.errors) {
+        queue.push({ value: nested, depth: depth + 1 });
+      }
     }
   }
   return false;

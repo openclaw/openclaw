@@ -881,6 +881,37 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(2);
   });
 
+  it("falls back when context-overflow text wraps transport failures in AggregateError.errors", async () => {
+    const transportLeaf = Object.assign(new Error("connect ENOTFOUND api.openai.com"), {
+      code: "ENOTFOUND",
+    });
+    const aggregatedCause = new AggregateError(
+      [transportLeaf, new Error("secondary connect failure")],
+      "multiple connect failures",
+    );
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Ollama API error 400: context window exceeds limit"), {
+          cause: aggregatedCause,
+        }),
+      )
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "ollama",
+      model: "minimax-m2.5:cloud",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[0]).toEqual(["ollama", "minimax-m2.5:cloud"]);
+    expect(run.mock.calls[1]?.[0]).not.toBe("ollama");
+  });
+
   it("does not treat standalone DNS text as transport failure for true overflow errors", async () => {
     const cfg = makeCfg();
     const run = vi
