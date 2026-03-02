@@ -9,6 +9,7 @@ import type {
 import { AuditLogger } from "./audit.js";
 import { BUILTIN_RULES } from "./builtin-rules.js";
 import { ChainDetector, DEFAULT_CHAIN_RULES } from "./chain-detector.js";
+import { CircuitBreaker } from "./circuit-breaker.js";
 import { RulesEngine } from "./engine.js";
 import { RateLimiter, DEFAULT_RATE_LIMITS } from "./rate-limiter.js";
 import type { HarnessMode, HarnessTier } from "./types.js";
@@ -31,6 +32,7 @@ export const safetyHarnessPlugin: OpenClawPluginDefinition = {
     const audit = new AuditLogger(auditPath);
     const rateLimiter = new RateLimiter(DEFAULT_RATE_LIMITS);
     const chainDetector = new ChainDetector(DEFAULT_CHAIN_RULES);
+    const circuitBreaker = new CircuitBreaker();
 
     // Track the most recent effective tier and chain flags per toolName so after_tool_call
     // can audit correctly. Last-call-wins is acceptable for Phase 1 (sequential tool calls).
@@ -45,58 +47,80 @@ export const safetyHarnessPlugin: OpenClawPluginDefinition = {
         event: PluginHookBeforeToolCallEvent,
         _ctx: PluginHookToolContext,
       ): Promise<PluginHookBeforeToolCallResult | void> => {
-        const { toolName, params } = event;
-        const verb = classifyVerb(toolName);
+        try {
+          const { toolName, params } = event;
+          const verb = classifyVerb(toolName);
 
-        // 1. Rules engine classification
-        const classification = engine.classify(toolName, params);
+          // In degraded mode (circuit open), allow reads but block all else
+          if (circuitBreaker.isDegraded()) {
+            if (verb !== "read") {
+              return {
+                block: true,
+                blockReason: "Safety check unavailable. Action blocked for safety.",
+              };
+            }
+            return undefined; // allow reads in degraded mode
+          }
 
-        // 2. Rate limit check (may escalate tier) — build a local reason string,
-        //    never mutate the engine's return object (Issue 7).
-        const rateCategory = RateLimiter.toRateCategory(verb);
-        let effectiveTier = classification.tier;
-        let effectiveReason = classification.reason;
-        if (rateCategory && !rateLimiter.check(rateCategory)) {
-          effectiveTier = "block";
-          effectiveReason = `Rate limit exceeded for ${rateCategory}: ${effectiveReason}`;
-        }
+          // 1. Rules engine classification
+          const classification = engine.classify(toolName, params);
 
-        // 3. Chain detection
-        const chainFlags = chainDetector.check({
-          tool: toolName,
-          verb,
-          target: toolName.split(".")[0] || toolName,
-        });
-        if (chainFlags.length > 0) {
-          effectiveTier = "block";
-          effectiveReason = `Chain detected (${chainFlags.join(", ")}): ${effectiveReason}`;
-        }
+          // 2. Rate limit check (may escalate tier) — build a local reason string,
+          //    never mutate the engine's return object (Issue 7).
+          const rateCategory = RateLimiter.toRateCategory(verb);
+          let effectiveTier = classification.tier;
+          let effectiveReason = classification.reason;
+          if (rateCategory && !rateLimiter.check(rateCategory)) {
+            effectiveTier = "block";
+            effectiveReason = `Rate limit exceeded for ${rateCategory}: ${effectiveReason}`;
+          }
 
-        // Store effective tier and chain flags for after_tool_call audit
-        lastTierByTool.set(toolName, effectiveTier);
-        lastChainFlagsByTool.set(toolName, chainFlags);
+          // 3. Chain detection
+          const chainFlags = chainDetector.check({
+            tool: toolName,
+            verb,
+            target: toolName.split(".")[0] || toolName,
+          });
+          if (chainFlags.length > 0) {
+            effectiveTier = "block";
+            effectiveReason = `Chain detected (${chainFlags.join(", ")}): ${effectiveReason}`;
+          }
 
-        api.logger.info(
-          `[safety-harness] ${toolName}: tier=${effectiveTier} reason="${effectiveReason}" mode=${mode}`,
-        );
+          // Store effective tier and chain flags for after_tool_call audit
+          lastTierByTool.set(toolName, effectiveTier);
+          lastChainFlagsByTool.set(toolName, chainFlags);
 
-        // In observe mode, never block
-        if (mode === "observe") {
+          api.logger.info(
+            `[safety-harness] ${toolName}: tier=${effectiveTier} reason="${effectiveReason}" mode=${mode}`,
+          );
+
+          circuitBreaker.recordSuccess();
+
+          // In observe mode, never block
+          if (mode === "observe") {
+            return undefined;
+          }
+
+          // In enforce mode, block if tier is "block"
+          if (effectiveTier === "block") {
+            // Return generic message to AI; log details only in audit trail
+            api.logger.warn(`[safety-harness] BLOCKED ${toolName}: ${effectiveReason}`);
+            return {
+              block: true,
+              blockReason: "Action blocked by safety policy. Please try a different approach.",
+            };
+          }
+
+          // "confirm" tier: for Phase 1, treat as allow (confirmation flow is Phase 3)
           return undefined;
-        }
-
-        // In enforce mode, block if tier is "block"
-        if (effectiveTier === "block") {
-          // Return generic message to AI; log details only in audit trail
-          api.logger.warn(`[safety-harness] BLOCKED ${toolName}: ${effectiveReason}`);
+        } catch (err) {
+          circuitBreaker.recordFailure();
+          api.logger.error(`[safety-harness] pre-hook error (fail-closed): ${err}`);
           return {
             block: true,
-            blockReason: "Action blocked by safety policy. Please try a different approach.",
+            blockReason: "Safety check unavailable. Action blocked for safety.",
           };
         }
-
-        // "confirm" tier: for Phase 1, treat as allow (confirmation flow is Phase 3)
-        return undefined;
       },
       { priority: HARNESS_PRIORITY },
     );
