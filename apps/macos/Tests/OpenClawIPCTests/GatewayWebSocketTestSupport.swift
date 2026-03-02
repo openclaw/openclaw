@@ -1,8 +1,8 @@
-import OpenClawKit
 import Foundation
+import OpenClawKit
 
 extension WebSocketTasking {
-    // Keep unit-test doubles resilient to protocol additions.
+    /// Keep unit-test doubles resilient to protocol additions.
     func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
         pongReceiveHandler(nil)
     }

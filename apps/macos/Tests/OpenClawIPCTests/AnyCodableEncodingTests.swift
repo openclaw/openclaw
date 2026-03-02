@@ -1,7 +1,6 @@
-import OpenClawProtocol
 import Foundation
+import OpenClawProtocol
 import Testing
-
 @testable import OpenClaw
 
 @Suite struct AnyCodableEncodingTests {

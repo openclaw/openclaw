@@ -1,8 +1,7 @@
 import AppKit
-import OpenClawProtocol
 import Foundation
+import OpenClawProtocol
 import Testing
-
 @testable import OpenClaw
 
 @Suite(.serialized)
@@ -157,7 +156,7 @@ struct LowCoverageHelperTests {
         #expect(response.mime == "text/html")
         #expect(String(data: response.data, encoding: .utf8)?.contains("Hello") == true)
 
-        let invalid = URL(string: "https://example.com")!
+        let invalid = try #require(URL(string: "https://example.com"))
         let invalidResponse = handler._testResponse(for: invalid)
         #expect(invalidResponse.mime == "text/html")
 
@@ -191,7 +190,7 @@ struct LowCoverageHelperTests {
         #expect(injector._testFindInsertIndex(in: fallbackMenu) == 1)
     }
 
-    @Test @MainActor func canvasWindowHelperFunctions() {
+    @Test @MainActor func canvasWindowHelperFunctions() throws {
         #expect(CanvasWindowController._testSanitizeSessionKey("  main ") == "main")
         #expect(CanvasWindowController._testSanitizeSessionKey("bad/..") == "bad___")
         #expect(CanvasWindowController._testJSOptionalStringLiteral(nil) == "null")
@@ -208,7 +207,7 @@ struct LowCoverageHelperTests {
             #expect(CanvasWindowController._testIsLocalNetworkIPv4(parsed))
         }
 
-        let url = URL(string: "http://192.168.1.2")!
+        let url = try #require(URL(string: "http://192.168.1.2"))
         #expect(CanvasWindowController._testIsLocalNetworkCanvasURL(url))
         #expect(CanvasWindowController._testParseIPv4("not-an-ip") == nil)
     }
