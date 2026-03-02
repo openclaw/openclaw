@@ -65,28 +65,28 @@ Qiniu Cloud supports 100+ models across multiple categories. A selection of popu
 
 ### Text / Chat
 
-| Model                    | Context | Provider      |
-| ------------------------ | ------- | ------------- |
-| `deepseek-r1`            | 128K    | DeepSeek      |
-| `deepseek-v3`            | 128K    | DeepSeek      |
-| `claude-sonnet-4-6`      | 1M      | Anthropic     |
-| `claude-opus-4-6`        | 200K    | Anthropic     |
-| `gpt-5`                  | 400K    | OpenAI        |
-| `gemini-2.5-pro`         | 11M+    | Google        |
-| `gemini-2.5-flash`       | 11M+    | Google        |
-| `grok-4-fast`            | 2M      | xAI           |
-| `qwen3-235b-a22b`        | 128K    | Alibaba Cloud |
-| `kimi-k2`                | 128K    | Moonshot      |
-| `doubao-1.5-pro-32k`     | 128K    | ByteDance     |
-| `glm-4.5`                | 131K    | ZhipuAI       |
+| Model                | Context | Provider      |
+| -------------------- | ------- | ------------- |
+| `deepseek-r1`        | 128K    | DeepSeek      |
+| `deepseek-v3`        | 128K    | DeepSeek      |
+| `claude-sonnet-4-6`  | 1M      | Anthropic     |
+| `claude-opus-4-6`    | 200K    | Anthropic     |
+| `gpt-5`              | 400K    | OpenAI        |
+| `gemini-2.5-pro`     | 11M+    | Google        |
+| `gemini-2.5-flash`   | 11M+    | Google        |
+| `grok-4-fast`        | 2M      | xAI           |
+| `qwen3-235b-a22b`    | 128K    | Alibaba Cloud |
+| `kimi-k2`            | 128K    | Moonshot      |
+| `doubao-1.5-pro-32k` | 128K    | ByteDance     |
+| `glm-4.5`            | 131K    | ZhipuAI       |
 
 ### Image understanding
 
-| Model                        | Provider      |
-| ---------------------------- | ------------- |
-| `qwen-vl-max`                | Alibaba Cloud |
-| `qwen2.5-vl-72b-instruct`    | Alibaba Cloud |
-| `doubao-1.5-vision-pro`      | ByteDance     |
+| Model                     | Provider      |
+| ------------------------- | ------------- |
+| `qwen-vl-max`             | Alibaba Cloud |
+| `qwen2.5-vl-72b-instruct` | Alibaba Cloud |
+| `doubao-1.5-vision-pro`   | ByteDance     |
 
 ### Image generation
 
@@ -98,18 +98,18 @@ Qiniu Cloud supports 100+ models across multiple categories. A selection of popu
 
 ### Video generation
 
-| Model                    | Provider |
-| ------------------------ | -------- |
-| `kling-v2-1`             | Kling AI |
-| `sora-2`                 | OpenAI   |
-| `veo-3.0-generate-001`   | Google   |
+| Model                  | Provider |
+| ---------------------- | -------- |
+| `kling-v2-1`           | Kling AI |
+| `sora-2`               | OpenAI   |
+| `veo-3.0-generate-001` | Google   |
 
 ### Audio
 
-| Model | Description                   |
-| ----- | ----------------------------- |
-| `asr` | Automatic speech recognition  |
-| `tts` | Text to speech                |
+| Model | Description                  |
+| ----- | ---------------------------- |
+| `asr` | Automatic speech recognition |
+| `tts` | Text to speech               |
 
 For the complete and up-to-date model list, visit [sufy.com/zh-CN/services/ai-inference/models](https://sufy.com/zh-CN/services/ai-inference/models).
 
