@@ -13,13 +13,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # -- Python ML packages (SofaGenius deps) --
 RUN python3 -m pip install --break-system-packages \
-      fastapi uvicorn httpx \
+      fastapi uvicorn httpx pydantic \
       anthropic \
       wandb \
-      huggingface_hub \
+      huggingface_hub datasets \
       modal \
       duckdb \
-      Pillow
+      Pillow \
+      supabase python-jose[cryptography] \
+      tweepy numpy
 
 # -- Install Bun (required for OpenClaw build) --
 RUN curl -fsSL https://bun.sh/install | bash
@@ -60,6 +62,10 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
 RUN git clone https://github.com/lilyzhng/SofaGenius.git /opt/sofagenius \
  && cd /opt/sofagenius/backend \
  && python3 -m pip install --break-system-packages -r requirements.txt 2>/dev/null || true
+
+# -- Mount bridge router into SofaGenius (exposes subagent tools as REST endpoints) --
+RUN python3 /app/examples/sofagenius-flyio/mount_bridge.py
+
 RUN chown -R node:node /opt/sofagenius
 
 # -- Supervisor config (runs both services) --
