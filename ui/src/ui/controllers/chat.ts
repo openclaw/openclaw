@@ -251,6 +251,15 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage) {
       state.chatMessages = [...state.chatMessages, finalMessage];
+    } else if (state.chatStream?.trim()) {
+      state.chatMessages = [
+        ...state.chatMessages,
+        {
+          role: "assistant",
+          content: [{ type: "text", text: state.chatStream }],
+          timestamp: Date.now(),
+        },
+      ];
     }
     state.chatStream = null;
     state.chatRunId = null;
