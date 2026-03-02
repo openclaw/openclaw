@@ -385,17 +385,18 @@ export function isPrivateOrLoopbackHost(host: string): boolean {
  *
  * Returns true if the URL is secure for transmitting data:
  * - wss:// (TLS) is always secure
- * - ws:// is secure for loopback and private network addresses
- *
- * Private networks (RFC 1918, link-local, CGNAT, ULA) are not subject
- * to the same plaintext interception risks as the public internet,
- * and blocking them breaks internal pod-to-pod communication in
- * container orchestrators like Kubernetes.
+ * - ws:// is secure only for loopback addresses by default
+ * - optional break-glass: private ws:// can be enabled for trusted networks
  *
  * All other ws:// URLs are considered insecure because both credentials
  * AND chat/conversation data would be exposed to network interception.
  */
-export function isSecureWebSocketUrl(url: string): boolean {
+export function isSecureWebSocketUrl(
+  url: string,
+  opts?: {
+    allowPrivateWs?: boolean;
+  },
+): boolean {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -411,6 +412,13 @@ export function isSecureWebSocketUrl(url: string): boolean {
     return false;
   }
 
-  // ws:// is secure for loopback and private network addresses
-  return isPrivateOrLoopbackHost(parsed.hostname);
+  // Default policy stays strict: loopback-only plaintext ws://.
+  if (isLoopbackHost(parsed.hostname)) {
+    return true;
+  }
+  // Optional break-glass for trusted private-network overlays.
+  if (opts?.allowPrivateWs) {
+    return isPrivateOrLoopbackHost(parsed.hostname);
+  }
+  return false;
 }
