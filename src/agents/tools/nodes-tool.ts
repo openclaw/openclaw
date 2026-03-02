@@ -56,6 +56,8 @@ const NOTIFY_DELIVERIES = ["system", "overlay", "auto"] as const;
 const NOTIFICATIONS_ACTIONS = ["open", "dismiss", "reply"] as const;
 const CAMERA_FACING = ["front", "back", "both"] as const;
 const LOCATION_ACCURACY = ["coarse", "balanced", "precise"] as const;
+const SCREEN_RECORD_DURATION_MIN_MS = 1_000;
+const SCREEN_RECORD_DURATION_MAX_MS = 300_000;
 const NODE_READ_ACTION_COMMANDS = {
   camera_list: "camera.list",
   notifications_list: "notifications.list",
@@ -420,12 +422,21 @@ export function createNodesTool(options?: {
           case "screen_record": {
             const node = readStringParam(params, "node", { required: true });
             const nodeId = await resolveNodeId(gatewayOpts, node);
-            const durationMs =
+            const durationMsRaw =
               typeof params.durationMs === "number" && Number.isFinite(params.durationMs)
                 ? params.durationMs
                 : typeof params.duration === "string"
                   ? parseDurationMs(params.duration)
                   : 10_000;
+            if (
+              durationMsRaw < SCREEN_RECORD_DURATION_MIN_MS ||
+              durationMsRaw > SCREEN_RECORD_DURATION_MAX_MS
+            ) {
+              throw new Error(
+                `durationMs must be between ${SCREEN_RECORD_DURATION_MIN_MS} and ${SCREEN_RECORD_DURATION_MAX_MS}`,
+              );
+            }
+            const durationMs = Math.trunc(durationMsRaw);
             const fps =
               typeof params.fps === "number" && Number.isFinite(params.fps) ? params.fps : 10;
             const screenIndex =
