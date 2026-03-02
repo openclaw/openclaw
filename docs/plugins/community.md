@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **AbacusAI Auth** — Integrate AbacusAI RouteLLM models (Claude, Gemini, GPT, DeepSeek, Qwen, Grok, Kimi, Llama) into OpenClaw with full multi-tool calling support.
+  npm: `openclaw-abacusai-auth`
+  repo: `https://github.com/tonyhu2006/openclaw-abacusai-auth`
+  install: `openclaw plugins install openclaw-abacusai-auth`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
