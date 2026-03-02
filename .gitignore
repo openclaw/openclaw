@@ -134,3 +134,10 @@ dist/protocol.schema.json
 
 # Synthing
 **/.stfolder/
+
+# Mnemo server logs
+_mnemo_stdout.log
+_mnemo_stderr.log
+_start_mnemo.py
+tmp-coverage.txt
+tmp/

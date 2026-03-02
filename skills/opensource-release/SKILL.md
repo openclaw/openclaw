@@ -1,114 +1,104 @@
----
+﻿---
 name: opensource-release
-description: Convert a private MAI project repository to public open-source. Use when making a repo public, sanitizing personal info from code/docs/git history, or preparing a project for open-source release. Triggers on "오픈소스", "public 전환", "공개", "open source release".
+description: Convert a private repository to public open-source. Use when making a repo public, sanitizing personal info from code/docs/git history, or preparing a project for open-source release. Triggers on "open source", "make public", "public release", "sanitize repo".
 ---
 
 # Open Source Release
 
-Private repo를 public으로 안전하게 전환하는 스킬.
+Safely convert a private repo to public by sanitizing personal data and cleaning history.
 
 ## Pre-flight Checklist
 
-1. **개인정보 스캔** — 모든 소스/문서에서 아래 패턴 검색:
-   - 로컬 경로: `C:\Users\{username}\`, 홈 디렉토리 경로
-   - 사용자명: Windows/macOS 로컬 계정명
-   - 볼트/폴더명: 개인 식별 가능한 이름 (JINI_SYNC 등)
-   - API 키/토큰: `.env`, 하드코딩된 시크릿
-   - 이메일/전화번호: 커밋 author 포함
+1. **Scan source code** — search for:
+   - Absolute paths: `C:\Users\`, home directory references
+   - Usernames: OS-specific account names
+   - Internal hostnames / port names
+   - API keys / tokens: `.env`, hardcoded secrets
+   - Email / phone numbers in commit author config
 
-2. **캐시/빌드 산출물 확인** — `.gitignore`에 포함 여부:
-   - 바이너리 캐시 (`.pkl`, `.db`, `checksums.json`)
+2. **Check cached artifacts** — ensure `.gitignore` covers:
+   - Binary caches (`.pkl`, `.db`, `checksums.json`)
    - `__pycache__/`, `node_modules/`, `.env`, `*.egg-info/`
-   - 프로젝트 특화 캐시 디렉토리
+   - Project-specific cache directories
 
 ## Sanitization Steps
 
-### Step 1: 코드 정리
+### Step 1: Code Scan
 
-```
-검색 명령:
-  Get-ChildItem -Recurse -Include "*.py","*.ps1","*.js","*.ts" |
-    Select-String -Pattern "C:\\Users|/home/|JINI_SYNC|jini9" -SimpleMatch |
-    Where-Object { $_.Path -notmatch "__pycache__|node_modules|\.git" }
-
-치환 방식:
-  - 하드코딩 경로 → 환경변수 (os.environ.get / process.env)
-  - config.example.yaml 또는 .env.example 생성
-  - 각 스크립트에 환경변수 미설정 시 에러 메시지 추가
+```powershell
+# Find hardcoded paths and usernames
+Get-ChildItem -Recurse -Include "*.py","*.ps1","*.js","*.ts" |
+  Select-String -Pattern "C:\\Users|/home/|your-username" -SimpleMatch |
+  Where-Object { $_.Path -notmatch "__pycache__|node_modules|\.git" }
 ```
 
-### Step 2: 문서 정리
+Fix: replace with environment variables (`os.environ.get` / `process.env`) and add a `.env.example`.
 
-```
-검색 명령:
-  Get-ChildItem -Recurse -Include "*.md","*.txt","*.yaml","*.yml" |
-    Select-String -Pattern "C:\\Users|/home/|jini9|JINI_SYNC" -SimpleMatch |
-    Where-Object { $_.Path -notmatch "node_modules|\.git" }
+### Step 2: Docs Scan
 
-치환 규칙:
-  - 로컬 경로 → 플레이스홀더 ($VAULT_PATH, ~/vault 등)
-  - 개인 사용자명 → your-username 또는 제거
-  - GitHub 사용자명 → 유지 가능 (이미 public)
-  - README에 환경변수 설정 가이드 추가
+```powershell
+Get-ChildItem -Recurse -Include "*.md","*.txt","*.yaml","*.yml" |
+  Select-String -Pattern "C:\\Users|/home/|your-username" -SimpleMatch |
+  Where-Object { $_.Path -notmatch "node_modules|\.git" }
 ```
 
-### Step 3: Git History 분석
+Replace personal paths with generic placeholders (`$VAULT_PATH`, `~/vault`, etc.).
 
-```
-분석 명령:
-  git log --all -p | Select-String -Pattern "개인정보패턴" | Select-Object -First 50
-  git log --all --diff-filter=A -- "캐시경로/*"
+### Step 3: Git History Analysis
 
-판단 기준:
-  - 커밋 수 < 50 + 캐시/시크릿이 history에 존재 → Option B (clean push)
-  - 커밋 수 많고 history 중요 → Option A (BFG/filter-repo)
-  - history에 민감 정보 없음 → Option C (그냥 진행)
+```powershell
+git log --all -p | Select-String -Pattern "SENSITIVE_TERM" | Select-Object -First 50
+git log --all --diff-filter=A -- "cache/*"
 ```
 
-### Step 4: Clean Push (Option B 선택 시)
+Choose a strategy:
+
+- **< 50 commits + cache only in history** → Option B (clean push)
+- **Large history with sensitive data** → Option A (BFG Repo Cleaner / git filter-repo)
+- **History is fine, just old paths** → Option C (leave as-is)
+
+### Step 4: Clean Push (Option B)
 
 ```powershell
 git checkout --orphan clean-main
 git add -A
-git commit -m "feat: initial public release - [프로젝트 설명]"
-git remote set-url origin https://github.com/{owner}/{repo}.git  # 토큰 제거!
+git commit -m "feat: initial public release"
+git remote set-url origin https://github.com/{owner}/{repo}.git  # verify no token in URL!
 git branch -M main
 git push origin main --force
-# 기존 브랜치 삭제
 git push origin --delete {old-branch}
 ```
 
-### Step 5: Public 전환
+### Step 5: Make Public
 
 ```powershell
-gh repo edit {owner}/{repo} --visibility public --accept-visibility-change-consequences --description "설명"
+gh repo edit {owner}/{repo} --visibility public --accept-visibility-change-consequences --description "Short description"
 ```
 
-### Step 6: 검증
+### Step 6: Verify
 
 ```powershell
-# 개인정보 최종 스캔
+# Final scan for sensitive strings
 Get-ChildItem -Recurse -Include "*.py","*.md","*.yaml","*.js","*.ts" |
-  Select-String -Pattern "개인정보패턴" -SimpleMatch |
-  Where-Object { $_.Path -notmatch "__pycache__|node_modules|\.git|\.mnemo" }
+  Select-String -Pattern "SENSITIVE_TERM" -SimpleMatch |
+  Where-Object { $_.Path -notmatch "__pycache__|node_modules|\.git" }
 
-# Remote URL에 토큰 없는지 확인
+# Confirm remote URL has no token
 git remote -v
 
-# Public 확인
+# Confirm visibility
 gh repo view {owner}/{repo} --json visibility
 ```
 
-### Step 7: 이슈 자동 대응 설정 (선택)
+### Step 7: Post-Release Housekeeping (Optional)
 
-- HEARTBEAT.md에 Active Tracking 추가
-- github-issue-watcher.ps1에 repo 추가 (또는 별도 watcher)
-- memory/{project}.md에 이슈 추적 상태 기록
+- Add issue tracking to HEARTBEAT.md
+- Update memory/{project}.md with release notes
 
-## 주의사항
+## Gotchas
 
-- **git remote URL에 토큰이 박혀있을 수 있음** — 반드시 확인/제거
-- **바이너리 캐시**는 .gitignore만으로 부족 — history에 이미 있을 수 있음
-- **한글 인코딩** — PowerShell/Python에서 한글 폴더명 깨짐 주의
-- GitHub 사용자명(jini92)은 public이므로 유지 OK
-- `.env` 파일은 절대 커밋하지 않음
+- **Never include tokens in git remote URLs** — always verify before push
+- **Binary caches** not covered by `.gitignore` may already be in history — check carefully
+- **Encoding issues on Windows** — use UTF-8 explicitly in PowerShell/Python
+- Your GitHub username is already public — that is fine to leave as-is
+- Never commit `.env` files — add to `.gitignore` if not already there

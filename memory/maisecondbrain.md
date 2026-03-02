@@ -112,6 +112,8 @@ Mnemo
 - 2026-02-24: **Phase 4 검색 고도화** — Reranker A/B 테스트(8쿼리×4구성): Reranker +8% 관련도(0.521→0.562), 동적 가중치 단독 효과 미미(-8%). query_classifier.py(factual/relational/exploratory) + GraphRAG 프롬프트 쿼리타입별 분기 + search_ab_test.py 벤치마크 스크립트
 - 2026-02-24: **임베딩 모델 전환** — nomic-embed-text(768d, hit 6%) → qwen3-embedding:0.6b(1024d, hit 33%, 5.5배 개선). 전체 3,462 벡터 재빌드. MNEMO_EMBED_MODEL 환경변수 오버라이드 지원. 전환 후 baseline 0.583(+12%), reranker 0.604
 - 2026-02-24: **A002 온톨로지 개선 계획 전체 완료** — Phase 1(엔티티 분류) + Phase 2(가비지 정리) + Phase 3(의미적 관계) + Phase 3.5(person LLM 추출) + Phase 4(검색 고도화) 모두 ✅
+- 2026-02-27: **Obsidian 커뮤니티 플러그인 PR #10406** — ObsidianReviewBot 자동 스캔 결과 수신 (Required: any 타입 제거, sentence case, await 누락, style 직접 설정, default hotkey, console.log 등)
+- 2026-03-01: **PR #10406 봇 검증 통과** — 코드 수정 push 후 봇 재스캔 통과. "Ready for review" 라벨 부여, 휴먼 리뷰어 배정 대기 중. 수 주 소요 가능
 
 ## 결정사항
 
@@ -149,7 +151,7 @@ Mnemo
 - **활성화:** 2026-02-21
 - **방식:** HEARTBEAT Active Tracking (매 하트비트마다 체크)
 - **대응 정책:** 버그→직접 수정, 기능요청→분석+보고, 질문→답변
-- **마지막 체크 이슈:** #0 (아직 이슈 없음, 2026-02-27 09:00 KST 확인)
+- **마지막 체크 이슈:** #0 (아직 이슈 없음, 2026-03-02 04:00 KST 확인)
 - **Repo visibility:** PUBLIC (2026-02-21 전환)
 
 ## 문서 목록

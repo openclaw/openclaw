@@ -1,52 +1,52 @@
 ﻿---
 name: advisory-committee
-description: MAI Universe 4인 에이전트 위원회 자문 시스템. 전략적 의사결정이 어려울 때 CS/마케팅/재무/기술 4가지 관점에서 분석 후 권고안을 제출한다. 트리거: "위원회 열어줘", "결정 어렵다", "어떻게 해야 할까" 같이 전략 판단이 필요한 사안. 각 에이전트가 독립적으로 YES/NO/조건부 판정 후 다수결로 최종 권고 도출.
+description: "4-agent AI advisory committee for strategic decisions. Runs CS, Marketing, Finance, and Tech agents in sequence to analyze proposals and deliver a majority-vote recommendation. Trigger: when you need help deciding strategy, prioritization, or whether to build something new."
 ---
 
-# 에이전트 위원회 (Advisory Committee)
+# Advisory Committee
 
-## 실행 방법
+## How It Works
 
-안건을 받으면 아래 4개 에이전트를 **순서대로** 수행한다. 각 에이전트는 독립적 관점에서 판정한다.
+When given a proposal, run the following 4 agents **in sequence**. Each agent judges independently.
 
-### 에이전트 순서
+### Agent Order
 
-1. **🎧 CS 에이전트 "유저 챔피언"** — 유저 가치 관점
-2. **📣 마케팅 에이전트 "성장 해커"** — 배포/성장 관점
-3. **📦 재무 에이전트 "운영 CFO"** — ROI/우선순위 관점
-4. **🔧 기술 에이전트 "CTO"** — 구현/복잡도 관점
+1. **🎧 CS Agent "User Champion"** — User value perspective
+2. **📣 Marketing Agent "Growth Hacker"** — Distribution/growth perspective
+3. **📦 Finance Agent "CFO"** — ROI/priority perspective
+4. **🔧 Tech Agent "CTO"** — Implementation/complexity perspective
 
-각 에이전트 판정: `✅ YES` / `❌ NO` / `⚠️ 조건부`
+Each agent verdict: `✅ YES` / `❌ NO` / `⚠️ Conditional`
 
-### 출력 형식
+### Output Format
 
 ```
-## 🏛️ 위원회 — [안건명]
+## 🏛️ Committee — [Proposal]
 
 ### 🎧 CS — [✅/❌/⚠️]
-> [2~3줄 근거]
+> [2~3 lines of reasoning]
 
-### 📣 마케팅 — [✅/❌/⚠️]
-> [2~3줄 근거]
+### 📣 Marketing — [✅/❌/⚠️]
+> [2~3 lines of reasoning]
 
-### 📦 재무 — [✅/❌/⚠️]
-> [2~3줄 근거]
+### 📦 Finance — [✅/❌/⚠️]
+> [2~3 lines of reasoning]
 
-### 🔧 기술 — [✅/❌/⚠️]
-> [2~3줄 근거]
+### 🔧 Tech — [✅/❌/⚠️]
+> [2~3 lines of reasoning]
 
-## 📋 권고안
-**결정: [YES/NO/조건부]**
-> [한 줄 액션]
+## 📋 Recommendation
+**Decision: [YES / NO / Conditional]**
+> [One-line action]
 ```
 
-## 각 에이전트 판단 기준
+## Agent Criteria
 
-에이전트별 핵심 질문과 기준은 `references/committee-roles.md` 참조.
+For detailed judgment criteria per agent, see `references/committee-roles.md`.
 
-## 결정 기록
+## Decision Log
 
-결정 후 Obsidian `01.PROJECT/00.MAIBOT/MAIBOT-Advisory-Committee.md`의 의사결정 기록 테이블에 한 줄 추가한다.
+After each decision, append a row to the decision log table:
 
-| 날짜 | 안건 | CS  | 마케팅 | 재무 | 기술 | 결정 |
-| ---- | ---- | --- | ------ | ---- | ---- | ---- |
+| Date | Proposal | CS  | Marketing | Finance | Tech | Decision |
+| ---- | -------- | --- | --------- | ------- | ---- | -------- |
