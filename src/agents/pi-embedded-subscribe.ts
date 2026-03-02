@@ -12,7 +12,9 @@ import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-span
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
   isMessagingToolDuplicateNormalized,
+  isRawApiErrorPayload,
   normalizeTextForComparison,
+  sanitizeUserFacingText,
 } from "./pi-embedded-helpers.js";
 import { createEmbeddedPiSessionEventHandler } from "./pi-embedded-subscribe.handlers.js";
 import { formatReasoningMessage } from "./pi-embedded-utils.js";
@@ -408,6 +410,22 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       return;
     }
     if (chunk === state.lastBlockReplyText) {
+      return;
+    }
+
+    // Safety net: never send raw API error payloads to users via
+    // block streaming. Sanitize them into a user-friendly message.
+    if (isRawApiErrorPayload(chunk)) {
+      const sanitized = sanitizeUserFacingText(chunk);
+      if (!sanitized || sanitized === chunk) {
+        return;
+      }
+      state.lastBlockReplyText = sanitized;
+      assistantTexts.push(sanitized);
+      rememberAssistantText(sanitized);
+      if (params.onBlockReply) {
+        void params.onBlockReply({ text: sanitized });
+      }
       return;
     }
 

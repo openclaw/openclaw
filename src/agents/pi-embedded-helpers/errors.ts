@@ -164,6 +164,8 @@ function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
   return false;
 }
 
+const HTTP_STATUS_CODE_PREFIX_RE = /^\d{3}\s+/;
+
 function parseApiErrorPayload(raw: string): ErrorPayload | null {
   if (!raw) {
     return null;
@@ -174,7 +176,13 @@ function parseApiErrorPayload(raw: string): ErrorPayload | null {
   }
   const candidates = [trimmed];
   if (ERROR_PAYLOAD_PREFIX_RE.test(trimmed)) {
-    candidates.push(trimmed.replace(ERROR_PAYLOAD_PREFIX_RE, "").trim());
+    const afterPrefix = trimmed.replace(ERROR_PAYLOAD_PREFIX_RE, "").trim();
+    candidates.push(afterPrefix);
+    // Also strip a leading HTTP status code (e.g. "529 {json}")
+    // that may remain after removing the error prefix.
+    if (HTTP_STATUS_CODE_PREFIX_RE.test(afterPrefix)) {
+      candidates.push(afterPrefix.replace(HTTP_STATUS_CODE_PREFIX_RE, "").trim());
+    }
   }
   for (const candidate of candidates) {
     if (!candidate.startsWith("{") || !candidate.endsWith("}")) {
@@ -414,14 +422,18 @@ export function sanitizeUserFacingText(text: string): string {
     return BILLING_ERROR_USER_MESSAGE;
   }
 
+  // Check for overloaded/rate-limit before raw payload detection so
+  // that "API Error: 529 {overloaded JSON}" gets a user-friendly
+  // message instead of the technical parsed-JSON form.
+  if (isOverloadedErrorMessage(trimmed) || isRateLimitErrorMessage(trimmed)) {
+    return "The AI service is temporarily overloaded. Please try again in a moment.";
+  }
+
   if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
     return formatRawAssistantErrorForUi(trimmed);
   }
 
   if (ERROR_PREFIX_RE.test(trimmed)) {
-    if (isOverloadedErrorMessage(trimmed) || isRateLimitErrorMessage(trimmed)) {
-      return "The AI service is temporarily overloaded. Please try again in a moment.";
-    }
     if (isTimeoutErrorMessage(trimmed)) {
       return "LLM request timed out.";
     }
@@ -442,7 +454,7 @@ type ErrorPattern = RegExp | string;
 
 const ERROR_PATTERNS = {
   rateLimit: [
-    /rate[_ ]limit|too many requests|429/,
+    /rate[_ ]limit|too many requests|429|529/,
     "exceeded your current quota",
     "resource has been exhausted",
     "quota exceeded",

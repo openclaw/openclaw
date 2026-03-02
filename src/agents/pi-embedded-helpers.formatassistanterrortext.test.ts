@@ -35,6 +35,14 @@ describe("formatAssistantErrorText", () => {
       "The AI service is temporarily overloaded. Please try again in a moment.",
     );
   });
+  it("returns a friendly message for HTTP 529 overloaded errors", () => {
+    const msg = makeAssistantError(
+      'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CYeULdpxKGKgj9p4nJkyS"}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service is temporarily overloaded. Please try again in a moment.",
+    );
+  });
   it("returns a recovery hint when tool call input is missing", () => {
     const msg = makeAssistantError("tool_use.input: Field required");
     const result = formatAssistantErrorText(msg);
