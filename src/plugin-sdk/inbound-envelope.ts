@@ -3,6 +3,11 @@ type RouteLike = {
   sessionKey: string;
 };
 
+type RoutePeerLike = {
+  kind: string;
+  id: string | number;
+};
+
 export function createInboundEnvelopeBuilder<TConfig, TEnvelope>(params: {
   cfg: TConfig;
   route: RouteLike;
@@ -38,4 +43,115 @@ export function createInboundEnvelopeBuilder<TConfig, TEnvelope>(params: {
     });
     return { storePath, body };
   };
+}
+
+export function resolveInboundRouteEnvelopeBuilder<
+  TConfig,
+  TEnvelope,
+  TRoute extends RouteLike,
+  TPeer extends RoutePeerLike,
+>(params: {
+  cfg: TConfig;
+  channel: string;
+  accountId: string;
+  peer: TPeer;
+  resolveAgentRoute: (params: {
+    cfg: TConfig;
+    channel: string;
+    accountId: string;
+    peer: TPeer;
+  }) => TRoute;
+  sessionStore?: string;
+  resolveStorePath: (store: string | undefined, opts: { agentId: string }) => string;
+  readSessionUpdatedAt: (params: { storePath: string; sessionKey: string }) => number | undefined;
+  resolveEnvelopeFormatOptions: (cfg: TConfig) => TEnvelope;
+  formatAgentEnvelope: (params: {
+    channel: string;
+    from: string;
+    timestamp?: number;
+    previousTimestamp?: number;
+    envelope: TEnvelope;
+    body: string;
+  }) => string;
+}): {
+  route: TRoute;
+  buildEnvelope: ReturnType<typeof createInboundEnvelopeBuilder<TConfig, TEnvelope>>;
+} {
+  const route = params.resolveAgentRoute({
+    cfg: params.cfg,
+    channel: params.channel,
+    accountId: params.accountId,
+    peer: params.peer,
+  });
+  const buildEnvelope = createInboundEnvelopeBuilder({
+    cfg: params.cfg,
+    route,
+    sessionStore: params.sessionStore,
+    resolveStorePath: params.resolveStorePath,
+    readSessionUpdatedAt: params.readSessionUpdatedAt,
+    resolveEnvelopeFormatOptions: params.resolveEnvelopeFormatOptions,
+    formatAgentEnvelope: params.formatAgentEnvelope,
+  });
+  return { route, buildEnvelope };
+}
+
+type InboundRouteEnvelopeRuntime<
+  TConfig,
+  TEnvelope,
+  TRoute extends RouteLike,
+  TPeer extends RoutePeerLike,
+> = {
+  routing: {
+    resolveAgentRoute: (params: {
+      cfg: TConfig;
+      channel: string;
+      accountId: string;
+      peer: TPeer;
+    }) => TRoute;
+  };
+  session: {
+    resolveStorePath: (store: string | undefined, opts: { agentId: string }) => string;
+    readSessionUpdatedAt: (params: { storePath: string; sessionKey: string }) => number | undefined;
+  };
+  reply: {
+    resolveEnvelopeFormatOptions: (cfg: TConfig) => TEnvelope;
+    formatAgentEnvelope: (params: {
+      channel: string;
+      from: string;
+      timestamp?: number;
+      previousTimestamp?: number;
+      envelope: TEnvelope;
+      body: string;
+    }) => string;
+  };
+};
+
+export function resolveInboundRouteEnvelopeBuilderWithRuntime<
+  TConfig,
+  TEnvelope,
+  TRoute extends RouteLike,
+  TPeer extends RoutePeerLike,
+>(params: {
+  cfg: TConfig;
+  channel: string;
+  accountId: string;
+  peer: TPeer;
+  runtime: InboundRouteEnvelopeRuntime<TConfig, TEnvelope, TRoute, TPeer>;
+  sessionStore?: string;
+}): {
+  route: TRoute;
+  buildEnvelope: ReturnType<typeof createInboundEnvelopeBuilder<TConfig, TEnvelope>>;
+} {
+  return resolveInboundRouteEnvelopeBuilder({
+    cfg: params.cfg,
+    channel: params.channel,
+    accountId: params.accountId,
+    peer: params.peer,
+    resolveAgentRoute: (routeParams) => params.runtime.routing.resolveAgentRoute(routeParams),
+    sessionStore: params.sessionStore,
+    resolveStorePath: params.runtime.session.resolveStorePath,
+    readSessionUpdatedAt: params.runtime.session.readSessionUpdatedAt,
+    resolveEnvelopeFormatOptions: params.runtime.reply.resolveEnvelopeFormatOptions,
+    formatAgentEnvelope: params.runtime.reply.formatAgentEnvelope,
+  });
 }

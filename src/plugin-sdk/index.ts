@@ -123,17 +123,30 @@ export { acquireFileLock, withFileLock } from "./file-lock.js";
 export { normalizeWebhookPath, resolveWebhookPath } from "./webhook-path.js";
 export {
   registerWebhookTarget,
+  registerWebhookTargetWithPluginRoute,
   rejectNonPostWebhookRequest,
+  resolveWebhookTargetWithAuthOrReject,
+  resolveWebhookTargetWithAuthOrRejectSync,
   resolveSingleWebhookTarget,
   resolveSingleWebhookTargetAsync,
   resolveWebhookTargets,
 } from "./webhook-targets.js";
-export type { WebhookTargetMatchResult } from "./webhook-targets.js";
+export type {
+  RegisterWebhookPluginRouteOptions,
+  RegisterWebhookTargetOptions,
+  WebhookTargetMatchResult,
+} from "./webhook-targets.js";
 export {
   applyBasicWebhookRequestGuards,
+  beginWebhookRequestPipelineOrReject,
+  createWebhookInFlightLimiter,
   isJsonContentType,
+  readWebhookBodyOrReject,
   readJsonWebhookBodyOrReject,
+  WEBHOOK_BODY_READ_DEFAULTS,
+  WEBHOOK_IN_FLIGHT_DEFAULTS,
 } from "./webhook-request-guards.js";
+export type { WebhookBodyReadProfile, WebhookInFlightLimiter } from "./webhook-request-guards.js";
 export type { AgentMediaPayload } from "./agent-media-payload.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export {
@@ -148,6 +161,7 @@ export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export type { ChannelDock } from "../channels/dock.js";
 export { getChatChannelMeta } from "../channels/registry.js";
+export { resolveAllowlistMatchByCandidates } from "../channels/allowlist-match.js";
 export type {
   BlockStreamingCoalesceConfig,
   DmPolicy,
@@ -223,9 +237,22 @@ export {
   type SenderGroupAccessDecision,
   type SenderGroupAccessReason,
 } from "./group-access.js";
-export { resolveSenderCommandAuthorization } from "./command-auth.js";
+export {
+  resolveDirectDmAuthorizationOutcome,
+  resolveSenderCommandAuthorization,
+  resolveSenderCommandAuthorizationWithRuntime,
+} from "./command-auth.js";
+export type { CommandAuthorizationRuntime } from "./command-auth.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
-export { createInboundEnvelopeBuilder } from "./inbound-envelope.js";
+export {
+  createInboundEnvelopeBuilder,
+  resolveInboundRouteEnvelopeBuilder,
+  resolveInboundRouteEnvelopeBuilderWithRuntime,
+} from "./inbound-envelope.js";
+export {
+  listConfiguredAccountIds,
+  resolveAccountWithDefaultFallback,
+} from "./account-resolution.js";
 export { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 export { handleSlackMessageAction } from "./slack-message-actions.js";
 export { extractToolSend } from "./tool-send.js";

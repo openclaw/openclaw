@@ -2,13 +2,22 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import WebSocket from "ws";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
-import { getDirectAgentForCdp, withNoProxyForLocalhost } from "./cdp-proxy-bypass.js";
-import { appendCdpPath } from "./cdp.helpers.js";
-import { getHeadersWithAuth, normalizeCdpWsUrl } from "./cdp.js";
+import {
+  CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS,
+  CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS,
+  CHROME_LAUNCH_READY_POLL_MS,
+  CHROME_LAUNCH_READY_WINDOW_MS,
+  CHROME_REACHABILITY_TIMEOUT_MS,
+  CHROME_STDERR_HINT_MAX_CHARS,
+  CHROME_STOP_PROBE_TIMEOUT_MS,
+  CHROME_STOP_TIMEOUT_MS,
+  CHROME_WS_READY_TIMEOUT_MS,
+} from "./cdp-timeouts.js";
+import { appendCdpPath, fetchCdpChecked, openCdpWebSocket } from "./cdp.helpers.js";
+import { normalizeCdpWsUrl } from "./cdp.js";
 import {
   type BrowserExecutable,
   resolveBrowserExecutableForPlatform,
@@ -68,7 +77,10 @@ function cdpUrlForPort(cdpPort: number) {
   return `http://127.0.0.1:${cdpPort}`;
 }
 
-export async function isChromeReachable(cdpUrl: string, timeoutMs = 500): Promise<boolean> {
+export async function isChromeReachable(
+  cdpUrl: string,
+  timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
+): Promise<boolean> {
   const version = await fetchChromeVersion(cdpUrl, timeoutMs);
   return Boolean(version);
 }
@@ -79,21 +91,15 @@ type ChromeVersion = {
   "User-Agent"?: string;
 };
 
-async function fetchChromeVersion(cdpUrl: string, timeoutMs = 500): Promise<ChromeVersion | null> {
+async function fetchChromeVersion(
+  cdpUrl: string,
+  timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
+): Promise<ChromeVersion | null> {
   const ctrl = new AbortController();
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
     const versionUrl = appendCdpPath(cdpUrl, "/json/version");
-    // Bypass proxy for loopback CDP connections (#31219)
-    const res = await withNoProxyForLocalhost(() =>
-      fetch(versionUrl, {
-        signal: ctrl.signal,
-        headers: getHeadersWithAuth(versionUrl),
-      }),
-    );
-    if (!res.ok) {
-      return null;
-    }
+    const res = await fetchCdpChecked(versionUrl, timeoutMs, { signal: ctrl.signal });
     const data = (await res.json()) as ChromeVersion;
     if (!data || typeof data !== "object") {
       return null;
@@ -108,7 +114,7 @@ async function fetchChromeVersion(cdpUrl: string, timeoutMs = 500): Promise<Chro
 
 export async function getChromeWebSocketUrl(
   cdpUrl: string,
-  timeoutMs = 500,
+  timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
 ): Promise<string | null> {
   const version = await fetchChromeVersion(cdpUrl, timeoutMs);
   const wsUrl = String(version?.webSocketDebuggerUrl ?? "").trim();
@@ -118,15 +124,13 @@ export async function getChromeWebSocketUrl(
   return normalizeCdpWsUrl(wsUrl, cdpUrl);
 }
 
-async function canOpenWebSocket(wsUrl: string, timeoutMs = 800): Promise<boolean> {
+async function canOpenWebSocket(
+  wsUrl: string,
+  timeoutMs = CHROME_WS_READY_TIMEOUT_MS,
+): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
-    const headers = getHeadersWithAuth(wsUrl);
-    // Bypass proxy for loopback CDP connections (#31219)
-    const wsAgent = getDirectAgentForCdp(wsUrl);
-    const ws = new WebSocket(wsUrl, {
-      handshakeTimeout: timeoutMs,
-      ...(Object.keys(headers).length ? { headers } : {}),
-      ...(wsAgent ? { agent: wsAgent } : {}),
+    const ws = openCdpWebSocket(wsUrl, {
+      handshakeTimeoutMs: timeoutMs,
     });
     const timer = setTimeout(
       () => {
@@ -157,8 +161,8 @@ async function canOpenWebSocket(wsUrl: string, timeoutMs = 800): Promise<boolean
 
 export async function isChromeCdpReady(
   cdpUrl: string,
-  timeoutMs = 500,
-  handshakeTimeoutMs = 800,
+  timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
+  handshakeTimeoutMs = CHROME_WS_READY_TIMEOUT_MS,
 ): Promise<boolean> {
   const wsUrl = await getChromeWebSocketUrl(cdpUrl, timeoutMs);
   if (!wsUrl) {
@@ -252,7 +256,7 @@ export async function launchOpenClawChrome(
   // Then decorate (if needed) before the "real" run.
   if (needsBootstrap) {
     const bootstrap = spawnOnce();
-    const deadline = Date.now() + 10_000;
+    const deadline = Date.now() + CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS;
     while (Date.now() < deadline) {
       if (exists(localStatePath) && exists(preferencesPath)) {
         break;
@@ -264,7 +268,7 @@ export async function launchOpenClawChrome(
     } catch {
       // ignore
     }
-    const exitDeadline = Date.now() + 5000;
+    const exitDeadline = Date.now() + CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS;
     while (Date.now() < exitDeadline) {
       if (bootstrap.exitCode != null) {
         break;
@@ -303,17 +307,19 @@ export async function launchOpenClawChrome(
   proc.stderr?.on("data", onStderr);
 
   // Wait for CDP to come up.
-  const readyDeadline = Date.now() + 15_000;
+  const readyDeadline = Date.now() + CHROME_LAUNCH_READY_WINDOW_MS;
   while (Date.now() < readyDeadline) {
-    if (await isChromeReachable(profile.cdpUrl, 500)) {
+    if (await isChromeReachable(profile.cdpUrl)) {
       break;
     }
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, CHROME_LAUNCH_READY_POLL_MS));
   }
 
-  if (!(await isChromeReachable(profile.cdpUrl, 500))) {
+  if (!(await isChromeReachable(profile.cdpUrl))) {
     const stderrOutput = Buffer.concat(stderrChunks).toString("utf8").trim();
-    const stderrHint = stderrOutput ? `\nChrome stderr:\n${stderrOutput.slice(0, 2000)}` : "";
+    const stderrHint = stderrOutput
+      ? `\nChrome stderr:\n${stderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
+      : "";
     const sandboxHint =
       process.platform === "linux" && !resolved.noSandbox
         ? "\nHint: If running in a container or as root, try setting browser.noSandbox: true in config."
@@ -347,7 +353,10 @@ export async function launchOpenClawChrome(
   };
 }
 
-export async function stopOpenClawChrome(running: RunningChrome, timeoutMs = 2500) {
+export async function stopOpenClawChrome(
+  running: RunningChrome,
+  timeoutMs = CHROME_STOP_TIMEOUT_MS,
+) {
   const proc = running.proc;
   if (proc.killed) {
     return;
@@ -363,7 +372,7 @@ export async function stopOpenClawChrome(running: RunningChrome, timeoutMs = 250
     if (!proc.exitCode && proc.killed) {
       break;
     }
-    if (!(await isChromeReachable(cdpUrlForPort(running.cdpPort), 200))) {
+    if (!(await isChromeReachable(cdpUrlForPort(running.cdpPort), CHROME_STOP_PROBE_TIMEOUT_MS))) {
       return;
     }
     await new Promise((r) => setTimeout(r, 100));

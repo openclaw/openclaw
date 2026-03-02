@@ -129,7 +129,8 @@ function validateTelegramDeliveryTarget(to: string | undefined): string | undefi
 }
 
 function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
-  if (!job.delivery) {
+  // No delivery object or mode is "none" -- nothing to validate.
+  if (!job.delivery || job.delivery.mode === "none") {
     return;
   }
   if (job.delivery.mode === "webhook") {
@@ -148,6 +149,27 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
     if (telegramError) {
       throw new Error(telegramError);
     }
+  }
+}
+
+function assertFailureDestinationSupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
+  const failureDestination = job.delivery?.failureDestination;
+  if (!failureDestination) {
+    return;
+  }
+  if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
+    throw new Error(
+      'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
+    );
+  }
+  if (failureDestination.mode === "webhook") {
+    const target = normalizeHttpWebhookUrl(failureDestination.to);
+    if (!target) {
+      throw new Error(
+        "cron failure destination webhook requires delivery.failureDestination.to to be a valid http(s) URL",
+      );
+    }
+    failureDestination.to = target;
   }
 }
 
@@ -452,6 +474,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
   assertSupportedJobSpec(job);
   assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
+  assertFailureDestinationSupport(job);
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
   return job;
 }
@@ -517,6 +540,15 @@ export function applyJobPatch(
   if ("failureAlert" in patch) {
     job.failureAlert = mergeCronFailureAlert(job.failureAlert, patch.failureAlert);
   }
+  if (
+    job.sessionTarget === "main" &&
+    job.delivery?.mode !== "webhook" &&
+    job.delivery?.failureDestination
+  ) {
+    throw new Error(
+      'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
+    );
+  }
   if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
     job.delivery = undefined;
   }
@@ -532,6 +564,7 @@ export function applyJobPatch(
   assertSupportedJobSpec(job);
   assertMainSessionAgentId(job, opts?.defaultAgentId);
   assertDeliverySupport(job);
+  assertFailureDestinationSupport(job);
 }
 
 function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronPayload {
@@ -668,6 +701,7 @@ function mergeCronDelivery(
     to: existing?.to,
     accountId: existing?.accountId,
     bestEffort: existing?.bestEffort,
+    failureDestination: existing?.failureDestination,
   };
 
   if (typeof patch.mode === "string") {
@@ -684,6 +718,39 @@ function mergeCronDelivery(
   }
   if (typeof patch.bestEffort === "boolean") {
     next.bestEffort = patch.bestEffort;
+  }
+  if ("failureDestination" in patch) {
+    if (patch.failureDestination === undefined) {
+      next.failureDestination = undefined;
+    } else {
+      const existingFd = next.failureDestination;
+      const patchFd = patch.failureDestination;
+      const nextFd: typeof next.failureDestination = {
+        channel: existingFd?.channel,
+        to: existingFd?.to,
+        accountId: existingFd?.accountId,
+        mode: existingFd?.mode,
+      };
+      if (patchFd) {
+        if ("channel" in patchFd) {
+          const channel = typeof patchFd.channel === "string" ? patchFd.channel.trim() : "";
+          nextFd.channel = channel ? channel : undefined;
+        }
+        if ("to" in patchFd) {
+          const to = typeof patchFd.to === "string" ? patchFd.to.trim() : "";
+          nextFd.to = to ? to : undefined;
+        }
+        if ("accountId" in patchFd) {
+          const accountId = typeof patchFd.accountId === "string" ? patchFd.accountId.trim() : "";
+          nextFd.accountId = accountId ? accountId : undefined;
+        }
+        if ("mode" in patchFd) {
+          const mode = typeof patchFd.mode === "string" ? patchFd.mode.trim() : "";
+          nextFd.mode = mode === "announce" || mode === "webhook" ? mode : undefined;
+        }
+      }
+      next.failureDestination = nextFd;
+    }
   }
 
   return next;
@@ -718,6 +785,14 @@ function mergeCronFailureAlert(
         ? patch.cooldownMs
         : -1;
     next.cooldownMs = cooldownMs >= 0 ? Math.floor(cooldownMs) : undefined;
+  }
+  if ("mode" in patch) {
+    const mode = typeof patch.mode === "string" ? patch.mode.trim() : "";
+    next.mode = mode === "announce" || mode === "webhook" ? mode : undefined;
+  }
+  if ("accountId" in patch) {
+    const accountId = typeof patch.accountId === "string" ? patch.accountId.trim() : "";
+    next.accountId = accountId ? accountId : undefined;
   }
 
   return next;
