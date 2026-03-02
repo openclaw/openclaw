@@ -321,6 +321,9 @@ fi
 for compose_file in "${COMPOSE_FILES[@]}"; do
   COMPOSE_ARGS+=("-f" "$compose_file")
 done
+# Keep a base compose arg set without sandbox overlay so rollback paths can
+# force a known-safe gateway service definition (no docker.sock mount).
+BASE_COMPOSE_ARGS=("${COMPOSE_ARGS[@]}")
 COMPOSE_HINT="docker compose"
 for compose_file in "${COMPOSE_FILES[@]}"; do
   COMPOSE_HINT+=" -f ${compose_file}"
@@ -506,17 +509,17 @@ fi
 if [[ -n "$SANDBOX_ENABLED" ]]; then
   # Enable sandbox in OpenClaw config.
   sandbox_config_ok=true
-  if ! docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+  if ! docker compose "${COMPOSE_ARGS[@]}" run --rm --no-deps openclaw-cli \
     config set agents.defaults.sandbox.mode "non-main" >/dev/null; then
     echo "WARNING: Failed to set agents.defaults.sandbox.mode" >&2
     sandbox_config_ok=false
   fi
-  if ! docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+  if ! docker compose "${COMPOSE_ARGS[@]}" run --rm --no-deps openclaw-cli \
     config set agents.defaults.sandbox.scope "agent" >/dev/null; then
     echo "WARNING: Failed to set agents.defaults.sandbox.scope" >&2
     sandbox_config_ok=false
   fi
-  if ! docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+  if ! docker compose "${COMPOSE_ARGS[@]}" run --rm --no-deps openclaw-cli \
     config set agents.defaults.sandbox.workspaceAccess "none" >/dev/null; then
     echo "WARNING: Failed to set agents.defaults.sandbox.workspaceAccess" >&2
     sandbox_config_ok=false
@@ -530,7 +533,7 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
   else
     echo "WARNING: Sandbox config was partially applied. Check errors above." >&2
     echo "  Skipping gateway restart to avoid exposing Docker socket without a full sandbox policy." >&2
-    if ! docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+    if ! docker compose "${BASE_COMPOSE_ARGS[@]}" run --rm --no-deps openclaw-cli \
       config set agents.defaults.sandbox.mode "off" >/dev/null; then
       echo "WARNING: Failed to roll back agents.defaults.sandbox.mode to off" >&2
     else
@@ -539,6 +542,8 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
     if [[ -n "${SANDBOX_COMPOSE_FILE:-}" ]]; then
       rm -f "$SANDBOX_COMPOSE_FILE"
     fi
+    # Ensure gateway service definition is reset without sandbox overlay mount.
+    docker compose "${BASE_COMPOSE_ARGS[@]}" up -d --force-recreate openclaw-gateway
   fi
 else
   # Keep reruns deterministic: if sandbox is not active for this run, reset
