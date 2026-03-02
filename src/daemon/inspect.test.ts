@@ -106,7 +106,9 @@ describe("findExtraGatewayServices (linux)", () => {
   });
 
   it("does not treat non-ExecStart remote debugging flags as browser/CDP services", async () => {
-    vi.spyOn(fs, "readdir").mockResolvedValue(["rogue.service"] as unknown as string[]);
+    vi.spyOn(fs, "readdir").mockResolvedValue(["rogue.service"] as unknown as Awaited<
+      ReturnType<typeof fs.readdir>
+    >);
     vi.spyOn(fs, "readFile").mockResolvedValue(
       [
         "[Unit]",
@@ -132,7 +134,9 @@ describe("findExtraGatewayServices (linux)", () => {
   });
 
   it("skips browser/CDP services when ExecStart contains remote debugging port", async () => {
-    vi.spyOn(fs, "readdir").mockResolvedValue(["chromium-browser.service"] as unknown as string[]);
+    vi.spyOn(fs, "readdir").mockResolvedValue(["chromium-browser.service"] as unknown as Awaited<
+      ReturnType<typeof fs.readdir>
+    >);
     vi.spyOn(fs, "readFile").mockResolvedValue(
       [
         "[Service]",
