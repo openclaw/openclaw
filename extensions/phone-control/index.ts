@@ -29,7 +29,7 @@ const STATE_REL_PATH = ["plugins", "phone-control", "armed.json"] as const;
 const GROUP_COMMANDS: Record<Exclude<ArmGroup, "all">, string[]> = {
   camera: ["camera.snap", "camera.clip"],
   screen: ["screen.record"],
-  writes: ["calendar.add", "contacts.add", "reminders.add"],
+  writes: ["calendar.add", "contacts.add", "reminders.add", "sms.send"],
 };
 
 function uniqSorted(values: string[]): string[] {
