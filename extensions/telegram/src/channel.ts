@@ -321,15 +321,20 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     textChunkLimit: 4000,
     pollMaxOptions: 10,
     sendPayload: async (ctx) => {
+      const text = ctx.payload.text ?? "";
       const urls = ctx.payload.mediaUrls?.length
         ? ctx.payload.mediaUrls
         : ctx.payload.mediaUrl
           ? [ctx.payload.mediaUrl]
           : [];
+      // No-op for empty payloads (channelData-only with no sendable content)
+      if (!text && urls.length === 0) {
+        return { channel: "telegram", messageId: "" };
+      }
       if (urls.length > 0) {
         let lastResult = await telegramPlugin.outbound!.sendMedia!({
           ...ctx,
-          text: ctx.payload.text ?? "",
+          text,
           mediaUrl: urls[0],
         });
         for (let i = 1; i < urls.length; i++) {
@@ -341,7 +346,15 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         }
         return lastResult;
       }
-      return telegramPlugin.outbound!.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
+      // Chunk text before sending to respect textChunkLimit
+      const outbound = telegramPlugin.outbound!;
+      const limit = outbound.textChunkLimit;
+      const chunks = limit && outbound.chunker ? outbound.chunker(text, limit) : [text];
+      let lastResult: Awaited<ReturnType<NonNullable<typeof outbound.sendText>>>;
+      for (const chunk of chunks) {
+        lastResult = await outbound.sendText!({ ...ctx, text: chunk });
+      }
+      return lastResult!;
     },
     sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, silent }) => {
       const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
