@@ -68,7 +68,7 @@ also need Windows to start WSL during boot.
 sudo loginctl enable-linger "$(whoami)"
 ```
 
-### 2) Install the gateway service in WSL
+### 2) Install the gateway service in WSL (if not already done)
 
 ```bash
 openclaw gateway install
@@ -79,7 +79,7 @@ openclaw gateway install
 Run in PowerShell as Administrator:
 
 ```powershell
-schtasks /create /tn "WSL Boot" /tr "wsl.exe -d Ubuntu --exec /bin/true" /sc onstart /ru SYSTEM
+schtasks /create /f /tn "WSL Boot" /tr "wsl.exe -d Ubuntu --exec /bin/true" /sc onstart /ru SYSTEM
 ```
 
 Use your distro name instead of `Ubuntu` if different.
