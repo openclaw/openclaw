@@ -1069,6 +1069,7 @@ export function startHeartbeatRunner(opts: {
         intervalMs,
         lastRunMs: prevState?.lastRunMs,
         nextDueMs,
+        consecutiveSkips: prevState?.consecutiveSkips,
       });
     }
 
@@ -1176,6 +1177,12 @@ export function startHeartbeatRunner(opts: {
         continue;
       }
       if (res.status === "skipped" && res.reason === "requests-in-flight") {
+        // For short intervals (<1h), skip backoff — next regular tick is soon enough.
+        if (agent.intervalMs < 3_600_000) {
+          advanceAgentSchedule(agent, now);
+          scheduleNext();
+          return res;
+        }
         const maxRetries = 5;
         const skips = (agent.consecutiveSkips ?? 0) + 1;
         agent.consecutiveSkips = skips;
