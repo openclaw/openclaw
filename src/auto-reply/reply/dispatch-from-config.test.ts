@@ -1624,4 +1624,23 @@ describe("dispatchReplyFromConfig", () => {
     expect(blockReplySentTexts).not.toContain("Reasoning:\n_thinking..._");
     expect(blockReplySentTexts).toContain("The answer is 42");
   });
+
+  it("filters queued-followup internal outcomes from channel delivery and reports the flag", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "webchat", Surface: "webchat" });
+    const replyResolver = async () =>
+      ({ internalOutcome: "queued-followup" }) satisfies ReplyPayload;
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result.queuedFollowup).toBe(true);
+    expect(result.counts.final).toBe(0);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
 });

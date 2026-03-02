@@ -944,7 +944,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
       })
         .then((dispatchResult) => {
-          if (!agentRunStarted && dispatchResult.queuedFollowup !== true) {
+          const shouldSkipQueuedFollowupFinal =
+            dispatchResult.queuedFollowup === true && dispatchResult.counts.final === 0;
+          if (!agentRunStarted && !shouldSkipQueuedFollowupFinal) {
             const combinedReply = finalReplyParts
               .map((part) => part.trim())
               .filter(Boolean)
