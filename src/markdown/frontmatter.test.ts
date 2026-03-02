@@ -72,4 +72,33 @@ metadata:
     const content = "# No frontmatter";
     expect(parseFrontmatterBlock(content)).toEqual({});
   });
+
+  it("parses description containing an inline colon without corruption (issue #29981)", () => {
+    // YAML mis-parses "description: Foo IMPORTANT: bar" as a nested object.
+    // The line-parser reads it correctly as a plain string – we should prefer that.
+    const content = `---
+name: my-skill
+description: Generate images IMPORTANT: Must use anime style
+---
+`;
+    const result = parseFrontmatterBlock(content);
+    expect(result.name).toBe("my-skill");
+    expect(result.description).toBe("Generate images IMPORTANT: Must use anime style");
+  });
+
+  it("preserves intentional single-line YAML nested maps (bot concern)", () => {
+    // "key: nested: val" is a YAML parse error ("Nested mappings are not allowed").
+    // parseYamlFrontmatter returns null and parseFrontmatterBlock falls back to
+    // the line-parser entirely — it reads `openclaw: command` as a plain string.
+    // This confirms the bot's edge case cannot reach the merge step at all.
+    const content = `---
+name: my-skill
+category: openclaw: command
+---
+`;
+    const result = parseFrontmatterBlock(content);
+    expect(result.name).toBe("my-skill");
+    // YAML throws → line-parser wins for the entire doc; value is the raw string
+    expect(result.category).toBe("openclaw: command");
+  });
 });
