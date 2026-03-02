@@ -20,7 +20,7 @@
 npm install -g openclaw
 
 # 运行向导
-openclaw onboard
+openclaw onboard --install-daemon
 ```
 
 向导会引导你完成：
