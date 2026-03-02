@@ -117,6 +117,15 @@ The docker image now publishes OCI base-image annotations (sha256 is an example)
 
 - `org.opencontainers.image.base.name=docker.io/library/node:22-bookworm`
 - `org.opencontainers.image.base.digest=sha256:cd7bcd2e7a1e6f72052feb023c7f6b722205d3fcab7bbcbd2d1bfdab10b1e935`
+- `org.opencontainers.image.source=https://github.com/openclaw/openclaw`
+- `org.opencontainers.image.url=https://openclaw.ai`
+- `org.opencontainers.image.documentation=https://docs.openclaw.ai/install/docker`
+- `org.opencontainers.image.licenses=AGPL-3.0-only`
+- `org.opencontainers.image.title=OpenClaw`
+- `org.opencontainers.image.description=OpenClaw gateway and CLI runtime container image`
+- `org.opencontainers.image.revision=<git-sha>`
+- `org.opencontainers.image.version=<tag-or-main>`
+- `org.opencontainers.image.created=<rfc3339 timestamp>`
 
 Reference: [OCI image annotations](https://github.com/opencontainers/image-spec/blob/main/annotations.md)
 
