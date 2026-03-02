@@ -55,6 +55,7 @@ const DEFAULT_OPENAI_VOICE = "alloy";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const VOICE_BUBBLE_EDGE_OUTPUT_FORMAT = "ogg-24khz-16bit-mono-opus";
 
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
@@ -571,6 +572,9 @@ export async function textToSpeech(params: {
         mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
         const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
         let edgeOutputFormat = resolveEdgeOutputFormat(config);
+        if (output.voiceCompatible && !config.edge.outputFormatConfigured) {
+          edgeOutputFormat = VOICE_BUBBLE_EDGE_OUTPUT_FORMAT;
+        }
         const fallbackEdgeOutputFormat =
           edgeOutputFormat !== DEFAULT_EDGE_OUTPUT_FORMAT ? DEFAULT_EDGE_OUTPUT_FORMAT : undefined;
 
