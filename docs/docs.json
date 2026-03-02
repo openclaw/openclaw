@@ -832,7 +832,6 @@
                 "group": "First steps",
                 "pages": [
                   "start/getting-started",
-                  "start/quickstart",
                   "start/onboarding-overview",
                   "start/wizard",
                   "start/onboarding"
@@ -1432,7 +1431,6 @@
                 "group": "第一步",
                 "pages": [
                   "zh-CN/start/getting-started",
-                  "zh-CN/start/quickstart",
                   "zh-CN/start/wizard",
                   "zh-CN/start/onboarding"
                 ]
