@@ -314,8 +314,24 @@ function rechunkOverflow(ir: MarkdownIR, renderedHtml?: string): string[] {
 
   const text = ir.text;
   if (text.length <= 1) {
-    // Cannot split further — truncate as a last resort.
-    return [rendered.slice(0, TELEGRAM_HTML_MAX_CHARS - 1) + "\u2026"];
+    // Cannot split further — strip links and re-render as plain text to avoid
+    // slicing inside an <a> tag or HTML entity, then truncate the plain-text
+    // source (not the rendered HTML) if it still exceeds the limit.
+    const plainIR: MarkdownIR = { ...ir, links: [] };
+    const plainRendered = wrapFileReferencesInHtml(renderTelegramHtml(plainIR));
+    if (plainRendered.length <= TELEGRAM_HTML_MAX_CHARS) {
+      return [plainRendered];
+    }
+    const truncatedText = plainIR.text.slice(0, TELEGRAM_HTML_MAX_CHARS - 1) + "\u2026";
+    return [
+      wrapFileReferencesInHtml(
+        renderTelegramHtml({
+          ...plainIR,
+          text: truncatedText,
+          styles: sliceStyleSpans(plainIR.styles, 0, TELEGRAM_HTML_MAX_CHARS - 1),
+        }),
+      ),
+    ];
   }
 
   // Find a safe split point near the midpoint — prefer newline, then whitespace
@@ -357,7 +373,22 @@ function rechunkOverflow(ir: MarkdownIR, renderedHtml?: string): string[] {
 
   // Avoid infinite loop if we cannot split further
   if (!leftIR.text || !rightIR.text) {
-    return [rendered.slice(0, TELEGRAM_HTML_MAX_CHARS - 1) + "\u2026"];
+    // Strip links and truncate plain-text source to avoid slicing inside HTML tags.
+    const plainIR: MarkdownIR = { ...ir, links: [] };
+    const plainRendered = wrapFileReferencesInHtml(renderTelegramHtml(plainIR));
+    if (plainRendered.length <= TELEGRAM_HTML_MAX_CHARS) {
+      return [plainRendered];
+    }
+    const truncatedText = plainIR.text.slice(0, TELEGRAM_HTML_MAX_CHARS - 1) + "\u2026";
+    return [
+      wrapFileReferencesInHtml(
+        renderTelegramHtml({
+          ...plainIR,
+          text: truncatedText,
+          styles: sliceStyleSpans(plainIR.styles, 0, TELEGRAM_HTML_MAX_CHARS - 1),
+        }),
+      ),
+    ];
   }
 
   // Guard: if the left half's rendered HTML is not smaller than the parent's, the
