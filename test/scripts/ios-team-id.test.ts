@@ -15,6 +15,7 @@ let sharedBinDir = "";
 let sharedHomeDir = "";
 let sharedHomeBinDir = "";
 let sharedFakePythonPath = "";
+const runScriptCache = new Map<string, { ok: boolean; stdout: string; stderr: string }>();
 
 async function writeExecutable(filePath: string, body: string): Promise<void> {
   await writeFile(filePath, body, "utf8");
@@ -29,6 +30,14 @@ function runScript(
   stdout: string;
   stderr: string;
 } {
+  const cacheKey = JSON.stringify({
+    homeDir,
+    extraEnv: Object.entries(extraEnv).toSorted(([a], [b]) => a.localeCompare(b)),
+  });
+  const cached = runScriptCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
   const binDir = path.join(homeDir, "bin");
   const env = {
     HOME: homeDir,
@@ -42,7 +51,9 @@ function runScript(
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
-    return { ok: true, stdout: stdout.trim(), stderr: "" };
+    const result = { ok: true, stdout: stdout.trim(), stderr: "" };
+    runScriptCache.set(cacheKey, result);
+    return result;
   } catch (error) {
     const e = error as {
       stdout?: string | Buffer;
@@ -50,7 +61,9 @@ function runScript(
     };
     const stdout = typeof e.stdout === "string" ? e.stdout : (e.stdout?.toString("utf8") ?? "");
     const stderr = typeof e.stderr === "string" ? e.stderr : (e.stderr?.toString("utf8") ?? "");
-    return { ok: false, stdout: stdout.trim(), stderr: stderr.trim() };
+    const result = { ok: false, stdout: stdout.trim(), stderr: stderr.trim() };
+    runScriptCache.set(cacheKey, result);
+    return result;
   }
 }
 
