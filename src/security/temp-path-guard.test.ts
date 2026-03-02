@@ -225,7 +225,11 @@ describe("temp path guard", () => {
       if (hasDynamicTmpdirJoin(file.source)) {
         offenders.push(relativePath);
       }
-      if (WEAK_RANDOM_SAME_LINE_PATTERN.test(file.source)) {
+      if (
+        file.source.includes("Date.now") &&
+        file.source.includes("Math.random") &&
+        WEAK_RANDOM_SAME_LINE_PATTERN.test(file.source)
+      ) {
         weakRandomMatches.push(relativePath);
       }
     }
