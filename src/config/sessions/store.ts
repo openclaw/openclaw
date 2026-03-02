@@ -14,7 +14,12 @@ import {
   normalizeSessionDeliveryFields,
   type DeliveryContext,
 } from "../../utils/delivery-context.js";
-import { getFileMtimeMs, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
+import {
+  getFileMtimeMs,
+  getFileSizeBytes,
+  isCacheEnabled,
+  resolveCacheTtlMs,
+} from "../cache-utils.js";
 import { loadConfig } from "../config.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import { mergeSessionEntry, type SessionEntry } from "./types.js";
@@ -30,6 +35,8 @@ type SessionStoreCacheEntry = {
   loadedAt: number;
   storePath: string;
   mtimeMs?: number;
+  sizeBytes?: number;
+  serialized?: string;
 };
 
 const SESSION_STORE_CACHE = new Map<string, SessionStoreCacheEntry>();
@@ -131,7 +138,8 @@ export function loadSessionStore(
     const cached = SESSION_STORE_CACHE.get(storePath);
     if (cached && isSessionStoreCacheValid(cached)) {
       const currentMtimeMs = getFileMtimeMs(storePath);
-      if (currentMtimeMs === cached.mtimeMs) {
+      const currentSizeBytes = getFileSizeBytes(storePath);
+      if (currentMtimeMs === cached.mtimeMs && currentSizeBytes === cached.sizeBytes) {
         // Return a deep copy to prevent external mutations affecting cache
         return structuredClone(cached.store);
       }
@@ -204,6 +212,8 @@ export function loadSessionStore(
       loadedAt: Date.now(),
       storePath,
       mtimeMs,
+      sizeBytes: getFileSizeBytes(storePath),
+      serialized: serializedFromDisk,
     });
   }
 
