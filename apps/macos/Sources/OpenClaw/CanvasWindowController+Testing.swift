@@ -1,6 +1,7 @@
 #if DEBUG
 import AppKit
 import Foundation
+import OpenClawKit
 
 extension CanvasWindowController {
     static func _testSanitizeSessionKey(_ key: String) -> String {

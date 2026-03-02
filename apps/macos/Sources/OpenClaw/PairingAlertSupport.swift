@@ -205,13 +205,11 @@ enum PairingAlertSupport {
             informativeText: informativeText,
             activeAlert: &state.activeAlert,
             activeRequestId: &state.activeRequestId,
-            alertHostWindow: &state.alertHostWindow)
-        { response, hostWindow in
-            Task { @MainActor in
+            alertHostWindow: &state.alertHostWindow,
+            clearActive: { hostWindow in
                 self.clearActivePairingAlert(state: state, hostWindow: hostWindow)
-                await onResponse(response, request)
-            }
-        }
+            },
+            onResponse: onResponse)
     }
 
     static func clearActivePairingAlert(

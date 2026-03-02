@@ -53,7 +53,7 @@ public enum LoopbackHost {
         return self.isLocalNetworkIPv4(ipv4)
     }
 
-    static func parseIPv4(_ host: String) -> (UInt8, UInt8, UInt8, UInt8)? {
+    public static func parseIPv4(_ host: String) -> (UInt8, UInt8, UInt8, UInt8)? {
         let parts = host.split(separator: ".", omittingEmptySubsequences: false)
         guard parts.count == 4 else { return nil }
         let bytes: [UInt8] = parts.compactMap { UInt8($0) }
@@ -61,7 +61,7 @@ public enum LoopbackHost {
         return (bytes[0], bytes[1], bytes[2], bytes[3])
     }
 
-    static func isLocalNetworkIPv4(_ ip: (UInt8, UInt8, UInt8, UInt8)) -> Bool {
+    public static func isLocalNetworkIPv4(_ ip: (UInt8, UInt8, UInt8, UInt8)) -> Bool {
         let (a, b, _, _) = ip
         // 10.0.0.0/8
         if a == 10 { return true }
