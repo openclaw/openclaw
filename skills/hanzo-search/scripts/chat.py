@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""RAG chat over search results via the Hanzo Search API.
+"""RAG chat over search results via the Hanzo Cloud API.
 
 Streams a chat response grounded in documents from a search store.
+This endpoint requires the Hanzo Cloud API layer (not native Meilisearch).
 
 Usage:
     python3 chat.py --query "your question" --store "store-name" [options]
@@ -14,7 +15,7 @@ Options:
     --model         LLM model for generation (optional)
     --system-prompt Override system prompt (optional)
     --token         API token (default: $HANZO_API_KEY)
-    --base-url      API base URL (default: $HANZO_SEARCH_BASE_URL or https://api.cloud.hanzo.ai)
+    --base-url      API base URL (default: $HANZO_CHAT_BASE_URL or https://search.hanzo.ai)
     --no-stream     Disable streaming, wait for full response
     --format        Output format: text, json (default: text)
 """
@@ -45,8 +46,9 @@ def build_request_body(args: argparse.Namespace) -> dict:
 def chat_streaming(args: argparse.Namespace) -> None:
     base_url = (
         args.base_url
+        or os.environ.get("HANZO_CHAT_BASE_URL")
         or os.environ.get("HANZO_SEARCH_BASE_URL")
-        or "https://api.cloud.hanzo.ai"
+        or "https://search.hanzo.ai"
     ).rstrip("/")
     token = args.token or os.environ.get("HANZO_API_KEY", "")
     if not token:
@@ -63,6 +65,7 @@ def chat_streaming(args: argparse.Namespace) -> None:
         headers={
             "Content-Type": "application/json",
             "Accept": "application/json",
+            "User-Agent": "hanzo-bot/1.0",
             "Authorization": f"Bearer {token}",
         },
         method="POST",
@@ -148,7 +151,7 @@ def print_non_streaming_result(result: dict) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="RAG chat via Hanzo Search API")
+    parser = argparse.ArgumentParser(description="RAG chat via Hanzo Cloud API")
     parser.add_argument("--query", required=True, help="Chat question")
     parser.add_argument("--store", required=True, help="Search store name")
     parser.add_argument("--mode", default="hybrid", choices=["hybrid", "fulltext", "vector"],

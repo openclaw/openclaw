@@ -1,26 +1,28 @@
 ---
 name: hanzo-search
-description: "Search indexed documentation and knowledge bases via the Hanzo Search API. Supports hybrid fulltext+vector search, faceted filtering, and streaming RAG chat over search results. Use when a bot needs to search docs, knowledge bases, or indexed content, or when a user asks to find information across indexed sources."
+description: "Search indexed documentation and knowledge bases via Hanzo Search (Meilisearch). Supports fulltext search with faceted filtering and ranking. Use when a bot needs to search docs, knowledge bases, or indexed content, or when a user asks to find information across indexed sources."
 metadata:
   { "bot": { "requires": { "bins": ["python3"] }, "primaryEnv": "HANZO_API_KEY", "emoji": "🔍" } }
 ---
 
-# Hanzo Search -- Document Search API
+# Hanzo Search -- Meilisearch Document Search API
 
-Search indexed documentation and knowledge bases with hybrid fulltext+vector retrieval, faceted filtering, and streaming RAG chat.
+Search indexed documentation and knowledge bases with fulltext retrieval and faceted filtering, powered by Meilisearch.
 
 ## API Endpoints
 
-Base URL: `https://api.cloud.hanzo.ai`
+Base URL: `https://search.hanzo.ai`
 
-| Endpoint           | Method | Purpose                                  |
-| ------------------ | ------ | ---------------------------------------- |
-| `/api/search-docs` | POST   | Search indexed documents                 |
-| `/api/chat-docs`   | POST   | RAG chat over search results (streaming) |
+| Endpoint                     | Method | Purpose                      |
+| ---------------------------- | ------ | ---------------------------- |
+| `/indexes/{index}/search`    | POST   | Search documents in an index |
+| `/indexes`                   | GET    | List all indexes             |
+| `/indexes/{index}`           | GET    | Get index details            |
+| `/indexes/{index}/documents` | GET    | Browse documents in an index |
 
 ## Authentication
 
-All requests require a Bearer token in the `Authorization` header. Use the bot's IAM token or a Hanzo API key.
+All requests require a Bearer token in the `Authorization` header. Use the MEILI_MASTER_KEY via the HANZO_API_KEY env var.
 
 ```
 Authorization: Bearer <token>
@@ -32,55 +34,52 @@ Authorization: Bearer <token>
 python3 {baseDir}/scripts/search.py --query "how to deploy" --store my-docs
 ```
 
-### Request Body (`/api/search-docs`)
+### Request Body (`/indexes/{index}/search`)
 
 ```json
 {
-  "query": "how to deploy to kubernetes",
-  "store": "my-docs",
-  "mode": "hybrid",
+  "q": "how to deploy to kubernetes",
   "limit": 10,
-  "filters": {
-    "category": "deployment"
-  }
+  "offset": 0,
+  "filter": "category = 'deployment'"
 }
 ```
 
 ### Fields
 
-- `query` (required): Search query string
-- `store` (required): Name of the search store / knowledge base
-- `mode` (optional): `"hybrid"` (default), `"fulltext"`, or `"vector"`
+- `q` (required): Search query string
 - `limit` (optional): Max results (default 10, max 100)
-- `filters` (optional): Key-value facet filters
-- `offset` (optional): Pagination offset
+- `offset` (optional): Pagination offset (default 0)
+- `filter` (optional): Meilisearch filter expression (e.g. `"category = 'deployment'"`)
+- `sort` (optional): Array of sort rules (e.g. `["updated_at:desc"]`)
+- `attributesToRetrieve` (optional): Array of attributes to return
+- `attributesToHighlight` (optional): Array of attributes to highlight
 
 ### Response
 
 ```json
 {
-  "results": [
+  "hits": [
     {
       "id": "doc-123",
       "title": "Kubernetes Deployment Guide",
       "url": "https://docs.example.com/deploy",
       "content": "To deploy your application to Kubernetes...",
-      "score": 0.95,
-      "metadata": {
-        "category": "deployment",
-        "updated_at": "2026-01-15"
-      }
+      "category": "deployment",
+      "updated_at": "2026-01-15"
     }
   ],
-  "total": 42,
   "query": "how to deploy to kubernetes",
-  "mode": "hybrid"
+  "processingTimeMs": 12,
+  "estimatedTotalHits": 42,
+  "limit": 10,
+  "offset": 0
 }
 ```
 
 ## RAG Chat over Search Results
 
-Stream a chat response grounded in search results.
+RAG chat requires the Hanzo Cloud API layer on top of Meilisearch. The `chat.py` script calls the `/api/chat-docs` endpoint which retrieves documents via Meilisearch and generates an LLM-grounded response.
 
 ```bash
 python3 {baseDir}/scripts/chat.py --query "explain the deployment process" --store my-docs
@@ -123,20 +122,19 @@ Each line is a JSON chunk:
 
 ### `scripts/search.py`
 
-Search documents from the command line.
+Search documents from the command line via Meilisearch.
 
 ```bash
 python3 {baseDir}/scripts/search.py \
   --query "search terms" \
-  --store "store-name" \
-  --mode hybrid \
+  --store "index-name" \
   --limit 10 \
   --token "$HANZO_API_KEY"
 ```
 
 ### `scripts/chat.py`
 
-RAG chat over search results.
+RAG chat over search results (requires Hanzo Cloud API layer).
 
 ```bash
 python3 {baseDir}/scripts/chat.py \
@@ -153,6 +151,7 @@ Each search query is billed per the Hanzo Search pricing tier. RAG chat queries 
 ## Environment Variables
 
 ```bash
-HANZO_API_KEY=...                                  # API key or IAM token
-HANZO_SEARCH_BASE_URL=https://api.cloud.hanzo.ai   # Override API base URL
+HANZO_API_KEY=...                                  # Meilisearch master key
+HANZO_SEARCH_BASE_URL=https://search.hanzo.ai      # Override search API base URL
+HANZO_CHAT_BASE_URL=https://search.hanzo.ai        # Override RAG chat API base URL
 ```
