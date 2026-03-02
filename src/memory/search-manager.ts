@@ -2,11 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedQmdConfig } from "./backend-config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
-import type {
-  MemoryEmbeddingProbeResult,
-  MemorySearchManager,
-  MemorySyncProgressUpdate,
-} from "./types.js";
+import type { MemorySearchManager } from "./types.js";
 
 const log = createSubsystemLogger("memory");
 const QMD_MANAGER_CACHE = new Map<string, MemorySearchManager>();
@@ -44,28 +40,24 @@ export async function getMemorySearchManager(params: {
         if (statusOnly) {
           return { manager: primary };
         }
-        const wrapper = new FallbackMemoryManager(
-          {
-            primary,
-            fallbackFactory: async () => {
-              const { MemoryIndexManager } = await import("./manager.js");
-              return await MemoryIndexManager.get(params);
-            },
-          },
-          () => {
-            if (cacheKey) {
-              QMD_MANAGER_CACHE.delete(cacheKey);
-            }
-          },
-        );
+        // When QMD is explicitly configured, we use QMD directly without fallback.
+        // Users choose QMD specifically to avoid cloud embedding dependencies.
+        // Falling back to builtin (which requires cloud providers) breaks that expectation.
+        // See: https://github.com/openclaw/openclaw/issues/12021
         if (cacheKey) {
-          QMD_MANAGER_CACHE.set(cacheKey, wrapper);
+          QMD_MANAGER_CACHE.set(cacheKey, primary);
         }
-        return { manager: wrapper };
+        return { manager: primary };
       }
+      // QMD was explicitly configured but returned null - don't fall back to builtin
+      log.error(`QMD memory backend returned null (not falling back to builtin as QMD is explicitly configured)`);
+      return { manager: null, error: `QMD backend returned null` };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      log.warn(`qmd memory unavailable; falling back to builtin: ${message}`);
+      // When QMD is explicitly configured, don't silently fall back to builtin.
+      // Return the actual QMD error so users know their chosen backend failed.
+      log.error(`QMD memory backend failed (not falling back to builtin as QMD is explicitly configured): ${message}`);
+      return { manager: null, error: `QMD backend error: ${message}` };
     }
   }
 
@@ -76,150 +68,6 @@ export async function getMemorySearchManager(params: {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { manager: null, error: message };
-  }
-}
-
-class FallbackMemoryManager implements MemorySearchManager {
-  private fallback: MemorySearchManager | null = null;
-  private primaryFailed = false;
-  private lastError?: string;
-  private cacheEvicted = false;
-
-  constructor(
-    private readonly deps: {
-      primary: MemorySearchManager;
-      fallbackFactory: () => Promise<MemorySearchManager | null>;
-    },
-    private readonly onClose?: () => void,
-  ) {}
-
-  async search(
-    query: string,
-    opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
-  ) {
-    if (!this.primaryFailed) {
-      try {
-        return await this.deps.primary.search(query, opts);
-      } catch (err) {
-        this.primaryFailed = true;
-        this.lastError = err instanceof Error ? err.message : String(err);
-        log.warn(`qmd memory failed; switching to builtin index: ${this.lastError}`);
-        await this.deps.primary.close?.().catch(() => {});
-        // Evict the failed wrapper so the next request can retry QMD with a fresh manager.
-        this.evictCacheEntry();
-      }
-    }
-    const fallback = await this.ensureFallback();
-    if (fallback) {
-      return await fallback.search(query, opts);
-    }
-    throw new Error(this.lastError ?? "memory search unavailable");
-  }
-
-  async readFile(params: { relPath: string; from?: number; lines?: number }) {
-    if (!this.primaryFailed) {
-      return await this.deps.primary.readFile(params);
-    }
-    const fallback = await this.ensureFallback();
-    if (fallback) {
-      return await fallback.readFile(params);
-    }
-    throw new Error(this.lastError ?? "memory read unavailable");
-  }
-
-  status() {
-    if (!this.primaryFailed) {
-      return this.deps.primary.status();
-    }
-    const fallbackStatus = this.fallback?.status();
-    const fallbackInfo = { from: "qmd", reason: this.lastError ?? "unknown" };
-    if (fallbackStatus) {
-      const custom = fallbackStatus.custom ?? {};
-      return {
-        ...fallbackStatus,
-        fallback: fallbackInfo,
-        custom: {
-          ...custom,
-          fallback: { disabled: true, reason: this.lastError ?? "unknown" },
-        },
-      };
-    }
-    const primaryStatus = this.deps.primary.status();
-    const custom = primaryStatus.custom ?? {};
-    return {
-      ...primaryStatus,
-      fallback: fallbackInfo,
-      custom: {
-        ...custom,
-        fallback: { disabled: true, reason: this.lastError ?? "unknown" },
-      },
-    };
-  }
-
-  async sync(params?: {
-    reason?: string;
-    force?: boolean;
-    progress?: (update: MemorySyncProgressUpdate) => void;
-  }) {
-    if (!this.primaryFailed) {
-      await this.deps.primary.sync?.(params);
-      return;
-    }
-    const fallback = await this.ensureFallback();
-    await fallback?.sync?.(params);
-  }
-
-  async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
-    if (!this.primaryFailed) {
-      return await this.deps.primary.probeEmbeddingAvailability();
-    }
-    const fallback = await this.ensureFallback();
-    if (fallback) {
-      return await fallback.probeEmbeddingAvailability();
-    }
-    return { ok: false, error: this.lastError ?? "memory embeddings unavailable" };
-  }
-
-  async probeVectorAvailability() {
-    if (!this.primaryFailed) {
-      return await this.deps.primary.probeVectorAvailability();
-    }
-    const fallback = await this.ensureFallback();
-    return (await fallback?.probeVectorAvailability()) ?? false;
-  }
-
-  async close() {
-    await this.deps.primary.close?.();
-    await this.fallback?.close?.();
-    this.evictCacheEntry();
-  }
-
-  private async ensureFallback(): Promise<MemorySearchManager | null> {
-    if (this.fallback) {
-      return this.fallback;
-    }
-    let fallback: MemorySearchManager | null;
-    try {
-      fallback = await this.deps.fallbackFactory();
-      if (!fallback) {
-        log.warn("memory fallback requested but builtin index is unavailable");
-        return null;
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.warn(`memory fallback unavailable: ${message}`);
-      return null;
-    }
-    this.fallback = fallback;
-    return this.fallback;
-  }
-
-  private evictCacheEntry(): void {
-    if (this.cacheEvicted) {
-      return;
-    }
-    this.cacheEvicted = true;
-    this.onClose?.();
   }
 }
 
