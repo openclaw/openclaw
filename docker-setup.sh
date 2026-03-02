@@ -501,7 +501,7 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
   else
     echo "WARNING: Sandbox config was partially applied. Check errors above." >&2
   fi
-  echo "Docs: https://docs.openclaw.ai/security/sandbox"
+  echo "Docs: https://docs.openclaw.ai/gateway/sandboxing"
 
   # Restart gateway with sandbox compose overlay to pick up socket mount + config.
   docker compose "${COMPOSE_ARGS[@]}" up -d openclaw-gateway
