@@ -225,6 +225,29 @@ function matchesNodeSelf(params: {
   ]);
 }
 
+function matchesUnsupportedPattern(pattern: string, key: string): boolean {
+  if (pattern === key) {
+    return true;
+  }
+  const patternSegments = pattern.split(".");
+  const keySegments = key.split(".");
+  if (patternSegments.length !== keySegments.length) {
+    return false;
+  }
+  return patternSegments.every(
+    (segment, index) => segment === "*" || segment === keySegments[index],
+  );
+}
+
+export function isUnsupportedNodePath(unsupported: Set<string>, key: string): boolean {
+  for (const pattern of unsupported) {
+    if (matchesUnsupportedPattern(pattern, key)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function matchesNodeSearch(params: {
   schema: JsonSchema;
   value: unknown;
@@ -340,7 +363,7 @@ export function renderNode(params: {
   const key = pathKey(path);
   const criteria = params.searchCriteria;
 
-  if (unsupported.has(key)) {
+  if (isUnsupportedNodePath(unsupported, key)) {
     return html`<div class="cfg-field cfg-field--error">
       <div class="cfg-field__label">${label}</div>
       <div class="cfg-field__error">Unsupported schema node. Use Raw mode.</div>
