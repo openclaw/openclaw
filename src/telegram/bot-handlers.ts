@@ -1,5 +1,9 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
-import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveDefaultAgentId,
+  resolveAgentEffectiveModelPrimary,
+} from "../agents/agent-scope.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
   createInboundDebouncer,
@@ -323,11 +327,12 @@ export const registerTelegramHandlers = ({
         model: `${provider}/${model}`,
       };
     }
-    const modelCfg = cfg.agents?.defaults?.model;
+    // Use agent-aware resolution to get the default model (handles agent-specific overrides)
+    const defaultModel = resolveAgentEffectiveModelPrimary(cfg, route.agentId);
     return {
       agentId: route.agentId,
       sessionEntry: entry,
-      model: typeof modelCfg === "string" ? modelCfg : modelCfg?.primary,
+      model: defaultModel,
     };
   };
 
