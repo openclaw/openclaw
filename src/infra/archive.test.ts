@@ -176,23 +176,30 @@ describe("archive utils", () => {
     },
   );
 
-  it("rejects archives that exceed archive size budget", async () => {
-    await withArchiveCase("zip", async ({ archivePath, extractDir }) => {
-      const zip = new JSZip();
-      zip.file("package/file.txt", "ok");
-      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
-      const stat = await fs.stat(archivePath);
-
-      await expect(
-        extractArchive({
+  it.each([{ ext: "zip" as const }, { ext: "tar" as const }])(
+    "rejects $ext archives that exceed archive size budget",
+    async ({ ext }) => {
+      await withArchiveCase(ext, async ({ workDir, archivePath, extractDir }) => {
+        await writePackageArchive({
+          ext,
+          workDir,
           archivePath,
-          destDir: extractDir,
-          timeoutMs: 5_000,
-          limits: { maxArchiveBytes: Math.max(1, stat.size - 1) },
-        }),
-      ).rejects.toThrow("archive size exceeds limit");
-    });
-  });
+          fileName: "file.txt",
+          content: "ok",
+        });
+        const stat = await fs.stat(archivePath);
+
+        await expect(
+          extractArchive({
+            archivePath,
+            destDir: extractDir,
+            timeoutMs: 5_000,
+            limits: { maxArchiveBytes: Math.max(1, stat.size - 1) },
+          }),
+        ).rejects.toThrow("archive size exceeds limit");
+      });
+    },
+  );
 
   it("fails resolvePackedRootDir when extract dir has multiple root dirs", async () => {
     const workDir = await makeTempDir("packed-root");

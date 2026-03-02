@@ -1,15 +1,14 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
+import { isWindowsDrivePath } from "../infra/archive-path.js";
 import {
-  isWindowsDrivePath,
-  resolveArchiveOutputPath,
-  stripArchivePath,
-  validateArchiveEntryPath,
-} from "../infra/archive-path.js";
-import { extractArchive as extractArchiveSafe } from "../infra/archive.js";
+  createTarEntrySafetyChecker,
+  extractArchive as extractArchiveSafe,
+} from "../infra/archive.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -61,6 +60,101 @@ function resolveArchiveType(spec: SkillInstallSpec, filename: string): string | 
     return "zip";
   }
   return undefined;
+}
+
+const TAR_VERBOSE_MONTHS = new Set([
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+]);
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+function mapTarVerboseTypeChar(typeChar: string): string {
+  switch (typeChar) {
+    case "l":
+      return "SymbolicLink";
+    case "h":
+      return "Link";
+    case "b":
+      return "BlockDevice";
+    case "c":
+      return "CharacterDevice";
+    case "p":
+      return "FIFO";
+    case "s":
+      return "Socket";
+    case "d":
+      return "Directory";
+    default:
+      return "File";
+  }
+}
+
+function parseTarVerboseSize(line: string): number {
+  const tokens = line.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length < 6) {
+    throw new Error(`unable to parse tar verbose metadata: ${line}`);
+  }
+
+  let dateIndex = tokens.findIndex((token) => TAR_VERBOSE_MONTHS.has(token));
+  if (dateIndex > 0) {
+    const size = Number.parseInt(tokens[dateIndex - 1] ?? "", 10);
+    if (!Number.isFinite(size) || size < 0) {
+      throw new Error(`unable to parse tar entry size: ${line}`);
+    }
+    return size;
+  }
+
+  dateIndex = tokens.findIndex((token) => ISO_DATE_PATTERN.test(token));
+  if (dateIndex > 0) {
+    const size = Number.parseInt(tokens[dateIndex - 1] ?? "", 10);
+    if (!Number.isFinite(size) || size < 0) {
+      throw new Error(`unable to parse tar entry size: ${line}`);
+    }
+    return size;
+  }
+
+  throw new Error(`unable to parse tar verbose metadata: ${line}`);
+}
+
+function parseTarVerboseMetadata(stdout: string): Array<{ type: string; size: number }> {
+  const lines = stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines.map((line) => {
+    const typeChar = line[0] ?? "";
+    if (!typeChar) {
+      throw new Error("unable to parse tar entry type");
+    }
+    return {
+      type: mapTarVerboseTypeChar(typeChar),
+      size: parseTarVerboseSize(line),
+    };
+  });
+}
+
+async function hashFileSha256(filePath: string): Promise<string> {
+  const hash = createHash("sha256");
+  const stream = fs.createReadStream(filePath);
+  return await new Promise<string>((resolve, reject) => {
+    stream.on("data", (chunk) => {
+      hash.update(chunk as Buffer);
+    });
+    stream.on("error", reject);
+    stream.on("end", () => {
+      resolve(hash.digest("hex"));
+    });
+  });
 }
 
 async function downloadFile(
@@ -132,6 +226,8 @@ async function extractArchive(params: {
         return { stdout: "", stderr: "tar not found on PATH", code: null };
       }
 
+      const preflightHash = await hashFileSha256(archivePath);
+
       // Preflight list to prevent zip-slip style traversal before extraction.
       const listResult = await runCommandWithTimeout(["tar", "tf", archivePath], { timeoutMs });
       if (listResult.code !== 0) {
@@ -154,34 +250,43 @@ async function extractArchive(params: {
           code: verboseResult.code,
         };
       }
-      for (const line of verboseResult.stdout.split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed) {
-          continue;
-        }
-        const typeChar = trimmed[0];
-        if (typeChar === "l" || typeChar === "h" || trimmed.includes(" -> ")) {
+      const metadata = parseTarVerboseMetadata(verboseResult.stdout);
+      if (metadata.length !== entries.length) {
+        return {
+          stdout: verboseResult.stdout,
+          stderr: `tar verbose/list entry count mismatch (${metadata.length} vs ${entries.length})`,
+          code: 1,
+        };
+      }
+      const checkTarEntrySafety = createTarEntrySafetyChecker({
+        rootDir: targetDir,
+        stripComponents: strip,
+        escapeLabel: "targetDir",
+      });
+      for (let i = 0; i < entries.length; i += 1) {
+        const entryPath = entries[i];
+        const entryMeta = metadata[i];
+        if (!entryPath || !entryMeta) {
           return {
             stdout: verboseResult.stdout,
-            stderr: "tar archive contains link entries; refusing to extract for safety",
+            stderr: "tar metadata parse failure",
             code: 1,
           };
         }
+        checkTarEntrySafety({
+          path: entryPath,
+          type: entryMeta.type,
+          size: entryMeta.size,
+        });
       }
 
-      for (const entry of entries) {
-        validateArchiveEntryPath(entry, { escapeLabel: "targetDir" });
-        const relPath = stripArchivePath(entry, strip);
-        if (!relPath) {
-          continue;
-        }
-        validateArchiveEntryPath(relPath, { escapeLabel: "targetDir" });
-        resolveArchiveOutputPath({
-          rootDir: targetDir,
-          relPath,
-          originalPath: entry,
-          escapeLabel: "targetDir",
-        });
+      const postPreflightHash = await hashFileSha256(archivePath);
+      if (postPreflightHash !== preflightHash) {
+        return {
+          stdout: "",
+          stderr: "tar archive changed during safety preflight; refusing to extract",
+          code: 1,
+        };
       }
 
       const argv = ["tar", "xf", archivePath, "-C", targetDir];
