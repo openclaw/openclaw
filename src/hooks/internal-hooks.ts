@@ -213,10 +213,10 @@ export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | 
 const _g = globalThis as typeof globalThis & {
   __openclaw_internal_hook_handlers__?: Map<string, InternalHookHandler[]>;
 };
-if (!_g.__openclaw_internal_hook_handlers__) {
-  _g.__openclaw_internal_hook_handlers__ = new Map<string, InternalHookHandler[]>();
-}
-const handlers = _g.__openclaw_internal_hook_handlers__;
+const handlers = (_g.__openclaw_internal_hook_handlers__ ??= new Map<
+  string,
+  InternalHookHandler[]
+>());
 const log = createSubsystemLogger("internal-hooks");
 
 /**
