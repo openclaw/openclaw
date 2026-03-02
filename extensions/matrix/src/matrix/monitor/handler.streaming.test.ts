@@ -220,11 +220,13 @@ describe("createMatrixRoomMessageHandler streaming behaviour", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Re-apply the default finalize mock after clearAllMocks
-    const mockStream = (
-      createMatrixDraftStream as ReturnType<typeof vi.fn>
-    ).getMockImplementation?.()?.();
-    if (mockStream) {
-      mockStream.finalize.mockResolvedValue("evt-stream-1");
+    const mockFn = createMatrixDraftStream as ReturnType<typeof vi.fn>;
+    const impl = mockFn.getMockImplementation?.() as ((...args: unknown[]) => unknown) | undefined;
+    const mockStream = impl?.();
+    if (mockStream && typeof mockStream === "object" && "finalize" in mockStream) {
+      (mockStream as { finalize: ReturnType<typeof vi.fn> }).finalize.mockResolvedValue(
+        "evt-stream-1",
+      );
     }
   });
 

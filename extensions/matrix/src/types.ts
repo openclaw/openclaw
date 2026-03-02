@@ -95,6 +95,10 @@ export type MatrixConfig = {
   rooms?: Record<string, MatrixRoomConfig>;
   /** Per-action tool gating (default: true for all). */
   actions?: MatrixActionConfig;
+  /** Streaming mode for LLM responses. "partial" enables edit-based draft streaming. */
+  streaming?: "partial" | "off";
+  /** Minimum ms between draft stream edits (default: 800). */
+  streamThrottleMs?: number;
 };
 
 export type CoreConfig = {
