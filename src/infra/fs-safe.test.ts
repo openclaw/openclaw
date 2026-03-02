@@ -35,6 +35,9 @@ describe("fs-safe", () => {
     await expect(readLocalFileSafely({ filePath: dir })).rejects.toMatchObject({
       code: "not-file",
     });
+    const err = await readLocalFileSafely({ filePath: dir }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SafeOpenError);
+    expect((err as SafeOpenError).message).not.toMatch(/EISDIR/i);
   });
 
   it("enforces maxBytes", async () => {
@@ -71,6 +74,22 @@ describe("fs-safe", () => {
         relativePath: path.join("..", path.basename(outside), "outside.txt"),
       }),
     ).rejects.toMatchObject({ code: "outside-workspace" });
+  });
+
+  it("rejects directory path within root without leaking EISDIR (issue #31186)", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    await fs.mkdir(path.join(root, "memory"), { recursive: true });
+
+    await expect(
+      openFileWithinRoot({ rootDir: root, relativePath: "memory" }),
+    ).rejects.toMatchObject({ code: expect.stringMatching(/invalid-path|not-file/) });
+
+    const err = await openFileWithinRoot({
+      rootDir: root,
+      relativePath: "memory",
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SafeOpenError);
+    expect((err as SafeOpenError).message).not.toMatch(/EISDIR/i);
   });
 
   it("reads a file within root", async () => {

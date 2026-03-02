@@ -11,6 +11,8 @@ import type {
 import { VIEWER_LOADER_PATH } from "./viewer-assets.js";
 
 const DEFAULT_FILE_NAME = "diff.txt";
+const MAX_PATCH_FILE_COUNT = 128;
+const MAX_PATCH_TOTAL_LINES = 120_000;
 
 function escapeCssString(value: string): string {
   return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
@@ -52,13 +54,15 @@ function resolveBeforeAfterFileName(input: Extract<DiffInput, { kind: "before_af
 function buildDiffOptions(options: DiffRenderOptions): DiffViewerOptions {
   const fontFamily = escapeCssString(options.presentation.fontFamily);
   const fontSize = Math.max(10, Math.floor(options.presentation.fontSize));
-  const lineHeight = Math.max(20, Math.round(fontSize * 1.6));
+  const lineHeight = Math.max(20, Math.round(fontSize * options.presentation.lineSpacing));
   return {
     theme: {
       light: "pierre-light",
       dark: "pierre-dark",
     },
     diffStyle: options.presentation.layout,
+    diffIndicators: options.presentation.diffIndicators,
+    disableLineNumbers: !options.presentation.showLineNumbers,
     expandUnchanged: options.expandUnchanged,
     themeType: options.presentation.theme,
     backgroundEnabled: options.presentation.background,
@@ -341,6 +345,17 @@ async function renderPatchDiff(
   const files = parsePatchFiles(input.patch).flatMap((entry) => entry.files ?? []);
   if (files.length === 0) {
     throw new Error("Patch input did not contain any file diffs.");
+  }
+  if (files.length > MAX_PATCH_FILE_COUNT) {
+    throw new Error(`Patch input contains too many files (max ${MAX_PATCH_FILE_COUNT}).`);
+  }
+  const totalLines = files.reduce((sum, fileDiff) => {
+    const splitLines = Number.isFinite(fileDiff.splitLineCount) ? fileDiff.splitLineCount : 0;
+    const unifiedLines = Number.isFinite(fileDiff.unifiedLineCount) ? fileDiff.unifiedLineCount : 0;
+    return sum + Math.max(splitLines, unifiedLines, 0);
+  }, 0);
+  if (totalLines > MAX_PATCH_TOTAL_LINES) {
+    throw new Error(`Patch input is too large to render (max ${MAX_PATCH_TOTAL_LINES} lines).`);
   }
 
   const viewerPayloadOptions = buildDiffOptions(options);

@@ -7,7 +7,12 @@ import path from "node:path";
 import { sameFileIdentity } from "./file-identity.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { assertNoPathAliasEscape } from "./path-alias-guards.js";
-import { isNotFoundPathError, isPathInside, isSymlinkOpenError } from "./path-guards.js";
+import {
+  hasNodeErrorCode,
+  isNotFoundPathError,
+  isPathInside,
+  isSymlinkOpenError,
+} from "./path-guards.js";
 
 export type SafeOpenErrorCode =
   | "invalid-path"
@@ -68,6 +73,20 @@ async function openVerifiedLocalFile(
     rejectHardlinks?: boolean;
   },
 ): Promise<SafeOpenResult> {
+  // Reject directories before opening so we never surface EISDIR to callers (e.g. tool
+  // results that get sent to messaging channels). See openclaw/openclaw#31186.
+  try {
+    const preStat = await fs.lstat(filePath);
+    if (preStat.isDirectory()) {
+      throw new SafeOpenError("not-file", "not a file");
+    }
+  } catch (err) {
+    if (err instanceof SafeOpenError) {
+      throw err;
+    }
+    // ENOENT and other lstat errors: fall through and let fs.open handle.
+  }
+
   let handle: FileHandle;
   try {
     handle = await fs.open(filePath, OPEN_READ_FLAGS);
@@ -77,6 +96,10 @@ async function openVerifiedLocalFile(
     }
     if (isSymlinkOpenError(err)) {
       throw new SafeOpenError("symlink", "symlink open blocked", { cause: err });
+    }
+    // Defensive: if open still throws EISDIR (e.g. race), sanitize so it never leaks.
+    if (hasNodeErrorCode(err, "EISDIR")) {
+      throw new SafeOpenError("not-file", "not a file");
     }
     throw err;
   }
@@ -118,11 +141,10 @@ async function openVerifiedLocalFile(
   }
 }
 
-export async function openFileWithinRoot(params: {
+async function resolvePathWithinRoot(params: {
   rootDir: string;
   relativePath: string;
-  rejectHardlinks?: boolean;
-}): Promise<SafeOpenResult> {
+}): Promise<{ rootReal: string; rootWithSep: string; resolved: string }> {
   let rootReal: string;
   try {
     rootReal = await fs.realpath(params.rootDir);
@@ -138,6 +160,15 @@ export async function openFileWithinRoot(params: {
   if (!isPathInside(rootWithSep, resolved)) {
     throw new SafeOpenError("outside-workspace", "file is outside workspace root");
   }
+  return { rootReal, rootWithSep, resolved };
+}
+
+export async function openFileWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  rejectHardlinks?: boolean;
+}): Promise<SafeOpenResult> {
+  const { rootWithSep, resolved } = await resolvePathWithinRoot(params);
 
   let opened: SafeOpenResult;
   try {
@@ -258,21 +289,7 @@ export async function writeFileWithinRoot(params: {
   encoding?: BufferEncoding;
   mkdir?: boolean;
 }): Promise<void> {
-  let rootReal: string;
-  try {
-    rootReal = await fs.realpath(params.rootDir);
-  } catch (err) {
-    if (isNotFoundPathError(err)) {
-      throw new SafeOpenError("not-found", "root dir not found");
-    }
-    throw err;
-  }
-  const rootWithSep = ensureTrailingSep(rootReal);
-  const expanded = await expandRelativePathWithHome(params.relativePath);
-  const resolved = path.resolve(rootWithSep, expanded);
-  if (!isPathInside(rootWithSep, resolved)) {
-    throw new SafeOpenError("outside-workspace", "file is outside workspace root");
-  }
+  const { rootReal, rootWithSep, resolved } = await resolvePathWithinRoot(params);
   try {
     await assertNoPathAliasEscape({
       absolutePath: resolved,

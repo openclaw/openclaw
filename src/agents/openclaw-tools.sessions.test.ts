@@ -876,6 +876,59 @@ describe("sessions tools", () => {
     expect(details.text).toContain("recent (last 30m):");
   });
 
+  it("subagents list keeps ended orchestrators active while descendants are pending", async () => {
+    resetSubagentRegistryForTests();
+    const now = Date.now();
+    addSubagentRunForTests({
+      runId: "run-orchestrator-ended",
+      childSessionKey: "agent:main:subagent:orchestrator-ended",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "orchestrate child workers",
+      cleanup: "keep",
+      createdAt: now - 5 * 60_000,
+      startedAt: now - 5 * 60_000,
+      endedAt: now - 4 * 60_000,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-orchestrator-child-active",
+      childSessionKey: "agent:main:subagent:orchestrator-ended:subagent:child",
+      requesterSessionKey: "agent:main:subagent:orchestrator-ended",
+      requesterDisplayKey: "subagent:orchestrator-ended",
+      task: "child worker still running",
+      cleanup: "keep",
+      createdAt: now - 60_000,
+      startedAt: now - 60_000,
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:main",
+    }).find((candidate) => candidate.name === "subagents");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing subagents tool");
+    }
+
+    const result = await tool.execute("call-subagents-list-orchestrator", { action: "list" });
+    const details = result.details as {
+      status?: string;
+      active?: Array<{ runId?: string; status?: string }>;
+      recent?: Array<{ runId?: string }>;
+    };
+
+    expect(details.status).toBe("ok");
+    expect(details.active).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          runId: "run-orchestrator-ended",
+          status: "active",
+        }),
+      ]),
+    );
+    expect(details.recent?.find((entry) => entry.runId === "run-orchestrator-ended")).toBeFalsy();
+  });
+
   it("subagents list usage separates io tokens from prompt/cache", async () => {
     resetSubagentRegistryForTests();
     const now = Date.now();

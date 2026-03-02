@@ -3,15 +3,20 @@ import type { FileContents, FileDiffMetadata, SupportedLanguages } from "@pierre
 export const DIFF_LAYOUTS = ["unified", "split"] as const;
 export const DIFF_MODES = ["view", "image", "both"] as const;
 export const DIFF_THEMES = ["light", "dark"] as const;
+export const DIFF_INDICATORS = ["bars", "classic", "none"] as const;
 
 export type DiffLayout = (typeof DIFF_LAYOUTS)[number];
 export type DiffMode = (typeof DIFF_MODES)[number];
 export type DiffTheme = (typeof DIFF_THEMES)[number];
+export type DiffIndicators = (typeof DIFF_INDICATORS)[number];
 
 export type DiffPresentationDefaults = {
   fontFamily: string;
   fontSize: number;
+  lineSpacing: number;
   layout: DiffLayout;
+  showLineNumbers: boolean;
+  diffIndicators: DiffIndicators;
   wordWrap: boolean;
   background: boolean;
   theme: DiffTheme;
@@ -49,6 +54,8 @@ export type DiffViewerOptions = {
     dark: "pierre-dark";
   };
   diffStyle: DiffLayout;
+  diffIndicators: DiffIndicators;
+  disableLineNumbers: boolean;
   expandUnchanged: boolean;
   themeType: DiffTheme;
   backgroundEnabled: boolean;

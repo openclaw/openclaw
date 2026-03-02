@@ -60,6 +60,7 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   const payload = {
     schema: "openclaw.inbound_meta.v1",
     chat_id: safeTrim(ctx.OriginatingTo),
+    account_id: safeTrim(ctx.AccountId),
     channel: channelValue,
     provider: safeTrim(ctx.Provider),
     surface: safeTrim(ctx.Surface),
@@ -87,26 +88,26 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
 
   const messageId = safeTrim(ctx.MessageSid);
   const messageIdFull = safeTrim(ctx.MessageSidFull);
+  const resolvedMessageId = messageId ?? messageIdFull;
   const timestampStr = formatConversationTimestamp(ctx.Timestamp);
 
   const conversationInfo = {
-    message_id: isDirect ? undefined : messageId,
-    message_id_full: isDirect
-      ? undefined
-      : messageIdFull && messageIdFull !== messageId
-        ? messageIdFull
-        : undefined,
+    message_id: isDirect ? undefined : resolvedMessageId,
     reply_to_id: isDirect ? undefined : safeTrim(ctx.ReplyToId),
     sender_id: isDirect ? undefined : safeTrim(ctx.SenderId),
     conversation_label: isDirect ? undefined : safeTrim(ctx.ConversationLabel),
     sender: isDirect
       ? undefined
-      : (safeTrim(ctx.SenderE164) ?? safeTrim(ctx.SenderId) ?? safeTrim(ctx.SenderUsername)),
+      : (safeTrim(ctx.SenderName) ??
+        safeTrim(ctx.SenderE164) ??
+        safeTrim(ctx.SenderId) ??
+        safeTrim(ctx.SenderUsername)),
     timestamp: timestampStr,
     group_subject: safeTrim(ctx.GroupSubject),
     group_channel: safeTrim(ctx.GroupChannel),
     group_space: safeTrim(ctx.GroupSpace),
     thread_label: safeTrim(ctx.ThreadLabel),
+    topic_id: ctx.MessageThreadId != null ? String(ctx.MessageThreadId) : undefined,
     is_forum: ctx.IsForum === true ? true : undefined,
     is_group_chat: !isDirect ? true : undefined,
     was_mentioned: ctx.WasMentioned === true ? true : undefined,
@@ -129,20 +130,20 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
     );
   }
 
-  const senderInfo = isDirect
-    ? undefined
-    : {
-        label: resolveSenderLabel({
-          name: safeTrim(ctx.SenderName),
-          username: safeTrim(ctx.SenderUsername),
-          tag: safeTrim(ctx.SenderTag),
-          e164: safeTrim(ctx.SenderE164),
-        }),
-        name: safeTrim(ctx.SenderName),
-        username: safeTrim(ctx.SenderUsername),
-        tag: safeTrim(ctx.SenderTag),
-        e164: safeTrim(ctx.SenderE164),
-      };
+  const senderInfo = {
+    label: resolveSenderLabel({
+      name: safeTrim(ctx.SenderName),
+      username: safeTrim(ctx.SenderUsername),
+      tag: safeTrim(ctx.SenderTag),
+      e164: safeTrim(ctx.SenderE164),
+      id: safeTrim(ctx.SenderId),
+    }),
+    id: safeTrim(ctx.SenderId),
+    name: safeTrim(ctx.SenderName),
+    username: safeTrim(ctx.SenderUsername),
+    tag: safeTrim(ctx.SenderTag),
+    e164: safeTrim(ctx.SenderE164),
+  };
   if (senderInfo?.label) {
     blocks.push(
       ["Sender (untrusted metadata):", "```json", JSON.stringify(senderInfo, null, 2), "```"].join(
