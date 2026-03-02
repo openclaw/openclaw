@@ -48,9 +48,9 @@ services:
       OPENCLAW_SIGNAL_UI_MIRROR_TARGET: ${OPENCLAW_SIGNAL_UI_MIRROR_TARGET:-}
       OPENCLAW_SIGNAL_UI_MIRROR_HTTP_URL: ${OPENCLAW_SIGNAL_UI_MIRROR_HTTP_URL:-}
       OPENCLAW_SIGNAL_UI_MIRROR_ACCOUNT: ${OPENCLAW_SIGNAL_UI_MIRROR_ACCOUNT:-}
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
+      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
+      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
+      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
@@ -73,6 +73,12 @@ services:
 
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    network_mode: "service:openclaw-gateway"
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
     environment:
       HOME: /home/node
       TERM: xterm-256color
@@ -93,9 +99,9 @@ services:
       OPENCLAW_SECURITY_SENTINEL_SIGNAL_PASSPHRASE: ${OPENCLAW_SECURITY_SENTINEL_SIGNAL_PASSPHRASE:-}
       OPENCLAW_SECURITY_SENTINEL_SIGNAL_PASSPHRASE_HASH: ${OPENCLAW_SECURITY_SENTINEL_SIGNAL_PASSPHRASE_HASH:-}
       BROWSER: echo
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
+      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
+      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
+      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
@@ -103,3 +109,5 @@ services:
     tty: true
     init: true
     entrypoint: ["node", "dist/index.js"]
+    depends_on:
+      - openclaw-gateway

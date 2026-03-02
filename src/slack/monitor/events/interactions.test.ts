@@ -65,6 +65,7 @@ function createContext(overrides?: {
   allowFrom?: string[];
   allowNameMatching?: boolean;
   channelsConfig?: Record<string, { users?: string[] }>;
+  shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
   isChannelAllowed?: (params: {
     channelId?: string;
     channelName?: string;
@@ -128,6 +129,8 @@ function createContext(overrides?: {
     allowNameMatching: overrides?.allowNameMatching ?? false,
     channelsConfig: overrides?.channelsConfig ?? {},
     defaultRequireMention: true,
+    shouldDropMismatchedSlackEvent: (body: unknown) =>
+      overrides?.shouldDropMismatchedSlackEvent?.(body) ?? false,
     isChannelAllowed,
     resolveUserName,
     resolveChannelName,
@@ -211,8 +214,8 @@ describe("registerSlackInteractionEvents", () => {
       value: "approved",
       userId: "U123",
       teamId: "T9",
-      triggerId: "123.trigger",
-      responseUrl: "https://hooks.slack.test/response",
+      triggerId: "[redacted]",
+      responseUrl: "[redacted]",
       channelId: "C1",
       messageTs: "100.200",
       threadTs: "100.100",
@@ -222,6 +225,88 @@ describe("registerSlackInteractionEvents", () => {
       channelType: "channel",
     });
     expect(app.client.chat.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops block actions when mismatch guard triggers", async () => {
+    enqueueSystemEventMock.mockClear();
+    const { ctx, app, getHandler } = createContext({
+      shouldDropMismatchedSlackEvent: () => true,
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      respond,
+      body: {
+        user: { id: "U123" },
+        team: { id: "T9" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200" },
+        message: {
+          ts: "100.200",
+          text: "fallback",
+          blocks: [],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:verify",
+      },
+    });
+
+    expect(ack).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(app.client.chat.update).not.toHaveBeenCalled();
+    expect(respond).not.toHaveBeenCalled();
+  });
+
+  it("drops modal lifecycle payloads when mismatch guard triggers", async () => {
+    enqueueSystemEventMock.mockClear();
+    const { ctx, getViewHandler, getViewClosedHandler } = createContext({
+      shouldDropMismatchedSlackEvent: () => true,
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const viewHandler = getViewHandler();
+    const viewClosedHandler = getViewClosedHandler();
+    expect(viewHandler).toBeTruthy();
+    expect(viewClosedHandler).toBeTruthy();
+
+    const ackSubmit = vi.fn().mockResolvedValue(undefined);
+    await viewHandler!({
+      ack: ackSubmit,
+      body: {
+        user: { id: "U123" },
+        team: { id: "T9" },
+        view: {
+          id: "V123",
+          callback_id: "openclaw:deploy_form",
+          private_metadata: JSON.stringify({ userId: "U123" }),
+        },
+      },
+    });
+    expect(ackSubmit).toHaveBeenCalledTimes(1);
+
+    const ackClosed = vi.fn().mockResolvedValue(undefined);
+    await viewClosedHandler!({
+      ack: ackClosed,
+      body: {
+        user: { id: "U123" },
+        team: { id: "T9" },
+        view: {
+          id: "V123",
+          callback_id: "openclaw:deploy_form",
+          private_metadata: JSON.stringify({ userId: "U123" }),
+        },
+      },
+    });
+    expect(ackClosed).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
   it("captures select values and updates action rows for non-button actions", async () => {
@@ -800,7 +885,7 @@ describe("registerSlackInteractionEvents", () => {
     };
     expect(payload).toMatchObject({
       actionType: "workflow_button",
-      workflowTriggerUrl: "https://slack.com/workflows/triggers/T420/12345",
+      workflowTriggerUrl: "[redacted]",
       workflowId: "Wf12345",
       teamId: "T420",
       channelId: "C420",
@@ -894,7 +979,7 @@ describe("registerSlackInteractionEvents", () => {
       rootViewId: "VROOT",
       previousViewId: "VPREV",
       externalId: "deploy-ext-1",
-      viewHash: "view-hash-1",
+      viewHash: "[redacted]",
       isStackedView: true,
     });
     expect(payload.inputs).toEqual(
@@ -1293,14 +1378,11 @@ describe("registerSlackInteractionEvents", () => {
       viewId: "V900",
       userId: "U900",
       isCleared: true,
-      privateMetadata: JSON.stringify({
-        sessionKey: "agent:main:slack:channel:C99",
-        userId: "U900",
-      }),
+      privateMetadata: "[redacted]",
       rootViewId: "VROOT900",
       previousViewId: "VPREV900",
       externalId: "deploy-ext-900",
-      viewHash: "view-hash-900",
+      viewHash: "[redacted]",
       isStackedView: true,
     });
     expect(payload.inputs).toEqual(
@@ -1340,6 +1422,65 @@ describe("registerSlackInteractionEvents", () => {
     };
     expect(payload.interactionType).toBe("view_closed");
     expect(payload.isCleared).toBe(false);
+  });
+
+  it("caps oversized interaction payloads with compact summaries", async () => {
+    enqueueSystemEventMock.mockClear();
+    const { ctx, getViewHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const viewHandler = getViewHandler();
+    expect(viewHandler).toBeTruthy();
+
+    const richTextValue = {
+      type: "rich_text",
+      elements: Array.from({ length: 20 }, (_, index) => ({
+        type: "rich_text_section",
+        elements: [{ type: "text", text: `chunk-${index}-${"x".repeat(400)}` }],
+      })),
+    };
+    const values: Record<string, Record<string, unknown>> = {};
+    for (let index = 0; index < 20; index += 1) {
+      values[`block_${index}`] = {
+        [`input_${index}`]: {
+          type: "rich_text_input",
+          rich_text_value: richTextValue,
+        },
+      };
+    }
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await viewHandler!({
+      ack,
+      body: {
+        user: { id: "U915" },
+        team: { id: "T1" },
+        view: {
+          id: "V915",
+          callback_id: "openclaw:oversize",
+          private_metadata: JSON.stringify({
+            channelId: "D915",
+            channelType: "im",
+            userId: "U915",
+          }),
+          state: {
+            values,
+          },
+        },
+      },
+    } as never);
+
+    expect(ack).toHaveBeenCalled();
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    expect(eventText.length).toBeLessThanOrEqual(2400);
+    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+      payloadTruncated?: boolean;
+      inputs?: unknown[];
+      inputsOmitted?: number;
+    };
+    expect(payload.payloadTruncated).toBe(true);
+    expect(Array.isArray(payload.inputs) ? payload.inputs.length : 0).toBeLessThanOrEqual(3);
+    expect((payload.inputsOmitted ?? 0) >= 1).toBe(true);
   });
 });
 const selectedDateTimeEpoch = 1_771_632_300;

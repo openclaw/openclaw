@@ -46,102 +46,12 @@ import {
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import type {
-  SignalAttachment,
-  SignalDataMessage,
   SignalEnvelope,
   SignalEventHandlerDeps,
-  SignalMention,
   SignalReactionMessage,
   SignalReceivePayload,
 } from "./event-handler.types.js";
 import { renderSignalMentions } from "./mentions.js";
-
-const SIGNAL_UI_MIRROR_MARKER = "\u2063mbmirror\u2063";
-
-function resolveSelfSyncInbound(params: { syncMessage: unknown; account?: string }): {
-  syntheticSelf: true;
-  sourceNumber?: string;
-  sourceName: string;
-  timestamp?: number;
-  dataMessage: SignalDataMessage;
-} | null {
-  const sync = params.syncMessage;
-  if (!sync || typeof sync !== "object") {
-    return null;
-  }
-  const sentMessage = (sync as { sentMessage?: unknown }).sentMessage;
-  if (!sentMessage || typeof sentMessage !== "object") {
-    return null;
-  }
-
-  const sent = sentMessage as {
-    message?: unknown;
-    destination?: unknown;
-    destinationNumber?: unknown;
-    timestamp?: unknown;
-    attachments?: unknown;
-    mentions?: unknown;
-    quote?: unknown;
-    groupInfo?: unknown;
-  };
-
-  if (sent.groupInfo && typeof sent.groupInfo === "object") {
-    return null;
-  }
-
-  const messageRaw = typeof sent.message === "string" ? sent.message : "";
-  if (messageRaw.includes(SIGNAL_UI_MIRROR_MARKER)) {
-    return null;
-  }
-  const message = messageRaw;
-  const attachments = Array.isArray(sent.attachments)
-    ? (sent.attachments as SignalAttachment[])
-    : undefined;
-  const mentions = Array.isArray(sent.mentions) ? (sent.mentions as SignalMention[]) : undefined;
-  const quote =
-    sent.quote && typeof sent.quote === "object" ? (sent.quote as { text?: string | null }) : null;
-  const hasContent = Boolean(
-    message.trim() || quote?.text?.trim() || (attachments?.length ?? 0) > 0,
-  );
-  if (!hasContent) {
-    return null;
-  }
-
-  const destinationRaw =
-    typeof sent.destinationNumber === "string"
-      ? sent.destinationNumber
-      : typeof sent.destination === "string"
-        ? sent.destination
-        : "";
-  const destination = destinationRaw.trim();
-  const account = params.account?.trim();
-  const normalizedAccount = account ? normalizeE164(account) : "";
-  const normalizedDestination = destination ? normalizeE164(destination) : "";
-
-  // Allow only note-to-self style sync messages to prevent loops on normal outbound sends.
-  const isSelfTarget =
-    Boolean(normalizedAccount) &&
-    (normalizedDestination === normalizedAccount || normalizedDestination.length === 0);
-  if (!isSelfTarget) {
-    return null;
-  }
-
-  const timestamp = typeof sent.timestamp === "number" ? sent.timestamp : undefined;
-  return {
-    syntheticSelf: true,
-    sourceNumber: normalizedAccount || normalizedDestination || undefined,
-    sourceName: "Note to Self",
-    timestamp,
-    dataMessage: {
-      timestamp,
-      message,
-      attachments,
-      mentions,
-      quote,
-      groupInfo: null,
-    },
-  };
-}
 
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg: deps.cfg, channel: "signal" });
@@ -155,6 +65,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     groupName?: string;
     isGroup: boolean;
     bodyText: string;
+    commandBody: string;
     timestamp?: number;
     messageId?: string;
     mediaPath?: string;
@@ -238,7 +149,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       BodyForAgent: entry.bodyText,
       InboundHistory: inboundHistory,
       RawBody: entry.bodyText,
-      CommandBody: entry.bodyText,
+      CommandBody: entry.commandBody,
+      BodyForCommands: entry.commandBody,
       From: entry.isGroup
         ? `group:${entry.groupId ?? "unknown"}`
         : `signal:${entry.senderRecipient}`,
@@ -510,30 +422,27 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
-    const syncSelfInbound = resolveSelfSyncInbound({
-      syncMessage: envelope.syncMessage,
-      account: deps.account,
-    });
-    if (syncSelfInbound) {
-      envelope = {
-        ...envelope,
-        sourceNumber: envelope.sourceNumber ?? syncSelfInbound.sourceNumber ?? null,
-        sourceName: envelope.sourceName ?? syncSelfInbound.sourceName,
-        timestamp: envelope.timestamp ?? syncSelfInbound.timestamp ?? null,
-        dataMessage: envelope.dataMessage ?? syncSelfInbound.dataMessage,
-      };
-    } else if (envelope.syncMessage) {
-      return;
-    }
-
+    // Check for syncMessage (e.g., sentTranscript from other devices)
+    // We need to check if it's from our own account to prevent self-reply loops
     const sender = resolveSignalSender(envelope);
     if (!sender) {
       return;
     }
-    if (deps.account && sender.kind === "phone") {
-      if (sender.e164 === normalizeE164(deps.account) && !syncSelfInbound?.syntheticSelf) {
-        return;
-      }
+
+    // Check if the message is from our own account to prevent loop/self-reply
+    // This handles both phone number and UUID based identification
+    const normalizedAccount = deps.account ? normalizeE164(deps.account) : undefined;
+    const isOwnMessage =
+      (sender.kind === "phone" && normalizedAccount != null && sender.e164 === normalizedAccount) ||
+      (sender.kind === "uuid" && deps.accountUuid != null && sender.raw === deps.accountUuid);
+    if (isOwnMessage) {
+      return;
+    }
+
+    // For non-own sync messages (e.g., messages synced from other devices),
+    // we could process them but for now we skip to be conservative
+    if (envelope.syncMessage) {
+      return;
     }
 
     const dataMessage = envelope.dataMessage ?? envelope.editMessage?.dataMessage;
@@ -795,6 +704,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       groupName,
       isGroup,
       bodyText,
+      commandBody: messageText,
       timestamp: envelope.timestamp ?? undefined,
       messageId,
       mediaPath,

@@ -1,7 +1,11 @@
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { VoiceboxProfile } from "./chat/voicebox.ts";
-import type { CronFieldErrors } from "./controllers/cron.ts";
+import type {
+  CronFieldErrors,
+  CronJobsLastStatusFilter,
+  CronJobsScheduleKindFilter,
+} from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
@@ -171,6 +175,7 @@ export type AppViewState = {
   sessionHistoryLoading: boolean;
   sessionHistoryKey: string | null;
   sessionHistoryMessages: unknown[];
+  sessionsHideCron: boolean;
   usageLoading: boolean;
   usageResult: SessionsUsageResult | null;
   usageCostSummary: CostUsageSummary | null;
@@ -215,6 +220,8 @@ export type AppViewState = {
   cronJobsLimit: number;
   cronJobsQuery: string;
   cronJobsEnabledFilter: CronJobsEnabledFilter;
+  cronJobsScheduleKindFilter: CronJobsScheduleKindFilter;
+  cronJobsLastStatusFilter: CronJobsLastStatusFilter;
   cronJobsSortBy: CronJobsSortBy;
   cronJobsSortDir: CronSortDir;
   cronStatus: CronStatus | null;
