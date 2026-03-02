@@ -133,10 +133,9 @@ describe("QmdMemoryManager", () => {
     tmpRoot = path.join(fixtureRoot, `case-${fixtureCount++}`);
     workspaceDir = path.join(tmpRoot, "workspace");
     stateDir = path.join(tmpRoot, "state");
-    await Promise.all([
-      fs.mkdir(workspaceDir, { recursive: true }),
-      fs.mkdir(stateDir, { recursive: true }),
-    ]);
+    // Only workspace must exist for configured collection paths; state paths are
+    // created lazily by manager code when needed.
+    await fs.mkdir(workspaceDir, { recursive: true });
     process.env.OPENCLAW_STATE_DIR = stateDir;
     cfg = {
       agents: {
