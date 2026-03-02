@@ -1,6 +1,6 @@
-import { extractText } from "../chat/message-extract.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ChatAttachment } from "../ui-types.ts";
+import { extractText } from "../chat/message-extract.ts";
 import { generateUUID } from "../uuid.ts";
 
 export type ChatState = {
@@ -31,22 +31,33 @@ export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
     return;
   }
+  const requestedSessionKey = state.sessionKey;
   state.chatLoading = true;
   state.lastError = null;
   try {
     const res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
       "chat.history",
       {
-        sessionKey: state.sessionKey,
+        sessionKey: requestedSessionKey,
         limit: 200,
       },
     );
+    // Only apply result if user has not switched to another session (avoids race).
+    if (state.sessionKey !== requestedSessionKey) {
+      return;
+    }
     state.chatMessages = Array.isArray(res.messages) ? res.messages : [];
     state.chatThinkingLevel = res.thinkingLevel ?? null;
   } catch (err) {
+    if (state.sessionKey !== requestedSessionKey) {
+      return;
+    }
     state.lastError = String(err);
   } finally {
-    state.chatLoading = false;
+    // Only clear loading for this session; avoid stale response clearing B's loading when A completes.
+    if (state.sessionKey === requestedSessionKey) {
+      state.chatLoading = false;
+    }
   }
 }
 
