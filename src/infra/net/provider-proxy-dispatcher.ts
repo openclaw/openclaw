@@ -50,6 +50,9 @@ export class ProviderProxyRouter extends Agent {
     } catch (err) {
       errors.push(err);
     }
+    if (errors.length > 0) {
+      logDebug(`[provider-proxy] errors during close: ${errors.map(String).join(", ")}`);
+    }
     await super.close();
   }
 }
