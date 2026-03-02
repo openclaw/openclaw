@@ -299,16 +299,15 @@ export async function runCronIsolatedAgentTurn(params: {
     }
   }
 
-  // Resolve thinking level - job thinking > hooks.gmail.thinking > agent default
+  // Resolve thinking level - job thinking > hooks.gmail.thinking > model/global defaults
   const hooksGmailThinking = isGmailHook
     ? normalizeThinkLevel(params.cfg.hooks?.gmail?.thinking)
     : undefined;
-  const thinkOverride = normalizeThinkLevel(agentCfg?.thinkingDefault);
   const jobThink = normalizeThinkLevel(
     (params.job.payload.kind === "agentTurn" ? params.job.payload.thinking : undefined) ??
       undefined,
   );
-  let thinkLevel = jobThink ?? hooksGmailThinking ?? thinkOverride;
+  let thinkLevel = jobThink ?? hooksGmailThinking;
   if (!thinkLevel) {
     thinkLevel = resolveThinkingDefault({
       cfg: cfgWithAgentDefaults,
