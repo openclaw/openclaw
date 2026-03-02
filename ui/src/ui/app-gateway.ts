@@ -173,6 +173,18 @@ export function connectGateway(host: GatewayHost) {
       void loadNodes(host as unknown as OpenClawApp, { quiet: true });
       void loadDevices(host as unknown as OpenClawApp, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
+
+      // The first refresh can race with final-message persistence right after reconnect.
+      if (host.tab === "chat") {
+        for (const delayMs of [800, 2500]) {
+          window.setTimeout(() => {
+            if (host.client !== client || !host.connected) {
+              return;
+            }
+            void loadChatHistory(host as unknown as OpenClawApp);
+          }, delayMs);
+        }
+      }
     },
     onClose: ({ code, reason, error }) => {
       if (host.client !== client) {

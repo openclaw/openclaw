@@ -34,6 +34,8 @@ export async function loadChatHistory(state: ChatState) {
   state.chatLoading = true;
   state.lastError = null;
   try {
+    const hadPendingRun = Boolean(state.chatRunId);
+    const previousCount = state.chatMessages.length;
     const res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
       "chat.history",
       {
@@ -41,8 +43,23 @@ export async function loadChatHistory(state: ChatState) {
         limit: 200,
       },
     );
-    state.chatMessages = Array.isArray(res.messages) ? res.messages : [];
+    const nextMessages = Array.isArray(res.messages) ? res.messages : [];
+    state.chatMessages = nextMessages;
     state.chatThinkingLevel = res.thinkingLevel ?? null;
+
+    // Reconcile stale in-flight state when final events are missed during reconnect windows.
+    if (hadPendingRun && nextMessages.length > previousCount) {
+      const last = nextMessages[nextMessages.length - 1];
+      const role =
+        last && typeof last === "object" && typeof (last as { role?: unknown }).role === "string"
+          ? ((last as { role: string }).role ?? "").toLowerCase()
+          : "";
+      if (role === "assistant") {
+        state.chatRunId = null;
+        state.chatStream = null;
+        state.chatStreamStartedAt = null;
+      }
+    }
   } catch (err) {
     state.lastError = String(err);
   } finally {
