@@ -1,5 +1,7 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveConfigPath } from "../config/paths.js";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId as normalizeSharedAccountId,
@@ -15,12 +17,19 @@ import type {
 
 export { DEFAULT_ACCOUNT_ID } from "../routing/account-id.js";
 
-function readFileIfExists(filePath: string | undefined): string | undefined {
+function readFileIfExists(
+  filePath: string | undefined,
+  configDir: string | undefined,
+): string | undefined {
   if (!filePath) {
     return undefined;
   }
+  // Resolve relative paths against the config file directory so that
+  // `tokenFile: ./token.txt` works regardless of the process working directory.
+  const resolvedPath =
+    configDir && !path.isAbsolute(filePath) ? path.resolve(configDir, filePath) : filePath;
   try {
-    return fs.readFileSync(filePath, "utf-8").trim();
+    return fs.readFileSync(resolvedPath, "utf-8").trim();
   } catch {
     return undefined;
   }
@@ -30,8 +39,9 @@ function resolveToken(params: {
   accountId: string;
   baseConfig?: LineConfig;
   accountConfig?: LineAccountConfig;
+  configDir: string | undefined;
 }): { token: string; tokenSource: LineTokenSource } {
-  const { accountId, baseConfig, accountConfig } = params;
+  const { accountId, baseConfig, accountConfig, configDir } = params;
 
   // Check account-level config first
   if (accountConfig?.channelAccessToken?.trim()) {
@@ -39,7 +49,7 @@ function resolveToken(params: {
   }
 
   // Check account-level token file
-  const accountFileToken = readFileIfExists(accountConfig?.tokenFile);
+  const accountFileToken = readFileIfExists(accountConfig?.tokenFile, configDir);
   if (accountFileToken) {
     return { token: accountFileToken, tokenSource: "file" };
   }
@@ -50,7 +60,7 @@ function resolveToken(params: {
       return { token: baseConfig.channelAccessToken.trim(), tokenSource: "config" };
     }
 
-    const baseFileToken = readFileIfExists(baseConfig?.tokenFile);
+    const baseFileToken = readFileIfExists(baseConfig?.tokenFile, configDir);
     if (baseFileToken) {
       return { token: baseFileToken, tokenSource: "file" };
     }
@@ -68,8 +78,9 @@ function resolveSecret(params: {
   accountId: string;
   baseConfig?: LineConfig;
   accountConfig?: LineAccountConfig;
+  configDir: string | undefined;
 }): string {
-  const { accountId, baseConfig, accountConfig } = params;
+  const { accountId, baseConfig, accountConfig, configDir } = params;
 
   // Check account-level config first
   if (accountConfig?.channelSecret?.trim()) {
@@ -77,7 +88,7 @@ function resolveSecret(params: {
   }
 
   // Check account-level secret file
-  const accountFileSecret = readFileIfExists(accountConfig?.secretFile);
+  const accountFileSecret = readFileIfExists(accountConfig?.secretFile, configDir);
   if (accountFileSecret) {
     return accountFileSecret;
   }
@@ -88,7 +99,7 @@ function resolveSecret(params: {
       return baseConfig.channelSecret.trim();
     }
 
-    const baseFileSecret = readFileIfExists(baseConfig?.secretFile);
+    const baseFileSecret = readFileIfExists(baseConfig?.secretFile, configDir);
     if (baseFileSecret) {
       return baseFileSecret;
     }
@@ -105,6 +116,8 @@ function resolveSecret(params: {
 export function resolveLineAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string;
+  /** Directory of the OpenClaw config file; used to resolve relative tokenFile/secretFile paths. */
+  configDir?: string;
 }): ResolvedLineAccount {
   const cfg = params.cfg;
   const accountId = normalizeSharedAccountId(params.accountId);
@@ -113,16 +126,21 @@ export function resolveLineAccount(params: {
   const accountConfig =
     accountId !== DEFAULT_ACCOUNT_ID ? resolveAccountEntry(accounts, accountId) : undefined;
 
+  // Resolve the config directory so relative tokenFile/secretFile paths work correctly.
+  const configDir = params.configDir ?? path.dirname(resolveConfigPath());
+
   const { token, tokenSource } = resolveToken({
     accountId,
     baseConfig: lineConfig,
     accountConfig,
+    configDir,
   });
 
   const secret = resolveSecret({
     accountId,
     baseConfig: lineConfig,
     accountConfig,
+    configDir,
   });
 
   const {

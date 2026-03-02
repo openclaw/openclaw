@@ -578,19 +578,25 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       for (const account of accounts) {
         const accountId = account.accountId ?? DEFAULT_ACCOUNT_ID;
         if (!account.channelAccessToken?.trim()) {
+          const tokenFile = account.config?.tokenFile;
           issues.push({
             channel: "line",
             accountId,
             kind: "config",
-            message: "LINE channel access token not configured",
+            message: tokenFile
+              ? `LINE tokenFile not readable: ${tokenFile}`
+              : "LINE channel access token not configured",
           });
         }
         if (!account.channelSecret?.trim()) {
+          const secretFile = account.config?.secretFile;
           issues.push({
             channel: "line",
             accountId,
             kind: "config",
-            message: "LINE channel secret not configured",
+            message: secretFile
+              ? `LINE secretFile not readable: ${secretFile}`
+              : "LINE channel secret not configured",
           });
         }
       }

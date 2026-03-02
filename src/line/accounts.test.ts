@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -95,6 +98,77 @@ describe("LINE accounts", () => {
 
       expect(account.channelAccessToken).toBe("");
       expect(account.channelSecret).toBe("");
+      expect(account.tokenSource).toBe("none");
+    });
+
+    it("resolves token from tokenFile with absolute path", () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "line-test-"));
+      try {
+        const tokenPath = path.join(tmpDir, "token.txt");
+        const secretPath = path.join(tmpDir, "secret.txt");
+        fs.writeFileSync(tokenPath, "  absolute-token  ");
+        fs.writeFileSync(secretPath, "  absolute-secret  ");
+
+        const cfg: OpenClawConfig = {
+          channels: {
+            line: {
+              enabled: true,
+              tokenFile: tokenPath,
+              secretFile: secretPath,
+            },
+          },
+        };
+
+        const account = resolveLineAccount({ cfg });
+
+        expect(account.channelAccessToken).toBe("absolute-token");
+        expect(account.channelSecret).toBe("absolute-secret");
+        expect(account.tokenSource).toBe("file");
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true });
+      }
+    });
+
+    it("resolves token from tokenFile with relative path when configDir is provided", () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "line-test-"));
+      try {
+        fs.writeFileSync(path.join(tmpDir, "token.txt"), "  relative-token  ");
+        fs.writeFileSync(path.join(tmpDir, "secret.txt"), "  relative-secret  ");
+
+        const cfg: OpenClawConfig = {
+          channels: {
+            line: {
+              enabled: true,
+              tokenFile: "./token.txt",
+              secretFile: "./secret.txt",
+            },
+          },
+        };
+
+        const account = resolveLineAccount({ cfg, configDir: tmpDir });
+
+        expect(account.channelAccessToken).toBe("relative-token");
+        expect(account.channelSecret).toBe("relative-secret");
+        expect(account.tokenSource).toBe("file");
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true });
+      }
+    });
+
+    it("returns empty token when relative tokenFile cannot be read without configDir", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            enabled: true,
+            tokenFile: "./no-such-file.txt",
+          },
+        },
+      };
+
+      // Without a valid configDir the file will not be found and token is empty.
+      const account = resolveLineAccount({ cfg, configDir: "/nonexistent-dir" });
+
+      expect(account.channelAccessToken).toBe("");
       expect(account.tokenSource).toBe("none");
     });
   });
