@@ -206,12 +206,11 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliOption: "--byteplus-api-key <key>",
     description: "BytePlus API key",
   },
-,
   {
     optionKey: "qiniuApiKey",
     authChoice: "qiniu-api-key",
     cliFlag: "--qiniu-api-key",
     cliOption: "--qiniu-api-key <key>",
     description: "Qiniu Cloud API key",
-  }
+  },
 ];
