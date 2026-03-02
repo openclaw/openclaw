@@ -210,6 +210,7 @@ If you omit `capabilities`, the entry is eligible for the list it appears in.
 
 - `openai/gpt-4o-mini-transcribe`, `groq/whisper-large-v3-turbo`, `deepgram/nova-3`, or `mistral/voxtral-mini-latest`.
 - CLI fallback: `whisper-cli` (whisper-cpp) or `whisper`.
+- `parakeet-mlx` note: with `--output-dir`, OpenClaw reads `<output-dir>/<media-basename>.txt` when output format is `txt` (or unspecified); non-`txt` formats fall back to stdout.
 - Deepgram setup: [Deepgram (audio transcription)](/providers/deepgram).
 
 **Video**

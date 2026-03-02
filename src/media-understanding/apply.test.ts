@@ -477,6 +477,82 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toBe("[Audio]\nTranscript:\ncli transcript");
   });
 
+  it("reads parakeet-mlx transcript from output-dir txt file", async () => {
+    const ctx = await createAudioCtx({ fileName: "sample.wav", mediaType: "audio/wav" });
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+            models: [
+              {
+                type: "cli",
+                command: "parakeet-mlx",
+                args: ["{{MediaPath}}", "--output-format", "txt", "--output-dir", "{{OutputDir}}"],
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    mockedRunExec.mockImplementationOnce(async (_cmd, args) => {
+      const mediaPath = args[0];
+      const outputDirArgIndex = args.indexOf("--output-dir");
+      const outputDir = outputDirArgIndex >= 0 ? args[outputDirArgIndex + 1] : undefined;
+      const transcriptPath =
+        mediaPath && outputDir ? path.join(outputDir, `${path.parse(mediaPath).name}.txt`) : "";
+      if (transcriptPath) {
+        await fs.writeFile(transcriptPath, "parakeet transcript\n");
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    expect(result.appliedAudio).toBe(true);
+    expect(ctx.Transcript).toBe("parakeet transcript");
+    expect(ctx.Body).toBe("[Audio]\nTranscript:\nparakeet transcript");
+  });
+
+  it("falls back to stdout for parakeet-mlx when output format is not txt", async () => {
+    const ctx = await createAudioCtx({ fileName: "sample.wav", mediaType: "audio/wav" });
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+            models: [
+              {
+                type: "cli",
+                command: "parakeet-mlx",
+                args: ["{{MediaPath}}", "--output-format", "json", "--output-dir", "{{OutputDir}}"],
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    mockedRunExec.mockImplementationOnce(async (_cmd, args) => {
+      const mediaPath = args[0];
+      const outputDirArgIndex = args.indexOf("--output-dir");
+      const outputDir = outputDirArgIndex >= 0 ? args[outputDirArgIndex + 1] : undefined;
+      const transcriptPath =
+        mediaPath && outputDir ? path.join(outputDir, `${path.parse(mediaPath).name}.txt`) : "";
+      if (transcriptPath) {
+        await fs.writeFile(transcriptPath, "should-not-be-used\n");
+      }
+      return { stdout: "stdout transcript\n", stderr: "" };
+    });
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    expect(result.appliedAudio).toBe(true);
+    expect(ctx.Transcript).toBe("stdout transcript");
+    expect(ctx.Body).toBe("[Audio]\nTranscript:\nstdout transcript");
+  });
+
   it("auto-detects sherpa for audio when binary and model files are available", async () => {
     const binDir = await createTempMediaDir();
     const modelDir = await createTempMediaDir();
