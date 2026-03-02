@@ -137,6 +137,14 @@ with `params.context1m: true` for supported Opus/Sonnet models.
 OpenClaw maps this to `anthropic-beta: context-1m-2025-08-07` on Anthropic
 requests.
 
+This only activates when `params.context1m` is explicitly set to `true` for
+that model.
+
+Requirement: Anthropic must allow long-context usage on that credential
+(typically API key billing, or a subscription account with Extra Usage
+enabled). Otherwise Anthropic returns:
+`HTTP 429: rate_limit_error: Extra usage is required for long context requests`.
+
 Note: Anthropic currently rejects `context-1m-*` beta requests when using
 OAuth/subscription tokens (`sk-ant-oat-*`). OpenClaw automatically skips the
 context1m beta header for OAuth auth and keeps the required OAuth betas.

@@ -724,6 +724,12 @@ injected by Tailscale.
 HTTP API endpoints (for example `/v1/*`, `/tools/invoke`, and `/api/channels/*`)
 still require token/password auth.
 
+Important boundary note:
+
+- Gateway HTTP bearer auth is effectively all-or-nothing operator access.
+- Treat credentials that can call `/v1/chat/completions`, `/v1/responses`, `/tools/invoke`, or `/api/channels/*` as full-access operator secrets for that gateway.
+- Do not share these credentials with untrusted callers; prefer separate gateways per trust boundary.
+
 **Trust assumption:** tokenless Serve auth assumes the gateway host is trusted.
 Do not treat this as protection against hostile same-host processes. If untrusted
 local code may run on the gateway host, disable `gateway.auth.allowTailscale`
@@ -891,6 +897,15 @@ Also consider agent workspace access inside the sandbox:
 - `agents.defaults.sandbox.workspaceAccess: "rw"` mounts the agent workspace read/write at `/workspace`
 
 Important: `tools.elevated` is the global baseline escape hatch that runs exec on the host. Keep `tools.elevated.allowFrom` tight and don’t enable it for strangers. You can further restrict elevated per agent via `agents.list[].tools.elevated`. See [Elevated Mode](/tools/elevated).
+
+### Sub-agent delegation guardrail
+
+If you allow session tools, treat delegated sub-agent runs as another boundary decision:
+
+- Deny `sessions_spawn` unless the agent truly needs delegation.
+- Keep `agents.list[].subagents.allowAgents` restricted to known-safe target agents.
+- For any workflow that must remain sandboxed, call `sessions_spawn` with `sandbox: "require"` (default is `inherit`).
+- `sandbox: "require"` fails fast when the target child runtime is not sandboxed.
 
 ## Browser control risks
 
