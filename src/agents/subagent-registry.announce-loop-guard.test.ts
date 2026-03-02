@@ -156,6 +156,41 @@ describe("announce loop guard (#18264)", () => {
     expect(stored?.cleanupCompletedAt).toBeDefined();
   });
 
+  test("expired completion-message entries are still resumed for announce", async () => {
+    announceFn.mockReset();
+    announceFn.mockResolvedValueOnce(true);
+    registry.resetSubagentRegistryForTests();
+
+    const now = Date.now();
+    const runId = "test-expired-completion-message";
+    loadSubagentRegistryFromDisk.mockReturnValue(
+      new Map([
+        [
+          runId,
+          {
+            runId,
+            childSessionKey: "agent:main:subagent:child-1",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "agent:main:main",
+            task: "completion announce after long descendants",
+            cleanup: "keep" as const,
+            createdAt: now - 20 * 60_000,
+            startedAt: now - 19 * 60_000,
+            endedAt: now - 10 * 60_000,
+            cleanupHandled: false,
+            expectsCompletionMessage: true,
+          },
+        ],
+      ]),
+    );
+
+    registry.initSubagentRegistry();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(announceFn).toHaveBeenCalledTimes(1);
+  });
+
   test("announce rejection resets cleanupHandled so retries can resume", async () => {
     announceFn.mockReset();
     announceFn.mockRejectedValueOnce(new Error("announce failed"));
