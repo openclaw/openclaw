@@ -2,6 +2,24 @@ import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { applyModelOverrideToSessionEntry } from "./model-overrides.js";
 
+function applyOpenAiSelection(entry: SessionEntry) {
+  return applyModelOverrideToSessionEntry({
+    entry,
+    selection: {
+      provider: "openai",
+      model: "gpt-5.2",
+    },
+  });
+}
+
+function expectRuntimeModelFieldsCleared(entry: SessionEntry, before: number) {
+  expect(entry.providerOverride).toBe("openai");
+  expect(entry.modelOverride).toBe("gpt-5.2");
+  expect(entry.modelProvider).toBeUndefined();
+  expect(entry.model).toBeUndefined();
+  expect((entry.updatedAt ?? 0) > before).toBe(true);
+}
+
 describe("applyModelOverrideToSessionEntry", () => {
   it("clears stale runtime model fields when switching overrides", () => {
     const before = Date.now() - 5_000;
@@ -17,23 +35,13 @@ describe("applyModelOverrideToSessionEntry", () => {
       fallbackNoticeReason: "provider temporary failure",
     };
 
-    const result = applyModelOverrideToSessionEntry({
-      entry,
-      selection: {
-        provider: "openai",
-        model: "gpt-5.2",
-      },
-    });
+    const result = applyOpenAiSelection(entry);
 
     expect(result.updated).toBe(true);
-    expect(entry.providerOverride).toBe("openai");
-    expect(entry.modelOverride).toBe("gpt-5.2");
-    expect(entry.modelProvider).toBeUndefined();
-    expect(entry.model).toBeUndefined();
+    expectRuntimeModelFieldsCleared(entry, before);
     expect(entry.fallbackNoticeSelectedModel).toBeUndefined();
     expect(entry.fallbackNoticeActiveModel).toBeUndefined();
     expect(entry.fallbackNoticeReason).toBeUndefined();
-    expect((entry.updatedAt ?? 0) > before).toBe(true);
   });
 
   it("clears stale runtime model fields even when override selection is unchanged", () => {
@@ -47,20 +55,10 @@ describe("applyModelOverrideToSessionEntry", () => {
       modelOverride: "gpt-5.2",
     };
 
-    const result = applyModelOverrideToSessionEntry({
-      entry,
-      selection: {
-        provider: "openai",
-        model: "gpt-5.2",
-      },
-    });
+    const result = applyOpenAiSelection(entry);
 
     expect(result.updated).toBe(true);
-    expect(entry.providerOverride).toBe("openai");
-    expect(entry.modelOverride).toBe("gpt-5.2");
-    expect(entry.modelProvider).toBeUndefined();
-    expect(entry.model).toBeUndefined();
-    expect((entry.updatedAt ?? 0) > before).toBe(true);
+    expectRuntimeModelFieldsCleared(entry, before);
   });
 
   it("retains aligned runtime model fields when selection and runtime already match", () => {
