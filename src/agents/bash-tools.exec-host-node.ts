@@ -5,10 +5,7 @@ import {
   type ExecAsk,
   type ExecSecurity,
   evaluateShellAllowlist,
-  maxAsk,
-  minSecurity,
   requiresExecApproval,
-  resolveExecApprovals,
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
 import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
@@ -17,10 +14,13 @@ import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-cont
 import { logInfo } from "../logger.js";
 import {
   buildExecApprovalRequesterContext,
-  resolveRegisteredExecApprovalDecision,
   buildExecApprovalTurnSourceContext,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
+import {
+  resolveApprovalDecisionOrUndefined,
+  resolveExecHostApprovalContext,
+} from "./bash-tools.exec-host-shared.js";
 import {
   DEFAULT_APPROVAL_TIMEOUT_MS,
   createApprovalSlug,
@@ -56,16 +56,12 @@ export type ExecuteNodeHostCommandParams = {
 export async function executeNodeHostCommand(
   params: ExecuteNodeHostCommandParams,
 ): Promise<AgentToolResult<ExecToolDetails>> {
-  const approvals = resolveExecApprovals(params.agentId, {
+  const { hostSecurity, hostAsk, askFallback } = resolveExecHostApprovalContext({
+    agentId: params.agentId,
     security: params.security,
     ask: params.ask,
+    host: "node",
   });
-  const hostSecurity = minSecurity(params.security, approvals.agent.security);
-  const hostAsk = maxAsk(params.ask, approvals.agent.ask);
-  const askFallback = approvals.agent.askFallback;
-  if (hostSecurity === "deny") {
-    throw new Error("exec denied: host=node security=deny");
-  }
   if (params.boundNode && params.requestedNode && params.boundNode !== params.requestedNode) {
     throw new Error(`exec node not allowed (bound to ${params.boundNode})`);
   }
@@ -243,17 +239,16 @@ export async function executeNodeHostCommand(
     preResolvedDecision = registration.finalDecision;
 
     void (async () => {
-      let decision: string | null = null;
-      try {
-        decision = await resolveRegisteredExecApprovalDecision({
-          approvalId,
-          preResolvedDecision,
-        });
-      } catch {
-        emitExecSystemEvent(
-          `Exec denied (node=${nodeId} id=${approvalId}, approval-request-failed): ${params.command}`,
-          { sessionKey: params.notifySessionKey, contextKey },
-        );
+      const decision = await resolveApprovalDecisionOrUndefined({
+        approvalId,
+        preResolvedDecision,
+        onFailure: () =>
+          emitExecSystemEvent(
+            `Exec denied (node=${nodeId} id=${approvalId}, approval-request-failed): ${params.command}`,
+            { sessionKey: params.notifySessionKey, contextKey },
+          ),
+      });
+      if (decision === undefined) {
         return;
       }
 
