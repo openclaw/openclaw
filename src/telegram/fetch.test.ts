@@ -248,13 +248,13 @@ describe("resolveTelegramFetch", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
-    expect(AgentCtor).toHaveBeenNthCalledWith(1, {
+    expect(EnvHttpProxyAgentCtor).toHaveBeenNthCalledWith(1, {
       connect: {
         autoSelectFamily: true,
         autoSelectFamilyAttemptTimeout: 300,
       },
     });
-    expect(AgentCtor).toHaveBeenNthCalledWith(2, {
+    expect(EnvHttpProxyAgentCtor).toHaveBeenNthCalledWith(2, {
       connect: {
         autoSelectFamily: false,
         autoSelectFamilyAttemptTimeout: 300,
@@ -286,5 +286,26 @@ describe("resolveTelegramFetch", () => {
     await resolved("https://api.telegram.org/file/botx/photos/file_2.jpg");
 
     expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not retry when fetch fails without fallback network error codes", async () => {
+    const fetchError = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("connect ECONNRESET"), {
+        code: "ECONNRESET",
+      }),
+    });
+    const fetchMock = vi.fn().mockRejectedValue(fetchError);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const resolved = resolveTelegramFetch();
+    if (!resolved) {
+      throw new Error("expected resolved fetch");
+    }
+
+    await expect(resolved("https://api.telegram.org/file/botx/photos/file_3.jpg")).rejects.toThrow(
+      "fetch failed",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
