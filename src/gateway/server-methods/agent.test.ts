@@ -331,14 +331,19 @@ describe("gateway agent handler", () => {
       scopes: ["operator.write"],
       idempotencyKey: "test-sender-owner-write",
       senderIsOwner: false,
+      expectedInputProvenance: undefined,
     },
     {
       name: "passes senderIsOwner=true for admin-scoped gateway callers",
       scopes: ["operator.admin"],
       idempotencyKey: "test-sender-owner-admin",
       senderIsOwner: true,
+      expectedInputProvenance: {
+        kind: "internal_system",
+        sourceTool: "test-client",
+      },
     },
-  ])("$name", async ({ scopes, idempotencyKey, senderIsOwner }) => {
+  ])("$name", async ({ scopes, idempotencyKey, senderIsOwner, expectedInputProvenance }) => {
     primeMainAgentRun();
 
     await invokeAgent(
@@ -346,6 +351,10 @@ describe("gateway agent handler", () => {
         message: "owner-tools check",
         sessionKey: "agent:main:main",
         idempotencyKey,
+        inputProvenance: {
+          kind: "internal_system",
+          sourceTool: "test-client",
+        },
       },
       {
         client: {
@@ -360,9 +369,59 @@ describe("gateway agent handler", () => {
 
     await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
     const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as
-      | { senderIsOwner?: boolean }
+      | {
+          senderIsOwner?: boolean;
+          inputProvenance?: { kind?: string; sourceTool?: string };
+        }
       | undefined;
     expect(callArgs?.senderIsOwner).toBe(senderIsOwner);
+    if (expectedInputProvenance) {
+      expect(callArgs?.inputProvenance).toMatchObject(expectedInputProvenance);
+    } else {
+      expect(callArgs?.inputProvenance).toBeUndefined();
+    }
+  });
+
+  it("keeps non-internal input provenance for write-scoped gateway callers", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "relay from another session",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-provenance-inter-session",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:other",
+          sourceTool: "sessions.send",
+        },
+      },
+      {
+        client: {
+          connect: {
+            role: "operator",
+            scopes: ["operator.write"],
+            client: { id: "test-client", mode: "gateway" },
+          },
+        } as unknown as AgentHandlerArgs["client"],
+      },
+    );
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as
+      | {
+          inputProvenance?: {
+            kind?: string;
+            sourceSessionKey?: string;
+            sourceTool?: string;
+          };
+        }
+      | undefined;
+    expect(callArgs?.inputProvenance).toMatchObject({
+      kind: "inter_session",
+      sourceSessionKey: "agent:main:other",
+      sourceTool: "sessions.send",
+    });
   });
 
   it("respects explicit bestEffortDeliver=false for main session runs", async () => {

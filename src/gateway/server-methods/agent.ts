@@ -62,6 +62,16 @@ function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["cl
   return scopes.includes(ADMIN_SCOPE);
 }
 
+function sanitizeGatewayInputProvenance(params: {
+  client: GatewayRequestHandlerOptions["client"];
+  inputProvenance: InputProvenance | undefined;
+}): InputProvenance | undefined {
+  if (params.inputProvenance?.kind !== "internal_system") {
+    return params.inputProvenance;
+  }
+  return resolveSenderIsOwnerFromClient(params.client) ? params.inputProvenance : undefined;
+}
+
 function isGatewayErrorShape(value: unknown): value is { code: string; message: string } {
   if (!value || typeof value !== "object") {
     return false;
@@ -218,7 +228,10 @@ export const agentHandlers: GatewayRequestHandlers = {
     let resolvedGroupSpace: string | undefined = groupSpaceRaw || undefined;
     let spawnedByValue =
       typeof request.spawnedBy === "string" ? request.spawnedBy.trim() : undefined;
-    const inputProvenance = normalizeInputProvenance(request.inputProvenance);
+    const inputProvenance = sanitizeGatewayInputProvenance({
+      client,
+      inputProvenance: normalizeInputProvenance(request.inputProvenance),
+    });
     const cached = context.dedupe.get(`agent:${idem}`);
     if (cached) {
       respond(cached.ok, cached.payload, cached.error, {
