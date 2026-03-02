@@ -178,4 +178,47 @@ describe("cron store migration", () => {
     expect(schedule.kind).toBe("cron");
     expect(schedule.staggerMs).toBeUndefined();
   });
+
+  it("migrates legacy string schedules and command-only payloads (#18445)", async () => {
+    const store = await makeStorePath();
+    try {
+      await writeLegacyStore(store.storePath, {
+        id: "imessage-refresh",
+        name: "iMessage Refresh",
+        enabled: true,
+        createdAtMs: 1_700_000_000_000,
+        updatedAtMs: 1_700_000_000_000,
+        schedule: "0 */2 * * *",
+        command: "bash /tmp/imessage-refresh.sh",
+        timeout: 120,
+        state: {},
+      });
+
+      await migrateAndLoadFirstJob(store.storePath);
+      const loaded = await loadCronStore(store.storePath);
+      const migrated = loaded.jobs[0] as Record<string, unknown>;
+
+      expect(migrated.schedule).toEqual(
+        expect.objectContaining({
+          kind: "cron",
+          expr: "0 */2 * * *",
+        }),
+      );
+      expect(migrated.sessionTarget).toBe("main");
+      expect(migrated.wakeMode).toBe("now");
+      expect(migrated.payload).toEqual({
+        kind: "systemEvent",
+        text: "bash /tmp/imessage-refresh.sh",
+      });
+      expect("command" in migrated).toBe(false);
+      expect("timeout" in migrated).toBe(false);
+
+      const scheduleWarn = noopLogger.warn.mock.calls.find((args) =>
+        String(args[1] ?? "").includes("failed to compute next run for job (skipping)"),
+      );
+      expect(scheduleWarn).toBeUndefined();
+    } finally {
+      await store.cleanup();
+    }
+  });
 });

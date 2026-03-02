@@ -1,7 +1,6 @@
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
-  createAuthChoiceDefaultModelApplier,
-  createAuthChoiceModelStateBridge,
+  createAuthChoiceDefaultModelApplierForMutableState,
   ensureApiKeyFromOptionEnvOrPrompt,
   normalizeSecretInputModeInput,
 } from "./auth-choice.apply-helpers.js";
@@ -23,14 +22,12 @@ export async function applyAuthChoiceMiniMax(
 ): Promise<ApplyAuthChoiceResult | null> {
   let nextConfig = params.config;
   let agentModelOverride: string | undefined;
-  const applyProviderDefaultModel = createAuthChoiceDefaultModelApplier(
+  const applyProviderDefaultModel = createAuthChoiceDefaultModelApplierForMutableState(
     params,
-    createAuthChoiceModelStateBridge({
-      getConfig: () => nextConfig,
-      setConfig: (config) => (nextConfig = config),
-      getAgentModelOverride: () => agentModelOverride,
-      setAgentModelOverride: (model) => (agentModelOverride = model),
-    }),
+    () => nextConfig,
+    (config) => (nextConfig = config),
+    () => agentModelOverride,
+    (model) => (agentModelOverride = model),
   );
   const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
   const ensureMinimaxApiKey = async (opts: {

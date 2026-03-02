@@ -42,7 +42,7 @@ describe("handleControlUiHttpRequest", () => {
 
   function runControlUiRequest(params: {
     url: string;
-    method: "GET" | "HEAD";
+    method: "GET" | "HEAD" | "POST";
     rootPath: string;
     basePath?: string;
   }) {
@@ -321,6 +321,100 @@ describe("handleControlUiHttpRequest", () => {
           expectNotFoundResponse({ handled, res, end });
         } finally {
           await fs.rm(outsideDir, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
+  it("does not handle POST to root-mounted paths (plugin webhook passthrough)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        for (const webhookPath of ["/bluebubbles-webhook", "/custom-webhook", "/callback"]) {
+          const { res } = makeMockHttpResponse();
+          const handled = handleControlUiHttpRequest(
+            { url: webhookPath, method: "POST" } as IncomingMessage,
+            res,
+            { root: { kind: "resolved", path: tmp } },
+          );
+          expect(handled, `POST to ${webhookPath} should pass through to plugin handlers`).toBe(
+            false,
+          );
+        }
+      },
+    });
+  });
+
+  it("does not handle POST to paths outside basePath", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res } = makeMockHttpResponse();
+        const handled = handleControlUiHttpRequest(
+          { url: "/bluebubbles-webhook", method: "POST" } as IncomingMessage,
+          res,
+          { basePath: "/openclaw", root: { kind: "resolved", path: tmp } },
+        );
+        expect(handled).toBe(false);
+      },
+    });
+  });
+
+  it("does not handle /api paths when basePath is empty", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        for (const apiPath of ["/api", "/api/sessions", "/api/channels/nostr"]) {
+          const { handled } = runControlUiRequest({
+            url: apiPath,
+            method: "GET",
+            rootPath: tmp,
+          });
+          expect(handled, `expected ${apiPath} to not be handled`).toBe(false);
+        }
+      },
+    });
+  });
+
+  it("does not handle /plugins paths when basePath is empty", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        for (const pluginPath of ["/plugins", "/plugins/diffs/view/abc/def"]) {
+          const { handled } = runControlUiRequest({
+            url: pluginPath,
+            method: "GET",
+            rootPath: tmp,
+          });
+          expect(handled, `expected ${pluginPath} to not be handled`).toBe(false);
+        }
+      },
+    });
+  });
+
+  it("falls through POST requests when basePath is empty", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { handled, end } = runControlUiRequest({
+          url: "/webhook/bluebubbles",
+          method: "POST",
+          rootPath: tmp,
+        });
+        expect(handled).toBe(false);
+        expect(end).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  it("returns 405 for POST requests under configured basePath", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        for (const route of ["/openclaw", "/openclaw/", "/openclaw/some-page"]) {
+          const { handled, res, end } = runControlUiRequest({
+            url: route,
+            method: "POST",
+            rootPath: tmp,
+            basePath: "/openclaw",
+          });
+          expect(handled, `expected ${route} to be handled`).toBe(true);
+          expect(res.statusCode, `expected ${route} status`).toBe(405);
+          expect(end, `expected ${route} body`).toHaveBeenCalledWith("Method Not Allowed");
         }
       },
     });

@@ -3,7 +3,14 @@ import {
   resolveChannelGroupToolsPolicy,
 } from "../config/group-policy.js";
 import { resolveDiscordAccount } from "../discord/accounts.js";
-import { resolveIMessageAccount } from "../imessage/accounts.js";
+import {
+  formatTrimmedAllowFromEntries,
+  formatWhatsAppConfigAllowFromEntries,
+  resolveIMessageConfigAllowFrom,
+  resolveIMessageConfigDefaultTo,
+  resolveWhatsAppConfigAllowFrom,
+  resolveWhatsAppConfigDefaultTo,
+} from "../plugin-sdk/channel-config-helpers.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { resolveSignalAccount } from "../signal/accounts.js";
@@ -11,7 +18,6 @@ import { resolveSlackAccount, resolveSlackReplyToMode } from "../slack/accounts.
 import { buildSlackThreadingToolContext } from "../slack/threading-tool-context.js";
 import { resolveTelegramAccount } from "../telegram/accounts.js";
 import { normalizeE164 } from "../utils.js";
-import { resolveWhatsAppAccount } from "../web/accounts.js";
 import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
@@ -27,7 +33,6 @@ import {
   resolveWhatsAppGroupToolPolicy,
 } from "./plugins/group-mentions.js";
 import { normalizeSignalMessagingTarget } from "./plugins/normalize/signal.js";
-import { normalizeWhatsAppAllowFromEntries } from "./plugins/normalize/whatsapp.js";
 import type {
   ChannelCapabilities,
   ChannelCommandAdapter,
@@ -289,15 +294,9 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     outbound: DEFAULT_OUTBOUND_TEXT_CHUNK_LIMIT_4000,
     config: {
-      resolveAllowFrom: ({ cfg, accountId }) =>
-        resolveWhatsAppAccount({ cfg, accountId }).allowFrom ?? [],
-      formatAllowFrom: ({ allowFrom }) => normalizeWhatsAppAllowFromEntries(allowFrom),
-      resolveDefaultTo: ({ cfg, accountId }) => {
-        const root = cfg.channels?.whatsapp;
-        const normalized = normalizeAccountId(accountId);
-        const account = root?.accounts?.[normalized];
-        return (account?.defaultTo ?? root?.defaultTo)?.trim() || undefined;
-      },
+      resolveAllowFrom: ({ cfg, accountId }) => resolveWhatsAppConfigAllowFrom({ cfg, accountId }),
+      formatAllowFrom: ({ allowFrom }) => formatWhatsAppConfigAllowFromEntries(allowFrom),
+      resolveDefaultTo: ({ cfg, accountId }) => resolveWhatsAppConfigDefaultTo({ cfg, accountId }),
     },
     groups: {
       resolveRequireMention: resolveWhatsAppGroupRequireMention,
@@ -534,14 +533,9 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     outbound: DEFAULT_OUTBOUND_TEXT_CHUNK_LIMIT_4000,
     config: {
-      resolveAllowFrom: ({ cfg, accountId }) =>
-        (resolveIMessageAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
-          String(entry),
-        ),
-      formatAllowFrom: ({ allowFrom }) =>
-        allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
-      resolveDefaultTo: ({ cfg, accountId }) =>
-        resolveIMessageAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
+      resolveAllowFrom: ({ cfg, accountId }) => resolveIMessageConfigAllowFrom({ cfg, accountId }),
+      formatAllowFrom: ({ allowFrom }) => formatTrimmedAllowFromEntries(allowFrom),
+      resolveDefaultTo: ({ cfg, accountId }) => resolveIMessageConfigDefaultTo({ cfg, accountId }),
     },
     groups: {
       resolveRequireMention: resolveIMessageGroupRequireMention,

@@ -35,6 +35,15 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 }
 ```
 
+## Thinking defaults (Claude 4.6)
+
+- Anthropic Claude 4.6 models default to `adaptive` thinking in OpenClaw when no explicit thinking level is set.
+- You can override per-message (`/think:<level>`) or in model params:
+  `agents.defaults.models["anthropic/<model>"].params.thinking`.
+- Related Anthropic docs:
+  - [Adaptive thinking](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking)
+  - [Extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
+
 ## Prompt caching (Anthropic API)
 
 OpenClaw supports Anthropic's prompt caching feature. This is **API-only**; subscription auth does not honor cache settings.
@@ -136,6 +145,14 @@ with `params.context1m: true` for supported Opus/Sonnet models.
 
 OpenClaw maps this to `anthropic-beta: context-1m-2025-08-07` on Anthropic
 requests.
+
+This only activates when `params.context1m` is explicitly set to `true` for
+that model.
+
+Requirement: Anthropic must allow long-context usage on that credential
+(typically API key billing, or a subscription account with Extra Usage
+enabled). Otherwise Anthropic returns:
+`HTTP 429: rate_limit_error: Extra usage is required for long context requests`.
 
 Note: Anthropic currently rejects `context-1m-*` beta requests when using
 OAuth/subscription tokens (`sk-ant-oat-*`). OpenClaw automatically skips the

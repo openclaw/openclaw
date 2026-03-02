@@ -30,11 +30,17 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
-import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
+import type {
+  DmPolicy,
+  TelegramDirectConfig,
+  TelegramGroupConfig,
+  TelegramTopicConfig,
+} from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "../routing/session-key.js";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   firstDefined,
@@ -87,7 +93,10 @@ type TelegramLogger = {
 type ResolveTelegramGroupConfig = (
   chatId: string | number,
   messageThreadId?: number,
-) => { groupConfig?: TelegramGroupConfig; topicConfig?: TelegramTopicConfig };
+) => {
+  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+  topicConfig?: TelegramTopicConfig;
+};
 
 type ResolveGroupActivation = (params: {
   chatId: string | number;
@@ -112,7 +121,7 @@ export type BuildTelegramMessageContextParams = {
   dmPolicy: DmPolicy;
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
-  ackReactionScope: "off" | "group-mentions" | "group-all" | "direct" | "all";
+  ackReactionScope: "off" | "none" | "group-mentions" | "group-all" | "direct" | "all";
   logger: TelegramLogger;
   resolveGroupActivation: ResolveGroupActivation;
   resolveGroupRequireMention: ResolveGroupRequireMention;
@@ -174,7 +183,14 @@ export const buildTelegramMessageContext = async ({
   });
   const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
   const replyThreadId = threadSpec.id;
-  const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
+  const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
+  const threadIdForConfig = resolvedThreadId ?? dmThreadId;
+  const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, threadIdForConfig);
+  // Use direct config dmPolicy override if available for DMs
+  const effectiveDmPolicy =
+    !isGroup && groupConfig && "dmPolicy" in groupConfig
+      ? (groupConfig.dmPolicy ?? dmPolicy)
+      : dmPolicy;
   const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
   const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
   // Fresh config for bindings lookup; other routing inputs are payload-derived.
@@ -188,17 +204,34 @@ export const buildTelegramMessageContext = async ({
     },
     parentPeer,
   });
+  // Fail closed for named Telegram accounts when route resolution falls back to
+  // default-agent routing. This prevents cross-account DM/session contamination.
+  if (route.accountId !== DEFAULT_ACCOUNT_ID && route.matchedBy === "default") {
+    logInboundDrop({
+      log: logVerbose,
+      channel: "telegram",
+      reason: "non-default account requires explicit binding",
+      target: route.accountId,
+    });
+    return null;
+  }
   const baseSessionKey = route.sessionKey;
-  // DMs: use raw messageThreadId for thread sessions (not forum topic ids)
-  const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
+  // DMs: use thread suffix for session isolation (works regardless of dmScope)
   const threadKeys =
     dmThreadId != null
-      ? resolveThreadSessionKeys({ baseSessionKey, threadId: String(dmThreadId) })
+      ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${chatId}:${dmThreadId}` })
       : null;
   const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
   const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
-  const effectiveDmAllow = normalizeDmAllowFromWithStore({ allowFrom, storeAllowFrom, dmPolicy });
+  // Calculate groupAllowOverride first - it's needed for both DM and group allowlist checks
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
+  // For DMs, prefer per-DM/topic allowFrom (groupAllowOverride) over account-level allowFrom
+  const dmAllowFrom = groupAllowOverride ?? allowFrom;
+  const effectiveDmAllow = normalizeDmAllowFromWithStore({
+    allowFrom: dmAllowFrom,
+    storeAllowFrom,
+    dmPolicy: effectiveDmPolicy,
+  });
   // Group sender checks are explicit and must not inherit DM pairing-store entries.
   const effectiveGroupAllow = normalizeAllowFrom(groupAllowOverride ?? groupAllowFrom);
   const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
@@ -226,7 +259,11 @@ export const buildTelegramMessageContext = async ({
       );
       return null;
     }
-    logVerbose(`Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`);
+    logVerbose(
+      isGroup
+        ? `Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`
+        : `Blocked telegram DM sender ${senderId || "unknown"} (DM allowFrom override)`,
+    );
     return null;
   }
 
@@ -241,9 +278,16 @@ export const buildTelegramMessageContext = async ({
   const requireMention = firstDefined(
     activationOverride,
     topicConfig?.requireMention,
-    groupConfig?.requireMention,
+    (groupConfig as TelegramGroupConfig | undefined)?.requireMention,
     baseRequireMention,
   );
+
+  const requireTopic = (groupConfig as TelegramDirectConfig | undefined)?.requireTopic;
+  const topicRequiredButMissing = !isGroup && requireTopic === true && dmThreadId == null;
+  if (topicRequiredButMissing) {
+    logVerbose(`Blocked telegram DM ${chatId}: requireTopic=true but no topic present`);
+    return null;
+  }
 
   const sendTyping = async () => {
     await withTelegramApiErrorLogging({
@@ -276,7 +320,7 @@ export const buildTelegramMessageContext = async ({
   if (
     !(await enforceTelegramDmAccess({
       isGroup,
-      dmPolicy,
+      dmPolicy: effectiveDmPolicy,
       msg,
       chatId,
       effectiveDmAllow,
@@ -658,7 +702,7 @@ export const buildTelegramMessageContext = async ({
     ChatType: isGroup ? "group" : "direct",
     ConversationLabel: conversationLabel,
     GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
-    GroupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
+    GroupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
     SenderName: senderName,
     SenderId: senderId || undefined,
     SenderUsername: senderUsername || undefined,
@@ -711,6 +755,14 @@ export const buildTelegramMessageContext = async ({
     OriginatingTo: `telegram:${chatId}`,
   });
 
+  const pinnedMainDmOwner = !isGroup
+    ? resolvePinnedMainDmOwnerFromAllowlist({
+        dmScope: cfg.session?.dmScope,
+        allowFrom: dmAllowFrom,
+        normalizeEntry: (entry) => normalizeAllowFrom([entry]).entries[0],
+      })
+    : null;
+
   await recordInboundSession({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? sessionKey,
@@ -723,6 +775,18 @@ export const buildTelegramMessageContext = async ({
           accountId: route.accountId,
           // Preserve DM topic threadId for replies (fixes #8891)
           threadId: dmThreadId != null ? String(dmThreadId) : undefined,
+          mainDmOwnerPin:
+            pinnedMainDmOwner && senderId
+              ? {
+                  ownerRecipient: pinnedMainDmOwner,
+                  senderRecipient: senderId,
+                  onSkip: ({ ownerRecipient, senderRecipient }) => {
+                    logVerbose(
+                      `telegram: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                    );
+                  },
+                }
+              : undefined,
         }
       : undefined,
     onRecordError: (err) => {

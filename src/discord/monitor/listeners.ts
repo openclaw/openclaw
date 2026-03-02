@@ -11,6 +11,7 @@ import { danger, logVerbose } from "../../globals.js";
 import { formatDurationSeconds } from "../../infra/format-time/format-duration.ts";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
   readStoreAllowFromForDmPolicy,
@@ -54,6 +55,7 @@ type DiscordReactionListenerParams = {
   allowNameMatching: boolean;
   guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
   logger: Logger;
+  onEvent?: () => void;
 };
 
 const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 30_000;
@@ -118,24 +120,34 @@ export function registerDiscordListener(listeners: Array<object>, listener: obje
 }
 
 export class DiscordMessageListener extends MessageCreateListener {
+  private readonly channelQueue = new KeyedAsyncQueue();
+
   constructor(
     private handler: DiscordMessageHandler,
     private logger?: Logger,
+    private onEvent?: () => void,
   ) {
     super();
   }
 
   async handle(data: DiscordMessageEvent, client: Client) {
-    await runDiscordListenerWithSlowLog({
-      logger: this.logger,
-      listener: this.constructor.name,
-      event: this.type,
-      run: () => this.handler(data, client),
-      onError: (err) => {
-        const logger = this.logger ?? discordEventQueueLog;
-        logger.error(danger(`discord handler failed: ${String(err)}`));
-      },
-    });
+    this.onEvent?.();
+    const channelId = data.channel_id;
+    // Serialize messages within the same channel to preserve ordering,
+    // but allow different channels to proceed in parallel so that
+    // channel-bound agents are not blocked by each other.
+    void this.channelQueue.enqueue(channelId, () =>
+      runDiscordListenerWithSlowLog({
+        logger: this.logger,
+        listener: this.constructor.name,
+        event: this.type,
+        run: () => this.handler(data, client),
+        onError: (err) => {
+          const logger = this.logger ?? discordEventQueueLog;
+          logger.error(danger(`discord handler failed: ${String(err)}`));
+        },
+      }),
+    );
   }
 }
 
@@ -145,6 +157,7 @@ export class DiscordReactionListener extends MessageReactionAddListener {
   }
 
   async handle(data: DiscordReactionEvent, client: Client) {
+    this.params.onEvent?.();
     await runDiscordReactionHandler({
       data,
       client,
@@ -162,6 +175,7 @@ export class DiscordReactionRemoveListener extends MessageReactionRemoveListener
   }
 
   async handle(data: DiscordReactionEvent, client: Client) {
+    this.params.onEvent?.();
     await runDiscordReactionHandler({
       data,
       client,
@@ -357,7 +371,7 @@ async function handleDiscordReactionEvent(params: {
       channelType === ChannelType.PublicThread ||
       channelType === ChannelType.PrivateThread ||
       channelType === ChannelType.AnnouncementThread;
-    const ingressAccess = await authorizeDiscordReactionIngress({
+    const reactionIngressBase: Omit<DiscordReactionIngressAuthorizationParams, "channelConfig"> = {
       accountId: params.accountId,
       user,
       isDirectMessage,
@@ -374,7 +388,8 @@ async function handleDiscordReactionEvent(params: {
       groupPolicy: params.groupPolicy,
       allowNameMatching: params.allowNameMatching,
       guildInfo,
-    });
+    };
+    const ingressAccess = await authorizeDiscordReactionIngress(reactionIngressBase);
     if (!ingressAccess.allowed) {
       logVerbose(`discord reaction blocked sender=${user.id} (reason=${ingressAccess.reason})`);
       return;
@@ -465,6 +480,18 @@ async function handleDiscordReactionEvent(params: {
         parentSlug,
         scope: "thread",
       });
+    const authorizeReactionIngressForChannel = async (
+      channelConfig: ReturnType<typeof resolveDiscordChannelConfigWithFallback>,
+    ) =>
+      await authorizeDiscordReactionIngress({
+        ...reactionIngressBase,
+        channelConfig,
+      });
+    const authorizeThreadChannelAccess = async (channelInfo: { parentId?: string } | null) => {
+      parentId = channelInfo?.parentId;
+      await loadThreadParentInfo();
+      return await authorizeReactionIngressForChannel(resolveThreadChannelConfig());
+    };
 
     // Parallelize async operations for thread channels
     if (isThreadChannel) {
@@ -482,29 +509,7 @@ async function handleDiscordReactionEvent(params: {
       // Fast path: for "all" and "allowlist" modes, we don't need to fetch the message
       if (reactionMode === "all" || reactionMode === "allowlist") {
         const channelInfo = await channelInfoPromise;
-        parentId = channelInfo?.parentId;
-        await loadThreadParentInfo();
-
-        const channelConfig = resolveThreadChannelConfig();
-        const threadAccess = await authorizeDiscordReactionIngress({
-          accountId: params.accountId,
-          user,
-          isDirectMessage,
-          isGroupDm,
-          isGuildMessage,
-          channelId: data.channel_id,
-          channelName,
-          channelSlug,
-          dmEnabled: params.dmEnabled,
-          groupDmEnabled: params.groupDmEnabled,
-          groupDmChannels: params.groupDmChannels,
-          dmPolicy: params.dmPolicy,
-          allowFrom: params.allowFrom,
-          groupPolicy: params.groupPolicy,
-          allowNameMatching: params.allowNameMatching,
-          guildInfo,
-          channelConfig,
-        });
+        const threadAccess = await authorizeThreadChannelAccess(channelInfo);
         if (!threadAccess.allowed) {
           return;
         }
@@ -525,29 +530,7 @@ async function handleDiscordReactionEvent(params: {
       const messagePromise = data.message.fetch().catch(() => null);
 
       const [channelInfo, message] = await Promise.all([channelInfoPromise, messagePromise]);
-      parentId = channelInfo?.parentId;
-      await loadThreadParentInfo();
-
-      const channelConfig = resolveThreadChannelConfig();
-      const threadAccess = await authorizeDiscordReactionIngress({
-        accountId: params.accountId,
-        user,
-        isDirectMessage,
-        isGroupDm,
-        isGuildMessage,
-        channelId: data.channel_id,
-        channelName,
-        channelSlug,
-        dmEnabled: params.dmEnabled,
-        groupDmEnabled: params.groupDmEnabled,
-        groupDmChannels: params.groupDmChannels,
-        dmPolicy: params.dmPolicy,
-        allowFrom: params.allowFrom,
-        groupPolicy: params.groupPolicy,
-        allowNameMatching: params.allowNameMatching,
-        guildInfo,
-        channelConfig,
-      });
+      const threadAccess = await authorizeThreadChannelAccess(channelInfo);
       if (!threadAccess.allowed) {
         return;
       }
@@ -573,25 +556,7 @@ async function handleDiscordReactionEvent(params: {
       scope: "channel",
     });
     if (isGuildMessage) {
-      const channelAccess = await authorizeDiscordReactionIngress({
-        accountId: params.accountId,
-        user,
-        isDirectMessage,
-        isGroupDm,
-        isGuildMessage,
-        channelId: data.channel_id,
-        channelName,
-        channelSlug,
-        dmEnabled: params.dmEnabled,
-        groupDmEnabled: params.groupDmEnabled,
-        groupDmChannels: params.groupDmChannels,
-        dmPolicy: params.dmPolicy,
-        allowFrom: params.allowFrom,
-        groupPolicy: params.groupPolicy,
-        allowNameMatching: params.allowNameMatching,
-        guildInfo,
-        channelConfig,
-      });
+      const channelAccess = await authorizeReactionIngressForChannel(channelConfig);
       if (!channelAccess.allowed) {
         return;
       }

@@ -30,6 +30,7 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
   }
 
   let browserAuth = resolveBrowserControlAuth(cfg);
+  let browserAuthBootstrapFailed = false;
   try {
     const ensured = await ensureBrowserControlAuth({ cfg });
     browserAuth = ensured.auth;
@@ -38,6 +39,16 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
     }
   } catch (err) {
     logServer.warn(`failed to auto-configure browser auth: ${String(err)}`);
+    browserAuthBootstrapFailed = true;
+  }
+
+  // Fail closed: if auth bootstrap failed and no explicit auth is available,
+  // do not start the browser control HTTP server.
+  if (browserAuthBootstrapFailed && !browserAuth.token && !browserAuth.password) {
+    logServer.error(
+      "browser control startup aborted: authentication bootstrap failed and no fallback auth is configured.",
+    );
+    return null;
   }
 
   const app = express();

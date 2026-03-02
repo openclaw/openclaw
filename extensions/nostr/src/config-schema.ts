@@ -60,6 +60,9 @@ export const NostrConfigSchema = z.object({
   /** Account name (optional display name) */
   name: z.string().optional(),
 
+  /** Optional default account id for routing/account selection. */
+  defaultAccount: z.string().optional(),
+
   /** Whether this channel is enabled */
   enabled: z.boolean().optional(),
 

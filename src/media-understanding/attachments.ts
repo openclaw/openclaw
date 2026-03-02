@@ -169,23 +169,47 @@ function orderAttachments(
   attachments: MediaAttachment[],
   prefer?: MediaUnderstandingAttachmentsConfig["prefer"],
 ): MediaAttachment[] {
+  const list = Array.isArray(attachments) ? attachments.filter(isAttachmentRecord) : [];
   if (!prefer || prefer === "first") {
-    return attachments;
+    return list;
   }
   if (prefer === "last") {
-    return [...attachments].toReversed();
+    return [...list].toReversed();
   }
   if (prefer === "path") {
-    const withPath = attachments.filter((item) => item.path);
-    const withoutPath = attachments.filter((item) => !item.path);
+    const withPath = list.filter((item) => item.path);
+    const withoutPath = list.filter((item) => !item.path);
     return [...withPath, ...withoutPath];
   }
   if (prefer === "url") {
-    const withUrl = attachments.filter((item) => item.url);
-    const withoutUrl = attachments.filter((item) => !item.url);
+    const withUrl = list.filter((item) => item.url);
+    const withoutUrl = list.filter((item) => !item.url);
     return [...withUrl, ...withoutUrl];
   }
-  return attachments;
+  return list;
+}
+
+function isAttachmentRecord(value: unknown): value is MediaAttachment {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const entry = value as Record<string, unknown>;
+  if (typeof entry.index !== "number") {
+    return false;
+  }
+  if (entry.path !== undefined && typeof entry.path !== "string") {
+    return false;
+  }
+  if (entry.url !== undefined && typeof entry.url !== "string") {
+    return false;
+  }
+  if (entry.mime !== undefined && typeof entry.mime !== "string") {
+    return false;
+  }
+  if (entry.alreadyTranscribed !== undefined && typeof entry.alreadyTranscribed !== "boolean") {
+    return false;
+  }
+  return true;
 }
 
 export function selectAttachments(params: {
@@ -194,7 +218,8 @@ export function selectAttachments(params: {
   policy?: MediaUnderstandingAttachmentsConfig;
 }): MediaAttachment[] {
   const { capability, attachments, policy } = params;
-  const matches = attachments.filter((item) => {
+  const input = Array.isArray(attachments) ? attachments.filter(isAttachmentRecord) : [];
+  const matches = input.filter((item) => {
     // Skip already-transcribed audio attachments from preflight
     if (capability === "audio" && item.alreadyTranscribed) {
       return false;
