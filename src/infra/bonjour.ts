@@ -23,6 +23,11 @@ export type GatewayBonjourAdvertiseOpts = {
    * Reduces information disclosure for better operational security.
    */
   minimal?: boolean;
+  /**
+   * List of network interfaces to use for mDNS discovery.
+   * If not specified, all available interfaces will be used.
+   */
+  interfaces?: string[];
 };
 
 function isDisabledByEnv() {
@@ -89,7 +94,11 @@ export async function startGatewayBonjourAdvertiser(
   }
 
   const { getResponder, Protocol } = await import("@homebridge/ciao");
-  const responder = getResponder();
+
+  // Use user-specified interfaces if provided, otherwise use default behavior
+  const responder = getResponder({
+    interface: opts.interfaces,
+  });
 
   // mDNS service instance names are single DNS labels; dots in hostnames (like
   // `Mac.localdomain`) can confuse some resolvers/browsers and break discovery.
