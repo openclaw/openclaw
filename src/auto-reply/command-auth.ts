@@ -116,6 +116,11 @@ function resolveOwnerAllowFromList(params: {
     if (!trimmed) {
       continue;
     }
+    // Wildcard is explicitly ignored for ownership
+    if (trimmed === "*") {
+      console.warn("[security] ownerAllowFrom: wildcard '*' is not allowed for System Owner");
+      continue;
+    }
     const separatorIndex = trimmed.indexOf(":");
     if (separatorIndex > 0) {
       const prefix = trimmed.slice(0, separatorIndex);
@@ -125,13 +130,21 @@ function resolveOwnerAllowFromList(params: {
           continue;
         }
         const remainder = trimmed.slice(separatorIndex + 1).trim();
-        if (remainder) {
+        // For ownership, only accept numeric IDs (prevent nickname spoofing)
+        if (remainder && /^\d+$/.test(remainder)) {
           filtered.push(remainder);
+        } else if (remainder) {
+          console.warn(`[security] ownerAllowFrom: ignoring non-numeric entry '${remainder}' (use Discord/Telegram user ID)`);
         }
         continue;
       }
     }
-    filtered.push(trimmed);
+    // For unprefixed entries, only accept numeric IDs
+    if (/^\d+$/.test(trimmed)) {
+      filtered.push(trimmed);
+    } else {
+      console.warn(`[security] ownerAllowFrom: ignoring non-numeric entry '${trimmed}' (use user ID, not nickname)`);
+    }
   }
   return formatAllowFromList({
     dock: params.dock,

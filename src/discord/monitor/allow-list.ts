@@ -118,6 +118,24 @@ export function allowListMatches(
   return false;
 }
 
+/**
+ * Strict ID-only matching for System Owner checks.
+ * NEVER uses name matching to prevent nickname spoofing.
+ * @returns true only if candidate.id exactly matches an entry in allowList.ids
+ */
+export function resolveDiscordOwnerIdMatch(params: {
+  allowList: DiscordAllowList;
+  userId: string;
+}): boolean {
+  const { allowList, userId } = params;
+  // Ownership should never be wildcard
+  if (allowList.allowAll) {
+    return false;
+  }
+  // Only check ID, never name or tag
+  return allowList.ids.has(userId);
+}
+
 export function resolveDiscordAllowListMatch(params: {
   allowList: DiscordAllowList;
   candidate: { id?: string; name?: string; tag?: string };
@@ -250,19 +268,13 @@ export function resolveDiscordOwnerAllowFrom(params: {
   if (!allowList) {
     return undefined;
   }
-  const match = resolveDiscordAllowListMatch({
-    allowList,
-    candidate: {
-      id: params.sender.id,
-      name: params.sender.name,
-      tag: params.sender.tag,
-    },
-    allowNameMatching: params.allowNameMatching,
-  });
-  if (!match.allowed || !match.matchKey || match.matchKey === "*") {
+  // For ownership, ONLY check ID (never name/tag) to prevent nickname spoofing
+  const isOwner = resolveDiscordOwnerIdMatch({ allowList, userId: params.sender.id });
+  if (!isOwner) {
     return undefined;
   }
-  return [match.matchKey];
+  // Return the matched ID (never a name)
+  return [params.sender.id];
 }
 
 export function resolveDiscordCommandAuthorized(params: {

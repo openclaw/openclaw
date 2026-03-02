@@ -51,6 +51,7 @@ import {
   detectLegacyStateMigrations,
   runLegacyStateMigrations,
 } from "./doctor-state-migrations.js";
+import { maybePromptForSystemOwner } from "./doctor-system-owner.js";
 import { maybeRepairUiProtocolFreshness } from "./doctor-ui.js";
 import { maybeOfferUpdateBeforeDoctor } from "./doctor-update.js";
 import { noteWorkspaceStatus } from "./doctor-workspace-status.js";
@@ -199,6 +200,17 @@ export async function doctorCommand(
   await maybeRepairGatewayServiceConfig(cfg, resolveMode(cfg), runtime, prompter);
   await noteMacLaunchAgentOverrides();
   await noteMacLaunchctlGatewayEnvOverrides(cfg);
+
+  // Check and prompt for System Owner if needed
+  const systemOwnerResult = await maybePromptForSystemOwner({
+    cfg,
+    prompter,
+    nonInteractive: options.nonInteractive,
+  });
+  if (systemOwnerResult.changed) {
+    cfg = systemOwnerResult.cfg;
+    cfgForPersistence = cfg;
+  }
 
   await noteSecurityWarnings(cfg);
   await noteOpenAIOAuthTlsPrerequisites({
