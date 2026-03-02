@@ -50,21 +50,7 @@ export function hasProxyEnv(): boolean {
   );
 }
 
-/**
- * Reentrant-safe NO_PROXY extension for CDP localhost connections.
- *
- * Uses a reference counter so concurrent async callers share the same
- * env-var mutation window. The env vars are set on first entry and
- * restored on last exit, avoiding the snapshot/restore race that would
- * permanently leak NO_PROXY when calls overlap.
- */
-let noProxyRefCount = 0;
-let savedNoProxy: string | undefined;
-let savedNoProxyLower: string | undefined;
-let appliedNoProxy: string | undefined;
-
 const LOOPBACK_ENTRIES = "localhost,127.0.0.1,[::1]";
-let noProxyDidModify = false;
 
 function noProxyAlreadyCoversLocalhost(): boolean {
   const current = process.env.NO_PROXY || process.env.no_proxy || "";
@@ -85,6 +71,76 @@ function isLoopbackCdpUrl(url: string): boolean {
   }
 }
 
+type NoProxySnapshot = {
+  noProxy: string | undefined;
+  noProxyLower: string | undefined;
+  applied: string;
+};
+
+class NoProxyLeaseManager {
+  private leaseCount = 0;
+  private snapshot: NoProxySnapshot | null = null;
+
+  acquire(url: string): (() => void) | null {
+    if (!isLoopbackCdpUrl(url) || !hasProxyEnv()) {
+      return null;
+    }
+
+    if (this.leaseCount === 0 && !noProxyAlreadyCoversLocalhost()) {
+      const noProxy = process.env.NO_PROXY;
+      const noProxyLower = process.env.no_proxy;
+      const current = noProxy || noProxyLower || "";
+      const applied = current ? `${current},${LOOPBACK_ENTRIES}` : LOOPBACK_ENTRIES;
+      process.env.NO_PROXY = applied;
+      process.env.no_proxy = applied;
+      this.snapshot = { noProxy, noProxyLower, applied };
+    }
+
+    this.leaseCount += 1;
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      this.release();
+    };
+  }
+
+  private release() {
+    if (this.leaseCount <= 0) {
+      return;
+    }
+    this.leaseCount -= 1;
+    if (this.leaseCount > 0 || !this.snapshot) {
+      return;
+    }
+
+    const { noProxy, noProxyLower, applied } = this.snapshot;
+    const currentNoProxy = process.env.NO_PROXY;
+    const currentNoProxyLower = process.env.no_proxy;
+    const untouched =
+      currentNoProxy === applied &&
+      (currentNoProxyLower === applied || currentNoProxyLower === undefined);
+    if (untouched) {
+      if (noProxy !== undefined) {
+        process.env.NO_PROXY = noProxy;
+      } else {
+        delete process.env.NO_PROXY;
+      }
+      if (noProxyLower !== undefined) {
+        process.env.no_proxy = noProxyLower;
+      } else {
+        delete process.env.no_proxy;
+      }
+    }
+
+    this.snapshot = null;
+  }
+}
+
+const noProxyLeaseManager = new NoProxyLeaseManager();
+
 /**
  * Scoped NO_PROXY bypass for loopback CDP URLs.
  *
@@ -93,50 +149,10 @@ function isLoopbackCdpUrl(url: string): boolean {
  * were in-flight.
  */
 export async function withNoProxyForCdpUrl<T>(url: string, fn: () => Promise<T>): Promise<T> {
-  if (!isLoopbackCdpUrl(url) || !hasProxyEnv()) {
-    return await fn();
-  }
-
-  const isFirst = noProxyRefCount === 0;
-  noProxyRefCount++;
-
-  if (isFirst && !noProxyAlreadyCoversLocalhost()) {
-    savedNoProxy = process.env.NO_PROXY;
-    savedNoProxyLower = process.env.no_proxy;
-    const current = savedNoProxy || savedNoProxyLower || "";
-    const extended = current ? `${current},${LOOPBACK_ENTRIES}` : LOOPBACK_ENTRIES;
-    process.env.NO_PROXY = extended;
-    process.env.no_proxy = extended;
-    appliedNoProxy = extended;
-    noProxyDidModify = true;
-  }
-
+  const release = noProxyLeaseManager.acquire(url);
   try {
     return await fn();
   } finally {
-    noProxyRefCount--;
-    if (noProxyRefCount === 0 && noProxyDidModify) {
-      const currentNoProxy = process.env.NO_PROXY;
-      const currentNoProxyLower = process.env.no_proxy;
-      const untouched =
-        currentNoProxy === appliedNoProxy &&
-        (currentNoProxyLower === appliedNoProxy || currentNoProxyLower === undefined);
-      if (untouched) {
-        if (savedNoProxy !== undefined) {
-          process.env.NO_PROXY = savedNoProxy;
-        } else {
-          delete process.env.NO_PROXY;
-        }
-        if (savedNoProxyLower !== undefined) {
-          process.env.no_proxy = savedNoProxyLower;
-        } else {
-          delete process.env.no_proxy;
-        }
-      }
-      savedNoProxy = undefined;
-      savedNoProxyLower = undefined;
-      appliedNoProxy = undefined;
-      noProxyDidModify = false;
-    }
+    release?.();
   }
 }
