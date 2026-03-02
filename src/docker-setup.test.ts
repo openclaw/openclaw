@@ -151,6 +151,9 @@ describe("docker-setup.sh", () => {
     expect(extraCompose).toContain("openclaw-home:");
     const log = await readFile(activeSandbox.logPath, "utf8");
     expect(log).toContain("--build-arg OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
+    expect(log).toContain("run --rm openclaw-cli onboard --mode local --no-install-daemon");
+    expect(log).toContain("run --rm openclaw-cli config set gateway.mode local");
+    expect(log).toContain("run --rm openclaw-cli config set gateway.bind lan");
   });
 
   it("precreates config identity dir for CLI device auth writes", async () => {
