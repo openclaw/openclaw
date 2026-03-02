@@ -1200,6 +1200,59 @@ describe("createReplyDispatcher", () => {
     expect(onIdle).toHaveBeenCalledTimes(1);
   });
 
+  it("fires onDelivered after successful delivery", async () => {
+    const deliver = vi.fn().mockResolvedValue(undefined);
+    const onDelivered = vi.fn();
+    const dispatcher = createReplyDispatcher({ deliver, onDelivered });
+
+    dispatcher.sendToolResult({ text: "tool result" });
+    dispatcher.sendBlockReply({ text: "block reply" });
+    dispatcher.sendFinalReply({ text: "final reply" });
+
+    await dispatcher.waitForIdle();
+    dispatcher.markComplete();
+
+    expect(onDelivered).toHaveBeenCalledTimes(3);
+    expect(onDelivered.mock.calls[0][0].text).toBe("tool result");
+    expect(onDelivered.mock.calls[0][1].kind).toBe("tool");
+    expect(onDelivered.mock.calls[1][0].text).toBe("block reply");
+    expect(onDelivered.mock.calls[1][1].kind).toBe("block");
+    expect(onDelivered.mock.calls[2][0].text).toBe("final reply");
+    expect(onDelivered.mock.calls[2][1].kind).toBe("final");
+  });
+
+  it("does not fire onDelivered when delivery fails", async () => {
+    const deliver = vi.fn().mockRejectedValue(new Error("delivery failed"));
+    const onDelivered = vi.fn();
+    const onError = vi.fn();
+    const dispatcher = createReplyDispatcher({ deliver, onDelivered, onError });
+
+    dispatcher.sendFinalReply({ text: "will fail" });
+
+    await dispatcher.waitForIdle();
+    dispatcher.markComplete();
+
+    expect(onDelivered).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it("catches errors in onDelivered without breaking delivery chain", async () => {
+    const deliver = vi.fn().mockResolvedValue(undefined);
+    const onDelivered = vi.fn().mockImplementation(() => {
+      throw new Error("hook error");
+    });
+    const dispatcher = createReplyDispatcher({ deliver, onDelivered });
+
+    dispatcher.sendFinalReply({ text: "first" });
+    dispatcher.sendFinalReply({ text: "second" });
+
+    await dispatcher.waitForIdle();
+    dispatcher.markComplete();
+
+    expect(deliver).toHaveBeenCalledTimes(2);
+    expect(onDelivered).toHaveBeenCalledTimes(2);
+  });
+
   it("delays block replies after the first when humanDelay is natural", async () => {
     vi.useFakeTimers();
     const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);

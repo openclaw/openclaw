@@ -282,3 +282,29 @@ export function isMessageSentEvent(event: InternalHookEvent): event is MessageSe
     typeof context.success === "boolean"
   );
 }
+
+/**
+ * Emit a message:sent hook event.
+ * This is a convenience function for triggering the hook after successful message delivery.
+ *
+ * @param params - The hook context parameters
+ * @returns A promise that resolves when the hook has been triggered (errors are caught internally)
+ */
+export function emitMessageSentHook(params: {
+  sessionKey: string;
+  to: string;
+  content: string;
+  success: boolean;
+  channelId: string;
+  accountId?: string;
+  conversationId?: string;
+  messageId?: string;
+  error?: string;
+}): void {
+  const { sessionKey, ...context } = params;
+  void triggerInternalHook(createInternalHookEvent("message", "sent", sessionKey, context)).catch(
+    (err) => {
+      log.error(`emitMessageSentHook failed: ${err instanceof Error ? err.message : String(err)}`);
+    },
+  );
+}

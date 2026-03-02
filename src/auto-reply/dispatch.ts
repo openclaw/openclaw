@@ -1,4 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { emitMessageSentHook } from "../hooks/internal-hooks.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
@@ -10,9 +12,52 @@ import {
   type ReplyDispatcherWithTypingOptions,
 } from "./reply/reply-dispatcher.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
-import type { GetReplyOptions } from "./types.js";
+import type { GetReplyOptions, ReplyPayload } from "./types.js";
 
 export type DispatchInboundResult = DispatchFromConfigResult;
+
+export type MessageSentHookContext = {
+  sessionKey?: string;
+  channelId: string;
+  accountId?: string;
+  conversationId?: string;
+};
+
+export function createMessageSentHookHandler(ctx: MessageSentHookContext) {
+  return (payload: ReplyPayload) => {
+    const { sessionKey, channelId, accountId, conversationId } = ctx;
+    if (!sessionKey) {
+      return;
+    }
+    const content = payload.text ?? "";
+    emitMessageSentHook({
+      sessionKey,
+      to: conversationId ?? "",
+      content,
+      success: true,
+      channelId,
+      accountId,
+      conversationId,
+    });
+    const hookRunner = getGlobalHookRunner();
+    if (hookRunner?.hasHooks("message_sent")) {
+      void hookRunner
+        .runMessageSent(
+          {
+            to: conversationId ?? "",
+            content,
+            success: true,
+          },
+          {
+            channelId,
+            accountId,
+            conversationId,
+          },
+        )
+        .catch(() => {});
+    }
+  };
+}
 
 export async function withReplyDispatcher<T>(params: {
   dispatcher: ReplyDispatcher;

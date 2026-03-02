@@ -21,6 +21,11 @@ type ReplyDispatchDeliverer = (
   info: { kind: ReplyDispatchKind },
 ) => Promise<void>;
 
+type ReplyDispatchDeliveredHandler = (
+  payload: ReplyPayload,
+  info: { kind: ReplyDispatchKind },
+) => void;
+
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
 
@@ -55,6 +60,12 @@ export type ReplyDispatcherOptions = {
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
+  /**
+   * Called after a reply is successfully delivered.
+   * Use this to trigger message:sent hooks or other post-delivery actions.
+   * Errors thrown by this handler are caught and logged, not propagated.
+   */
+  onDelivered?: ReplyDispatchDeliveredHandler;
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
@@ -156,6 +167,13 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         // Safe: deliver is called inside an async .then() callback, so even a synchronous
         // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
         await options.deliver(normalized, { kind });
+        // Fire onDelivered callback after successful delivery (for message:sent hooks).
+        // Errors are caught to avoid breaking the delivery chain.
+        try {
+          options.onDelivered?.(normalized, { kind });
+        } catch {
+          // Silently ignore onDelivered errors to avoid breaking the delivery flow.
+        }
       })
       .catch((err) => {
         options.onError?.(err, { kind });

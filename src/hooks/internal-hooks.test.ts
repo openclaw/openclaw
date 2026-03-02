@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearInternalHooks,
   createInternalHookEvent,
+  emitMessageSentHook,
   getRegisteredEventKeys,
   isAgentBootstrapEvent,
   isGatewayStartupEvent,
@@ -423,6 +424,77 @@ describe("hooks", () => {
       // Both handlers were called
       expect(errorHandler).toHaveBeenCalled();
       expect(successHandler).toHaveBeenCalled();
+    });
+  });
+
+  describe("emitMessageSentHook", () => {
+    it("should trigger message:sent handler with correct context", async () => {
+      const handler = vi.fn();
+      registerInternalHook("message:sent", handler);
+
+      emitMessageSentHook({
+        sessionKey: "test-session",
+        to: "+1234567890",
+        content: "Hello world",
+        success: true,
+        channelId: "telegram",
+        accountId: "bot-123",
+        conversationId: "chat-456",
+        messageId: "msg-789",
+      });
+
+      await vi.waitFor(() => expect(handler).toHaveBeenCalled());
+
+      const event = handler.mock.calls[0][0];
+      expect(event.type).toBe("message");
+      expect(event.action).toBe("sent");
+      expect(event.sessionKey).toBe("test-session");
+      expect(event.context.to).toBe("+1234567890");
+      expect(event.context.content).toBe("Hello world");
+      expect(event.context.success).toBe(true);
+      expect(event.context.channelId).toBe("telegram");
+      expect(event.context.accountId).toBe("bot-123");
+      expect(event.context.conversationId).toBe("chat-456");
+      expect(event.context.messageId).toBe("msg-789");
+    });
+
+    it("should include error in context when success is false", async () => {
+      const handler = vi.fn();
+      registerInternalHook("message:sent", handler);
+
+      emitMessageSentHook({
+        sessionKey: "test-session",
+        to: "+1234567890",
+        content: "Hello world",
+        success: false,
+        error: "Network error",
+        channelId: "telegram",
+      });
+
+      await vi.waitFor(() => expect(handler).toHaveBeenCalled());
+
+      const event = handler.mock.calls[0][0];
+      expect(event.context.success).toBe(false);
+      expect(event.context.error).toBe("Network error");
+    });
+
+    it("should not throw when handler throws", async () => {
+      const errorHandler = vi.fn(() => {
+        throw new Error("Hook failed");
+      });
+      registerInternalHook("message:sent", errorHandler);
+
+      expect(() =>
+        emitMessageSentHook({
+          sessionKey: "test-session",
+          to: "+1234567890",
+          content: "Hello",
+          success: true,
+          channelId: "telegram",
+        }),
+      ).not.toThrow();
+
+      await vi.waitFor(() => expect(errorHandler).toHaveBeenCalled());
     });
   });
 
