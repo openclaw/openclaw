@@ -106,6 +106,9 @@ export async function dispatchReplyFromConfig(params: {
   const sessionKey = ctx.SessionKey;
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
+  const isGroup = Boolean(ctx.GroupSubject || ctx.GroupChannel);
+  const groupId =
+    ctx.From?.includes(":group:") || ctx.From?.includes(":channel:") ? ctx.From : undefined;
 
   const recordProcessed = (
     outcome: "completed" | "skipped" | "error",
@@ -291,6 +294,8 @@ export async function dispatchReplyFromConfig(params: {
       cfg,
       abortSignal,
       mirror,
+      isGroup,
+      groupId,
     });
     if (!result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
@@ -316,6 +321,8 @@ export async function dispatchReplyFromConfig(params: {
           accountId: ctx.AccountId,
           threadId: ctx.MessageThreadId,
           cfg,
+          isGroup,
+          groupId,
         });
         queuedFinal = result.ok;
         if (result.ok) {
@@ -499,6 +506,8 @@ export async function dispatchReplyFromConfig(params: {
           accountId: ctx.AccountId,
           threadId: ctx.MessageThreadId,
           cfg,
+          isGroup,
+          groupId,
         });
         if (!result.ok) {
           logVerbose(
@@ -549,6 +558,8 @@ export async function dispatchReplyFromConfig(params: {
               accountId: ctx.AccountId,
               threadId: ctx.MessageThreadId,
               cfg,
+              isGroup,
+              groupId,
             });
             queuedFinal = result.ok || queuedFinal;
             if (result.ok) {
