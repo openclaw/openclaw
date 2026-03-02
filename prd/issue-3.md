@@ -78,6 +78,8 @@ Refactor `processSegment` in `src/discord/voice/manager.ts`:
 - First playable audio can start before `agentCommand` resolves.
 - Sentence order is preserved.
 - Interruption increments generation and prevents stale queued chunks from prior generation playing.
+- Non-streaming runs (no incremental deltas, final text emitted at end) still speak exactly once.
+- Completion flush only speaks unsent remainder; it never duplicates already-dispatched sentences.
 
 ### Stage 2 Test Plan
 
@@ -87,6 +89,8 @@ Refactor `processSegment` in `src/discord/voice/manager.ts`:
   2. `processSegment_buffers_until_sentence_boundary` — incomplete text does not trigger TTS until boundary arrives.
   3. `processSegment_flushes_tail_on_completion` — trailing non-punctuated remainder is spoken once on completion.
   4. `processSegment_skips_stale_chunks_after_barge_in` — generation N chunks after interruption are skipped; generation N+1 proceeds.
+  5. `processSegment_non_streaming_model_speaks_once_on_completion` — when only a final assistant chunk arrives, speech still occurs once without duplicate playback.
+  6. `processSegment_flush_does_not_repeat_already_streamed_text` — completion logic dispatches only unsent remainder.
 
 ---
 
@@ -134,6 +138,8 @@ Ensure streaming playback does not change canonical stored response behavior:
    - Mitigation: callback is optional and isolated; add no-callback regression tests in command layer.
 4. **Directive interaction while streaming**
    - Mitigation: retain existing `parseTtsDirectives` behavior for spoken text normalization before TTS dispatch.
+5. **Duplicate speech from stream/end overlap**
+   - Mitigation: track dispatched text boundary (or sentence queue identity) and flush only unseen content.
 
 ## Decisions (Resolved)
 
