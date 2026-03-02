@@ -694,17 +694,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 );
               }
             }
-            // If a draft event exists, finalize it (remove cursor) before sending
-            // the fallback reply so users don't see a stale "...▌" message.
-            if (draftStream && draftStream.getEventId()) {
-              try {
-                await draftStream.finalize();
-              } catch (err) {
-                logVerboseMessage(
-                  `matrix: draft cleanup before fallback failed: ${err instanceof Error ? err.message : String(err)}`,
-                );
-              }
-            }
             await deliverMatrixReplies({
               replies: [payload],
               roomId,
