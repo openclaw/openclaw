@@ -232,7 +232,12 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   // Download media if applicable
   const allMedia: MediaRef[] = [];
 
-  if (message.type === "image" || message.type === "video" || message.type === "audio") {
+  if (
+    message.type === "image" ||
+    message.type === "video" ||
+    message.type === "audio" ||
+    message.type === "file"
+  ) {
     try {
       const media = await downloadLineMedia(message.id, account.channelAccessToken, mediaMaxBytes);
       allMedia.push({
