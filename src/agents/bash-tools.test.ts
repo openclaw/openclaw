@@ -568,4 +568,22 @@ describe("exec inline control metadata guard", () => {
       Use tool parameters for pty/background/elevated/workdir instead of embedding them in command text.]
     `);
   });
+
+  it("rejects leaked inline exec control metadata with case-insensitive booleans", async () => {
+    await expect(executeExecCommand(execTool, "pty:True background:FALSE echo hello")).rejects
+      .toThrowErrorMatchingInlineSnapshot(`
+      [Error: exec preflight: detected leaked exec control metadata in command text (pty:True, background:FALSE) before the executable.
+      Keep exec controls structured and separate from the shell command.
+      Use tool parameters for pty/background/elevated/workdir instead of embedding them in command text.]
+    `);
+  });
+
+  it("rejects leaked inline exec control metadata for windows shell launcher names", async () => {
+    await expect(executeExecCommand(execTool, 'bash.exe pty:true -lc "echo ok"')).rejects
+      .toThrowErrorMatchingInlineSnapshot(`
+      [Error: exec preflight: detected leaked exec control metadata in command text (pty:true) inside shell argv immediately after the executable.
+      Keep exec controls structured and separate from the shell command.
+      Use tool parameters for pty/background/elevated/workdir instead of embedding them in command text.]
+    `);
+  });
 });

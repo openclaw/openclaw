@@ -155,7 +155,10 @@ function binaryName(token: string | undefined): string | undefined {
   }
   const cleaned = stripOuterQuotes(token) ?? token;
   const segment = cleaned.split(/[/]/).at(-1) ?? cleaned;
-  return segment.trim().toLowerCase();
+  return segment
+    .trim()
+    .toLowerCase()
+    .replace(/\.exe$/i, "");
 }
 
 function parseInlineExecControlToken(
@@ -171,13 +174,14 @@ function parseInlineExecControlToken(
   }
   const name = match[1].toLowerCase() as InlineExecControlName;
   const rawValue = match[2]?.trim() ?? "";
+  const normalizedValue = rawValue.toLowerCase();
   if (name === "workdir") {
     return rawValue ? { name, value: rawValue } : null;
   }
-  if (rawValue === "true") {
+  if (normalizedValue === "true") {
     return { name, value: true };
   }
-  if (rawValue === "false") {
+  if (normalizedValue === "false") {
     return { name, value: false };
   }
   return null;
