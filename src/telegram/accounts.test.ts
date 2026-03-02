@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnv } from "../test-utils/env.js";
-import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
+import {
+  listTelegramAccountIds,
+  resolveDefaultTelegramAccountId,
+  resolveTelegramAccount,
+} from "./accounts.js";
 
 const { warnMock } = vi.hoisted(() => ({
   warnMock: vi.fn(),
@@ -97,6 +101,47 @@ describe("resolveTelegramAccount", () => {
     const lines = warnMock.mock.calls.map(([line]) => String(line));
     expect(lines).toContain("listTelegramAccountIds [ 'work' ]");
     expect(lines).toContain("resolve { accountId: 'work', enabled: true, tokenSource: 'config' }");
+  });
+});
+
+describe("resolveDefaultTelegramAccountId", () => {
+  it("prefers channels.telegram.defaultAccount when it matches a configured account", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          defaultAccount: "work",
+          accounts: { default: { botToken: "tok-default" }, work: { botToken: "tok-work" } },
+        },
+      },
+    };
+
+    expect(resolveDefaultTelegramAccountId(cfg)).toBe("work");
+  });
+
+  it("normalizes channels.telegram.defaultAccount before lookup", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          defaultAccount: "Router D",
+          accounts: { "router-d": { botToken: "tok-work" } },
+        },
+      },
+    };
+
+    expect(resolveDefaultTelegramAccountId(cfg)).toBe("router-d");
+  });
+
+  it("falls back when channels.telegram.defaultAccount is not configured", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          defaultAccount: "missing",
+          accounts: { default: { botToken: "tok-default" }, work: { botToken: "tok-work" } },
+        },
+      },
+    };
+
+    expect(resolveDefaultTelegramAccountId(cfg)).toBe("default");
   });
 });
 
