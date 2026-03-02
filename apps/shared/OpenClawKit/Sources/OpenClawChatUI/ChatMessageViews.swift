@@ -488,6 +488,20 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
     }
 }
 
+private extension View {
+    func assistantBubbleContainerStyle() -> some View {
+        self
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(OpenClawChatTheme.assistantBubble))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+            .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
+            .focusable(false)
+    }
+}
+
 @MainActor
 struct ChatStreamingAssistantBubble: View {
     let text: String
@@ -498,14 +512,7 @@ struct ChatStreamingAssistantBubble: View {
             ChatAssistantTextBody(text: self.text, markdownVariant: self.markdownVariant)
         }
         .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(OpenClawChatTheme.assistantBubble))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
-        .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
-        .focusable(false)
+        .assistantBubbleContainerStyle()
     }
 }
 
@@ -542,14 +549,7 @@ struct ChatPendingToolsBubble: View {
             }
         }
         .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(OpenClawChatTheme.assistantBubble))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
-        .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
-        .focusable(false)
+        .assistantBubbleContainerStyle()
     }
 }
 
