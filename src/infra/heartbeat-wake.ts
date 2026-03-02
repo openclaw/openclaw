@@ -106,6 +106,11 @@ function queuePendingWakeReason(params?: {
   }
 }
 
+function resolveRetryWakeReason(reason?: string): string {
+  const normalized = normalizeWakeReason(reason);
+  return resolveHeartbeatReasonKind(normalized) === "interval" ? "retry" : normalized;
+}
+
 function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
   const delay = Number.isFinite(coalesceMs) ? Math.max(0, coalesceMs) : DEFAULT_COALESCE_MS;
   const dueAt = Date.now() + delay;
@@ -156,7 +161,9 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
         if (res.status === "skipped" && res.reason === "requests-in-flight") {
           // The main lane is busy; retry this wake target soon.
           queuePendingWakeReason({
-            reason: pendingWake.reason ?? "retry",
+            // Interval retries must downgrade to `retry`; keeping `interval`
+            // can be filtered as "not due" by the scheduler.
+            reason: resolveRetryWakeReason(pendingWake.reason),
             agentId: pendingWake.agentId,
             sessionKey: pendingWake.sessionKey,
           });
@@ -167,7 +174,7 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
       // Error is already logged by the heartbeat runner; schedule a retry.
       for (const pendingWake of pendingBatch) {
         queuePendingWakeReason({
-          reason: pendingWake.reason ?? "retry",
+          reason: resolveRetryWakeReason(pendingWake.reason),
           agentId: pendingWake.agentId,
           sessionKey: pendingWake.sessionKey,
         });
