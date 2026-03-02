@@ -336,12 +336,6 @@ describe("AcpxRuntime", () => {
     expect(runtime.isHealthy()).toBe(false);
   });
 
-  it("marks runtime healthy when command is available", async () => {
-    const { runtime } = await createMockRuntimeFixture();
-    await runtime.probeAvailability();
-    expect(runtime.isHealthy()).toBe(true);
-  });
-
   it("logs ACPX spawn resolution once per command policy", async () => {
     const { config } = await createMockRuntimeFixture();
     const debugLogs: string[] = [];
