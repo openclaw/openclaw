@@ -366,4 +366,81 @@ describe("gateway node command allowlist", () => {
       iosClient?.stop();
     }
   });
+
+  test("filters system.run for confusable iOS metadata at connect time", async () => {
+    const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
+    const cases = [
+      {
+        label: "dotted-i-platform",
+        platform: "İOS",
+        deviceFamily: "iPhone",
+      },
+      {
+        label: "greek-omicron-family",
+        platform: "ios",
+        deviceFamily: "iPhοne",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const deviceIdentityPath = path.join(
+        os.tmpdir(),
+        `openclaw-confusable-node-${testCase.label}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
+      );
+      const deviceIdentity = loadOrCreateDeviceIdentity(deviceIdentityPath);
+      const displayName = `node-${testCase.label}`;
+
+      const findConnectedNode = async () => {
+        const listRes = await rpcReq<{
+          nodes?: Array<{
+            nodeId: string;
+            displayName?: string;
+            connected?: boolean;
+            commands?: string[];
+          }>;
+        }>(ws, "node.list", {});
+        return (listRes.payload?.nodes ?? []).find(
+          (node) => node.connected && node.displayName === displayName,
+        );
+      };
+
+      let client: GatewayClient | undefined;
+      try {
+        client = await connectNodeClientWithPairing({
+          port,
+          commands: ["system.run", "canvas.snapshot"],
+          platform: testCase.platform,
+          deviceFamily: testCase.deviceFamily,
+          instanceId: displayName,
+          displayName,
+          deviceIdentity,
+        });
+
+        await expect
+          .poll(
+            async () => {
+              const node = await findConnectedNode();
+              return node?.commands?.toSorted() ?? [];
+            },
+            { timeout: 2_000, interval: 10 },
+          )
+          .toEqual(["canvas.snapshot"]);
+
+        const node = await findConnectedNode();
+        const nodeId = node?.nodeId ?? "";
+        expect(nodeId).toBeTruthy();
+
+        const systemRunRes = await rpcReq(ws, "node.invoke", {
+          nodeId,
+          command: "system.run",
+          params: { command: "echo blocked" },
+          idempotencyKey: `allowlist-confusable-${testCase.label}`,
+        });
+        expect(systemRunRes.ok).toBe(false);
+        expect(systemRunRes.error?.message ?? "").toContain("node command not allowed");
+      } finally {
+        client?.stop();
+      }
+    }
+  });
 });
