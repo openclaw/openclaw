@@ -439,10 +439,10 @@ describe("pairing store", () => {
         stateDir,
         channel: "telegram",
         accountId: "yy",
-        allowFrom: ["1002"],
+        allowFrom: ["10022"],
       });
       const third = await readChannelAllowFromStore("telegram", process.env, "yy");
-      expect(third).toEqual(["1002"]);
+      expect(third).toEqual(["10022"]);
       expect(readSpy).toHaveBeenCalledTimes(2);
       readSpy.mockRestore();
     });
@@ -468,10 +468,10 @@ describe("pairing store", () => {
         stateDir,
         channel: "telegram",
         accountId: "yy",
-        allowFrom: ["1002"],
+        allowFrom: ["10022"],
       });
       const third = readChannelAllowFromStoreSync("telegram", process.env, "yy");
-      expect(third).toEqual(["1002"]);
+      expect(third).toEqual(["10022"]);
       expect(readSpy).toHaveBeenCalledTimes(2);
       readSpy.mockRestore();
     });
