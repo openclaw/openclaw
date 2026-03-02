@@ -3,6 +3,7 @@ package ai.openclaw.android.gateway
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
@@ -44,7 +45,7 @@ private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
 
 private data class NodeHarness(
   val session: GatewaySession,
-  val sessionJob: SupervisorJob,
+  val sessionJob: Job,
 )
 
 private data class InvokeScenarioResult(
@@ -86,7 +87,7 @@ class GatewaySessionInvokeTest {
     val result =
       runInvokeScenario(
         invokeEventFrame =
-          """{"type":"event","event":"node.invoke.request","payload":{"id":"invoke-2","nodeId":"node-2","command":"debug.raw","paramsJSON":"{\\"raw\\":true}","params":{"ignored":1},"timeoutMs":5000}}""",
+          """{"type":"event","event":"node.invoke.request","payload":{"id":"invoke-2","nodeId":"node-2","command":"debug.raw","paramsJSON":"{\"raw\":true}","params":{"ignored":1},"timeoutMs":5000}}""",
       ) {
         GatewaySession.InvokeResult.ok("""{"handled":true}""")
       }
