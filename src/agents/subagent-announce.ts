@@ -160,21 +160,28 @@ function sanitizeCompletionFindings(findings: string): string {
   if (!trimmed || trimmed === "(no output)") {
     return "";
   }
-  const message = trimmed
+  let message = trimmed
     .replace(/^✅\s*Subagent[^\n]*\n*/i, "")
     .replace(/^\[System Message\][\s\S]*?\nResult:\s*/i, "")
     .trim();
+
+  const hasStructuredBootstrapPrefix =
+    /^\[Subagent Context\]/i.test(message) || /^#\s*Subagent Context\b/i.test(message);
+  if (hasStructuredBootstrapPrefix) {
+    message = message
+      .replace(/^\[Subagent Context\][^\n]*\n*/i, "")
+      .replace(/^#\s*Subagent Context[^\n]*\n*/i, "")
+      .replace(/^\s*You are running as a subagent[^\n]*\n*/i, "")
+      .replace(/^\s*\[Subagent Task\]:[^\n]*\n*/i, "")
+      .trim();
+    if (!message) {
+      return "";
+    }
+  }
+
   const withoutResultLabel = message
     .replace(/^(?:[-*]\s*)?(?:\*\*)?\s*result\s*(?:\*\*)?\s*:\s*/i, "")
     .trim();
-  const lower = message.toLowerCase();
-  if (
-    message.includes("[Subagent Context]") ||
-    lower.startsWith("# subagent context") ||
-    lower.includes("you are running as a subagent")
-  ) {
-    return "";
-  }
   const jsonPayload = tryExtractJsonPayload(withoutResultLabel);
   if (jsonPayload) {
     const summarized = summarizeJsonForDelivery(jsonPayload);

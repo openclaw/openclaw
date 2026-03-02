@@ -490,6 +490,47 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.message).toBe("Task completed.");
   });
 
+  it("keeps legitimate findings that mention the subagent phrase", async () => {
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-direct-quoted-phrase",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-quoted-phrase",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: 'I found the exact phrase "you are running as a subagent" in the docs.',
+            },
+          ],
+        },
+      ],
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-quoted-phrase",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message as string;
+    expect(msg).toContain("you are running as a subagent");
+    expect(msg).not.toBe("Task completed.");
+  });
+
   it("summarizes raw JSON payloads in completion-mode direct delivery", async () => {
     sessionStore = {
       "agent:main:subagent:test": {
