@@ -329,6 +329,73 @@ describe("deliverReplies", () => {
     );
   });
 
+  it("uses reply_to_message_id only for the first text chunk when replyToMode is first", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 21, chat: { id: "123" } })
+      .mockResolvedValueOnce({ message_id: 22, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "A".repeat(120), replyToId: "777" }],
+      runtime,
+      bot,
+      replyToMode: "first",
+      textLimit: 80,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      1,
+      "123",
+      expect.any(String),
+      expect.objectContaining({
+        reply_to_message_id: 777,
+      }),
+    );
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      2,
+      "123",
+      expect.any(String),
+      expect.not.objectContaining({
+        reply_to_message_id: expect.anything(),
+      }),
+    );
+  });
+
+  it("does not apply reply_to_message_id to media follow-up text chunks in first mode", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 31, chat: { id: "123" } });
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 32, chat: { id: "123" } });
+    const bot = createBot({ sendPhoto, sendMessage });
+
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    await deliverWith({
+      replies: [
+        { mediaUrl: "https://example.com/photo.jpg", text: "B".repeat(1300), replyToId: "888" },
+      ],
+      runtime,
+      bot,
+      replyToMode: "first",
+      textLimit: 120,
+    });
+
+    expect(sendPhoto).toHaveBeenCalledTimes(1);
+    expect(sendPhoto).toHaveBeenCalledWith(
+      "123",
+      expect.anything(),
+      expect.objectContaining({
+        reply_to_message_id: 888,
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalled();
+    for (const call of sendMessage.mock.calls) {
+      expect(call[2]).not.toHaveProperty("reply_to_message_id");
+    }
+  });
+
   it("falls back to text when sendVoice fails with VOICE_MESSAGES_FORBIDDEN", async () => {
     const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
       voiceError: createVoiceMessagesForbiddenError(),
