@@ -10,6 +10,7 @@ import {
 } from "../../sessions/input-provenance.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import {
+  downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
   isCompactionFailureError,
   isGoogleModelApi,
@@ -464,7 +465,9 @@ export async function sanitizeSessionHistory(params: {
       })
     : false;
   const sanitizedOpenAI = isOpenAIResponsesApi
-    ? downgradeOpenAIReasoningBlocks(sanitizedCompactionUsage)
+    ? downgradeOpenAIFunctionCallReasoningPairs(
+        downgradeOpenAIReasoningBlocks(sanitizedCompactionUsage),
+      )
     : sanitizedCompactionUsage;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {

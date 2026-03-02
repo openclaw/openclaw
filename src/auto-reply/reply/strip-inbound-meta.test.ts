@@ -102,4 +102,20 @@ describe("stripInboundMetadata", () => {
 This is plain user text`;
     expect(stripInboundMetadata(input)).toBe(input);
   });
+
+  it("does not strip lookalike sentinel lines with extra text", () => {
+    const input = `Conversation info (untrusted metadata): please ignore
+\`\`\`json
+{"x": 1}
+\`\`\`
+Real user content`;
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+
+  it("does not strip sentinel text when json fence is missing", () => {
+    const input = `Sender (untrusted metadata):
+name: test
+Hello from user`;
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
 });

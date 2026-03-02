@@ -1,3 +1,4 @@
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { z } from "zod";
 export { z };
 
@@ -82,6 +83,7 @@ const DynamicAgentCreationSchema = z
 const FeishuToolsConfigSchema = z
   .object({
     doc: z.boolean().optional(), // Document operations (default: true)
+    chat: z.boolean().optional(), // Chat info + member query operations (default: true)
     wiki: z.boolean().optional(), // Knowledge base operations (default: true, requires doc)
     drive: z.boolean().optional(), // Cloud storage operations (default: true)
     perm: z.boolean().optional(), // Permission management (default: false, sensitive)
@@ -190,6 +192,7 @@ export const FeishuAccountConfigSchema = z
 export const FeishuConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
+    defaultAccount: z.string().optional(),
     // Top-level credentials (backward compatible for single-account mode)
     appId: z.string().optional(),
     appSecret: z.string().optional(),
@@ -215,6 +218,18 @@ export const FeishuConfigSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
+    const defaultAccount = value.defaultAccount?.trim();
+    if (defaultAccount && value.accounts && Object.keys(value.accounts).length > 0) {
+      const normalizedDefaultAccount = normalizeAccountId(defaultAccount);
+      if (!Object.prototype.hasOwnProperty.call(value.accounts, normalizedDefaultAccount)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["defaultAccount"],
+          message: `channels.feishu.defaultAccount="${defaultAccount}" does not match a configured account key`,
+        });
+      }
+    }
+
     const defaultConnectionMode = value.connectionMode ?? "websocket";
     const defaultVerificationToken = value.verificationToken?.trim();
     if (defaultConnectionMode === "webhook" && !defaultVerificationToken) {
