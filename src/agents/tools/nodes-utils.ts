@@ -160,6 +160,15 @@ export async function resolveNodeId(
   query?: string,
   allowDefault = false,
 ) {
+  return (await resolveNode(opts, query, allowDefault)).nodeId;
+}
+
+export async function resolveNode(
+  opts: GatewayCallOptions,
+  query?: string,
+  allowDefault = false,
+): Promise<NodeListNode> {
   const nodes = await loadNodes(opts);
-  return resolveNodeIdFromList(nodes, query, allowDefault);
+  const nodeId = resolveNodeIdFromList(nodes, query, allowDefault);
+  return nodes.find((node) => node.nodeId === nodeId) ?? { nodeId };
 }
