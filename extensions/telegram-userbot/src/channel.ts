@@ -19,6 +19,7 @@ import { telegramUserbotOutboundAdapter } from "./adapters/outbound.js";
 import { telegramUserbotSecurityAdapter } from "./adapters/security.js";
 import { telegramUserbotSetupAdapter } from "./adapters/setup.js";
 import { telegramUserbotStatusAdapter, type TelegramUserbotProbe } from "./adapters/status.js";
+import { telegramUserbotStreamingAdapter } from "./adapters/streaming.js";
 import { telegramUserbotMeta, TELEGRAM_USERBOT_CHANNEL_ID } from "./config-schema.js";
 import { ConnectionManager } from "./connection.js";
 
@@ -64,6 +65,7 @@ export const telegramUserbotPlugin: ChannelPlugin<
   outbound: telegramUserbotOutboundAdapter,
   actions: telegramUserbotMessageActions,
   agentPrompt: telegramUserbotAgentPromptAdapter,
+  streaming: telegramUserbotStreamingAdapter,
 
   // -------------------------------------------------------------------------
   // Gateway — manages the MTProto connection lifecycle
