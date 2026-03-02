@@ -233,4 +233,40 @@ describe("loadPluginManifestRegistry", () => {
       registry.diagnostics.some((diag) => diag.message.includes("unsafe plugin manifest path")),
     ).toBe(true);
   });
+
+  it("allows bundled manifest paths that are hardlinked aliases", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const rootDir = makeTempDir();
+    const outsideDir = makeTempDir();
+    const outsideManifest = path.join(outsideDir, "openclaw.plugin.json");
+    const linkedManifest = path.join(rootDir, "openclaw.plugin.json");
+    fs.writeFileSync(path.join(rootDir, "index.ts"), "export default function () {}", "utf-8");
+    fs.writeFileSync(
+      outsideManifest,
+      JSON.stringify({ id: "bundled-hardlink", configSchema: { type: "object" } }),
+      "utf-8",
+    );
+    try {
+      fs.linkSync(outsideManifest, linkedManifest);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw err;
+    }
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "bundled-hardlink",
+        rootDir,
+        origin: "bundled",
+      }),
+    ]);
+    expect(registry.plugins.some((entry) => entry.id === "bundled-hardlink")).toBe(true);
+    expect(
+      registry.diagnostics.some((diag) => diag.message.includes("unsafe plugin manifest path")),
+    ).toBe(false);
+  });
 });
