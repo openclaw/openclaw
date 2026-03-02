@@ -15,16 +15,29 @@ export const botOpenIds = new Map<string, string>();
 export const FEISHU_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 export const FEISHU_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 
+// Guard against undefined defaults -- during onboarding the plugin-sdk
+// re-export may not resolve, leaving the imported constant undefined.
+const _rl = WEBHOOK_RATE_LIMIT_DEFAULTS ?? {
+  windowMs: 60_000,
+  maxRequests: 120,
+  maxTrackedKeys: 4_096,
+};
+const _ac = WEBHOOK_ANOMALY_COUNTER_DEFAULTS ?? {
+  maxTrackedKeys: 4_096,
+  ttlMs: 6 * 60 * 60_000,
+  logEvery: 25,
+};
+
 export const feishuWebhookRateLimiter = createFixedWindowRateLimiter({
-  windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
-  maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
-  maxTrackedKeys: WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
+  windowMs: _rl.windowMs,
+  maxRequests: _rl.maxRequests,
+  maxTrackedKeys: _rl.maxTrackedKeys,
 });
 
 const feishuWebhookAnomalyTracker = createWebhookAnomalyTracker({
-  maxTrackedKeys: WEBHOOK_ANOMALY_COUNTER_DEFAULTS.maxTrackedKeys,
-  ttlMs: WEBHOOK_ANOMALY_COUNTER_DEFAULTS.ttlMs,
-  logEvery: WEBHOOK_ANOMALY_COUNTER_DEFAULTS.logEvery,
+  maxTrackedKeys: _ac.maxTrackedKeys,
+  ttlMs: _ac.ttlMs,
+  logEvery: _ac.logEvery,
 });
 
 export function clearFeishuWebhookRateLimitStateForTest(): void {
