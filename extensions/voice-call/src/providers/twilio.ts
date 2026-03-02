@@ -5,6 +5,8 @@ import type { MediaStreamHandler } from "../media-stream.js";
 import { chunkAudio } from "../telephony-audio.js";
 import type { TelephonyTtsProvider } from "../telephony-tts.js";
 import type {
+  GetCallStatusInput,
+  GetCallStatusResult,
   HangupCallInput,
   InitiateCallInput,
   InitiateCallResult,
@@ -19,6 +21,7 @@ import type {
 } from "../types.js";
 import { escapeXml, mapVoiceToPolly } from "../voice-mapping.js";
 import type { VoiceCallProvider } from "./base.js";
+import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
 import { twilioApiRequest } from "./twilio/api.js";
 import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
 
@@ -670,6 +673,33 @@ export class TwilioProvider implements VoiceCallProvider {
   async stopListening(_input: StopListeningInput): Promise<void> {
     // Twilio's <Gather> automatically stops on speech end
     // No explicit action needed
+  }
+
+  async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
+    const terminalStatuses = new Set(["completed", "failed", "busy", "no-answer", "canceled"]);
+    try {
+      const data = await guardedJsonApiRequest<{ status?: string }>({
+        url: `${this.baseUrl}/Calls/${input.providerCallId}.json`,
+        method: "GET",
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${this.accountSid}:${this.authToken}`).toString("base64")}`,
+        },
+        allowNotFound: true,
+        allowedHostnames: ["api.twilio.com"],
+        auditContext: "twilio-get-call-status",
+        errorPrefix: "Twilio get call status error",
+      });
+
+      if (!data) {
+        return { status: "not-found", isTerminal: true };
+      }
+
+      const status = data.status ?? "unknown";
+      return { status, isTerminal: terminalStatuses.has(status) };
+    } catch {
+      // Transient error — keep the call and rely on timer fallback
+      return { status: "error", isTerminal: false, isUnknown: true };
+    }
   }
 }
 
