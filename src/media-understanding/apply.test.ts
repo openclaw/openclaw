@@ -378,7 +378,7 @@ describe("applyMediaUnderstanding", () => {
             scope: {
               default: "deny",
               rules: [
-                { action: "allow", match: { chatType: "dm" } },
+                { action: "allow", match: { chatType: "direct" } },
                 { action: "allow", match: { channel: "whatsapp" } },
               ],
             },
