@@ -354,6 +354,33 @@ describe("buildServiceEnvironment", () => {
     });
     expect(env.NODE_EXTRA_CA_CERTS).toBe("/custom/certs/ca.pem");
   });
+
+  it("defaults NODE_USE_SYSTEM_CA=1 on macOS", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user" },
+      port: 18789,
+      platform: "darwin",
+    });
+    expect(env.NODE_USE_SYSTEM_CA).toBe("1");
+  });
+
+  it("does not default NODE_USE_SYSTEM_CA on non-macOS", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user" },
+      port: 18789,
+      platform: "linux",
+    });
+    expect(env.NODE_USE_SYSTEM_CA).toBeUndefined();
+  });
+
+  it("respects user-provided NODE_USE_SYSTEM_CA over the default", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user", NODE_USE_SYSTEM_CA: "0" },
+      port: 18789,
+      platform: "darwin",
+    });
+    expect(env.NODE_USE_SYSTEM_CA).toBe("0");
+  });
 });
 
 describe("buildNodeServiceEnvironment", () => {
@@ -448,6 +475,30 @@ describe("buildNodeServiceEnvironment", () => {
       env: { HOME: "/home/user", NODE_EXTRA_CA_CERTS: "/custom/certs/ca.pem" },
     });
     expect(env.NODE_EXTRA_CA_CERTS).toBe("/custom/certs/ca.pem");
+  });
+
+  it("defaults NODE_USE_SYSTEM_CA=1 on macOS for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user" },
+      platform: "darwin",
+    });
+    expect(env.NODE_USE_SYSTEM_CA).toBe("1");
+  });
+
+  it("does not default NODE_USE_SYSTEM_CA on non-macOS for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user" },
+      platform: "linux",
+    });
+    expect(env.NODE_USE_SYSTEM_CA).toBeUndefined();
+  });
+
+  it("respects user-provided NODE_USE_SYSTEM_CA for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user", NODE_USE_SYSTEM_CA: "0" },
+      platform: "darwin",
+    });
+    expect(env.NODE_USE_SYSTEM_CA).toBe("0");
   });
 });
 
