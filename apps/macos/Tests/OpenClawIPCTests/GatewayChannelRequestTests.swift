@@ -1,5 +1,5 @@
-import OpenClawKit
 import Foundation
+import OpenClawKit
 import os
 import Testing
 @testable import OpenClaw
@@ -62,7 +62,6 @@ import Testing
         {
             self.pendingReceiveHandler.withLock { $0 = completionHandler }
         }
-
     }
 
     private final class FakeWebSocketSession: WebSocketSessioning, @unchecked Sendable {
@@ -79,10 +78,10 @@ import Testing
         }
     }
 
-    @Test func requestTimeoutThenSendFailureDoesNotDoubleResume() async {
+    @Test func requestTimeoutThenSendFailureDoesNotDoubleResume() async throws {
         let session = FakeWebSocketSession(requestSendDelayMs: 100)
-        let channel = GatewayChannelActor(
-            url: URL(string: "ws://example.invalid")!,
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "ws://example.invalid")),
             token: nil,
             session: WebSocketSessionBox(session: session))
 
