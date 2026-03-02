@@ -219,7 +219,7 @@ export async function prepareSlackMessage(params: {
       ? threadContext.messageTs
       : undefined;
   const canonicalThreadId = isRoomish
-    ? (threadContext.incomingThreadTs ?? message.ts)
+    ? threadContext.incomingThreadTs
     : isThreadReply
       ? threadTs
       : autoThreadId;

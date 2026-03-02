@@ -23,7 +23,7 @@ function buildCtx(overrides?: { replyToMode?: "all" | "first" | "off" }) {
 const account: ResolvedSlackAccount = createSlackTestAccount();
 
 describe("thread-level session keys", () => {
-  it("uses thread-level session key for channel messages", async () => {
+  it("uses base session key for top-level channel messages", async () => {
     const ctx = buildCtx();
     ctx.resolveUserName = async () => ({ name: "Alice" });
 
@@ -43,11 +43,10 @@ describe("thread-level session keys", () => {
     });
 
     expect(prepared).toBeTruthy();
-    // Channel messages should get thread-level session key with :thread: suffix
-    // The resolved session key is in ctxPayload.SessionKey, not route.sessionKey
+    // Top-level channel messages should share the base session key so
+    // conversation context is preserved across messages (#32103).
     const sessionKey = prepared!.ctxPayload.SessionKey as string;
-    expect(sessionKey).toContain(":thread:");
-    expect(sessionKey).toContain("1770408518.451689");
+    expect(sessionKey).not.toContain(":thread:");
   });
 
   it("uses parent thread_ts for thread replies", async () => {
