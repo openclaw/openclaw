@@ -105,6 +105,20 @@ describe("normalizeUsage", () => {
     });
   });
 
+  it("clamps negative prompt_tokens alias to zero", () => {
+    const usage = normalizeUsage({
+      prompt_tokens: -12,
+      completion_tokens: 4,
+    });
+    expect(usage).toEqual({
+      input: 0,
+      output: 4,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: undefined,
+    });
+  });
+
   it("returns undefined when no valid fields are provided", () => {
     const usage = normalizeUsage(null);
     expect(usage).toBeUndefined();
