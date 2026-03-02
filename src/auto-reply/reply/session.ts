@@ -461,21 +461,21 @@ export async function initSessionState(params: {
     originatingChannelRaw,
     originatingToRaw: isSyntheticProvider ? undefined : ctx.OriginatingTo,
     toRaw: isSyntheticProvider ? undefined : ctx.To,
-    persistedLastTo: baseEntry?.lastTo,
-    persistedLastChannel: baseEntry?.lastChannel,
+    persistedLastTo: preservedEntry?.lastTo,
+    persistedLastChannel: preservedEntry?.lastChannel,
     sessionKey,
   });
   const lastAccountIdRaw = isSyntheticProvider
-    ? baseEntry?.lastAccountId
-    : ctx.AccountId || baseEntry?.lastAccountId;
+    ? preservedEntry?.lastAccountId
+    : ctx.AccountId || preservedEntry?.lastAccountId;
   // Only fall back to persisted threadId for thread sessions.  Non-thread
   // sessions (e.g. DM without topics) must not inherit a stale threadId from a
   // previous interaction that happened inside a topic/thread.
   const lastThreadIdRaw = isSyntheticProvider
     ? isThread
-      ? baseEntry?.lastThreadId
+      ? preservedEntry?.lastThreadId
       : undefined
-    : ctx.MessageThreadId || (isThread ? baseEntry?.lastThreadId : undefined);
+    : ctx.MessageThreadId || (isThread ? preservedEntry?.lastThreadId : undefined);
   const deliveryFields = normalizeSessionDeliveryFields({
     deliveryContext: {
       channel: lastChannelRaw,

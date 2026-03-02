@@ -18,7 +18,6 @@ import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
   type DeliveryContext,
   deliveryContextFromSession,
-  deliveryContextKey,
   mergeDeliveryContext,
   normalizeDeliveryContext,
 } from "../utils/delivery-context.js";
@@ -459,12 +458,16 @@ function resolveAnnounceOrigin(
   }
 
   // requesterOrigin (captured at spawn time) is authoritative for outbound routing.
-  // Only merge fallback fields from session entry when both contexts point to the
-  // same concrete delivery target to avoid cross-chat contamination under concurrency.
+  // Only merge fallback fields from session entry when both contexts target the
+  // same channel+destination to avoid cross-chat contamination while still
+  // preserving account/thread fallbacks for that destination.
   if (normalizedRequester) {
-    const requesterKey = deliveryContextKey(normalizedRequester);
-    const entryKey = deliveryContextKey(normalizedEntry);
-    if (requesterKey && entryKey && requesterKey === entryKey) {
+    const sameDestination =
+      normalizedRequester.channel &&
+      normalizedRequester.to &&
+      normalizedEntry?.channel === normalizedRequester.channel &&
+      normalizedEntry?.to === normalizedRequester.to;
+    if (sameDestination) {
       return mergeDeliveryContext(normalizedRequester, normalizedEntry);
     }
     return normalizedRequester;
