@@ -138,7 +138,8 @@ export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_HEARTBEAT_FILENAME
   | typeof DEFAULT_BOOTSTRAP_FILENAME
   | typeof DEFAULT_MEMORY_FILENAME
-  | typeof DEFAULT_MEMORY_ALT_FILENAME;
+  | typeof DEFAULT_MEMORY_ALT_FILENAME
+  | (string & {});
 
 export type WorkspaceBootstrapFile = {
   name: WorkspaceBootstrapFileName;
@@ -495,44 +496,54 @@ async function resolveMemoryBootstrapEntries(
   return deduped;
 }
 
-export async function loadWorkspaceBootstrapFiles(dir: string): Promise<WorkspaceBootstrapFile[]> {
+export async function loadWorkspaceBootstrapFiles(
+  dir: string,
+  customNames?: readonly string[],
+): Promise<WorkspaceBootstrapFile[]> {
   const resolvedDir = resolveUserPath(dir);
 
   const entries: Array<{
     name: WorkspaceBootstrapFileName;
     filePath: string;
-  }> = [
-    {
-      name: DEFAULT_AGENTS_FILENAME,
-      filePath: path.join(resolvedDir, DEFAULT_AGENTS_FILENAME),
-    },
-    {
-      name: DEFAULT_SOUL_FILENAME,
-      filePath: path.join(resolvedDir, DEFAULT_SOUL_FILENAME),
-    },
-    {
-      name: DEFAULT_TOOLS_FILENAME,
-      filePath: path.join(resolvedDir, DEFAULT_TOOLS_FILENAME),
-    },
-    {
-      name: DEFAULT_IDENTITY_FILENAME,
-      filePath: path.join(resolvedDir, DEFAULT_IDENTITY_FILENAME),
-    },
-    {
-      name: DEFAULT_USER_FILENAME,
-      filePath: path.join(resolvedDir, DEFAULT_USER_FILENAME),
-    },
-    {
-      name: DEFAULT_HEARTBEAT_FILENAME,
-      filePath: path.join(resolvedDir, DEFAULT_HEARTBEAT_FILENAME),
-    },
-    {
-      name: DEFAULT_BOOTSTRAP_FILENAME,
-      filePath: path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME),
-    },
-  ];
+  }> = customNames
+    ? customNames.map((name) => ({
+        name: path.basename(name) as WorkspaceBootstrapFileName,
+        filePath: path.join(resolvedDir, path.basename(name)),
+      }))
+    : [
+        {
+          name: DEFAULT_AGENTS_FILENAME,
+          filePath: path.join(resolvedDir, DEFAULT_AGENTS_FILENAME),
+        },
+        {
+          name: DEFAULT_SOUL_FILENAME,
+          filePath: path.join(resolvedDir, DEFAULT_SOUL_FILENAME),
+        },
+        {
+          name: DEFAULT_TOOLS_FILENAME,
+          filePath: path.join(resolvedDir, DEFAULT_TOOLS_FILENAME),
+        },
+        {
+          name: DEFAULT_IDENTITY_FILENAME,
+          filePath: path.join(resolvedDir, DEFAULT_IDENTITY_FILENAME),
+        },
+        {
+          name: DEFAULT_USER_FILENAME,
+          filePath: path.join(resolvedDir, DEFAULT_USER_FILENAME),
+        },
+        {
+          name: DEFAULT_HEARTBEAT_FILENAME,
+          filePath: path.join(resolvedDir, DEFAULT_HEARTBEAT_FILENAME),
+        },
+        {
+          name: DEFAULT_BOOTSTRAP_FILENAME,
+          filePath: path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME),
+        },
+      ];
 
-  entries.push(...(await resolveMemoryBootstrapEntries(resolvedDir)));
+  if (!customNames) {
+    entries.push(...(await resolveMemoryBootstrapEntries(resolvedDir)));
+  }
 
   const result: WorkspaceBootstrapFile[] = [];
   for (const entry of entries) {
