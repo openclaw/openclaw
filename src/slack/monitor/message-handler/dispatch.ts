@@ -460,7 +460,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   }
 
-  const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
+  const anyReplyDelivered =
+    queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0 || (counts.tool ?? 0) > 0;
 
   // If a stream was started but no replies of any kind were delivered, delete
   // the stream message. This is a last-resort safety net for cases where
