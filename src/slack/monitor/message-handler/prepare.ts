@@ -29,13 +29,18 @@ import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../security/dm-policy-shared.js";
 import { resolveSlackReplyToMode, type ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { sendMessageSlack } from "../../send.js";
 import { hasSlackThreadParticipation } from "../../sent-thread-cache.js";
 import { resolveSlackThreadContext } from "../../threading.js";
 import type { SlackMessageEvent } from "../../types.js";
-import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "../allow-list.js";
+import {
+  normalizeSlackAllowOwnerEntry,
+  resolveSlackAllowListMatch,
+  resolveSlackUserAllowed,
+} from "../allow-list.js";
 import { resolveSlackEffectiveAllowFrom } from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import { stripSlackMentionsForCommandDetection } from "../commands.js";
@@ -108,6 +113,7 @@ export async function prepareSlackMessage(params: {
         channelId: message.channel,
         channelName,
         channels: ctx.channelsConfig,
+        channelKeys: ctx.channelsConfigKeys,
         defaultRequireMention: ctx.defaultRequireMention,
       })
     : null;
@@ -251,15 +257,29 @@ export async function prepareSlackMessage(params: {
       hasSlackThreadParticipation(account.accountId, message.channel, message.thread_ts)),
   );
 
-  const sender = message.user ? await ctx.resolveUserName(message.user) : null;
-  const senderName =
-    sender?.name ?? message.username?.trim() ?? message.user ?? message.bot_id ?? "unknown";
+  let resolvedSenderName = message.username?.trim() || undefined;
+  const resolveSenderName = async (): Promise<string> => {
+    if (resolvedSenderName) {
+      return resolvedSenderName;
+    }
+    if (message.user) {
+      const sender = await ctx.resolveUserName(message.user);
+      const normalized = sender?.name?.trim();
+      if (normalized) {
+        resolvedSenderName = normalized;
+        return resolvedSenderName;
+      }
+    }
+    resolvedSenderName = message.user ?? message.bot_id ?? "unknown";
+    return resolvedSenderName;
+  };
+  const senderNameForAuth = ctx.allowNameMatching ? await resolveSenderName() : undefined;
 
   const channelUserAuthorized = isRoom
     ? resolveSlackUserAllowed({
         allowList: channelConfig?.users,
         userId: senderId,
-        userName: senderName,
+        userName: senderNameForAuth,
         allowNameMatching: ctx.allowNameMatching,
       })
     : true;
@@ -279,7 +299,7 @@ export async function prepareSlackMessage(params: {
   const ownerAuthorized = resolveSlackAllowListMatch({
     allowList: allowFromLower,
     id: senderId,
-    name: senderName,
+    name: senderNameForAuth,
     allowNameMatching: ctx.allowNameMatching,
   }).allowed;
   const channelUsersAllowlistConfigured =
@@ -289,7 +309,7 @@ export async function prepareSlackMessage(params: {
       ? resolveSlackUserAllowed({
           allowList: channelConfig?.users,
           userId: senderId,
-          userName: senderName,
+          userName: senderNameForAuth,
           allowNameMatching: ctx.allowNameMatching,
         })
       : false;
@@ -350,7 +370,7 @@ export async function prepareSlackMessage(params: {
       limit: ctx.historyLimit,
       entry: pendingBody
         ? {
-            sender: senderName,
+            sender: await resolveSenderName(),
             body: pendingBody,
             timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
             messageId: message.ts,
@@ -455,6 +475,7 @@ export async function prepareSlackMessage(params: {
       : null;
 
   const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
+  const senderName = await resolveSenderName();
   const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
   const inboundLabel = isDirectMessage
     ? `Slack DM from ${senderName}`
@@ -573,7 +594,8 @@ export async function prepareSlackMessage(params: {
       storePath,
       sessionKey, // Thread-specific session key
     });
-    if (threadInitialHistoryLimit > 0) {
+    // Only fetch thread history for NEW sessions (existing sessions already have this context in their transcript)
+    if (threadInitialHistoryLimit > 0 && !threadSessionPreviousTimestamp) {
       const threadHistory = await resolveSlackThreadHistory({
         channelId: message.channel,
         threadTs,
@@ -663,7 +685,8 @@ export async function prepareSlackMessage(params: {
     // Preserve thread context for routed tool notifications.
     MessageThreadId: threadContext.messageThreadId,
     ParentSessionKey: threadKeys.parentSessionKey,
-    ThreadStarterBody: threadStarterBody,
+    // Only include thread starter body for NEW sessions (existing sessions already have it in their transcript)
+    ThreadStarterBody: !threadSessionPreviousTimestamp ? threadStarterBody : undefined,
     ThreadHistoryBody: threadHistoryBody,
     IsFirstThreadTurn:
       isThreadReply && threadTs && !threadSessionPreviousTimestamp ? true : undefined,
@@ -685,6 +708,13 @@ export async function prepareSlackMessage(params: {
     OriginatingChannel: "slack" as const,
     OriginatingTo: slackTo,
   }) satisfies FinalizedMsgContext;
+  const pinnedMainDmOwner = isDirectMessage
+    ? resolvePinnedMainDmOwnerFromAllowlist({
+        dmScope: cfg.session?.dmScope,
+        allowFrom: ctx.allowFrom,
+        normalizeEntry: normalizeSlackAllowOwnerEntry,
+      })
+    : null;
 
   await recordInboundSession({
     storePath,
@@ -697,6 +727,18 @@ export async function prepareSlackMessage(params: {
           to: `user:${message.user}`,
           accountId: route.accountId,
           threadId: threadContext.messageThreadId,
+          mainDmOwnerPin:
+            pinnedMainDmOwner && message.user
+              ? {
+                  ownerRecipient: pinnedMainDmOwner,
+                  senderRecipient: message.user.toLowerCase(),
+                  onSkip: ({ ownerRecipient, senderRecipient }) => {
+                    logVerbose(
+                      `slack: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                    );
+                  },
+                }
+              : undefined,
         }
       : undefined,
     onRecordError: (err) => {

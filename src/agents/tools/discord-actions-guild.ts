@@ -327,36 +327,22 @@ export async function handleDiscordGuildAction(
         integer: true,
       });
       const availableTags = parseAvailableTags(params.availableTags);
+      const editPayload = {
+        channelId,
+        name: name ?? undefined,
+        topic: topic ?? undefined,
+        position: position ?? undefined,
+        parentId,
+        nsfw,
+        rateLimitPerUser: rateLimitPerUser ?? undefined,
+        archived,
+        locked,
+        autoArchiveDuration: autoArchiveDuration ?? undefined,
+        availableTags,
+      };
       const channel = accountId
-        ? await editChannelDiscord(
-            {
-              channelId,
-              name: name ?? undefined,
-              topic: topic ?? undefined,
-              position: position ?? undefined,
-              parentId,
-              nsfw,
-              rateLimitPerUser: rateLimitPerUser ?? undefined,
-              archived,
-              locked,
-              autoArchiveDuration: autoArchiveDuration ?? undefined,
-              availableTags,
-            },
-            { accountId },
-          )
-        : await editChannelDiscord({
-            channelId,
-            name: name ?? undefined,
-            topic: topic ?? undefined,
-            position: position ?? undefined,
-            parentId,
-            nsfw,
-            rateLimitPerUser: rateLimitPerUser ?? undefined,
-            archived,
-            locked,
-            autoArchiveDuration: autoArchiveDuration ?? undefined,
-            availableTags,
-          });
+        ? await editChannelDiscord(editPayload, { accountId })
+        : await editChannelDiscord(editPayload);
       return jsonResult({ ok: true, channel });
     }
     case "channelDelete": {

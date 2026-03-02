@@ -143,6 +143,11 @@ describe("runDiscordGatewayLifecycle", () => {
     return { emitter, gateway };
   }
 
+  async function emitGatewayOpenAndWait(emitter: EventEmitter, delayMs = 30000): Promise<void> {
+    emitter.emit("debug", "WebSocket connection opened");
+    await vi.advanceTimersByTimeAsync(delayMs);
+  }
+
   it("cleans up thread bindings when exec approvals startup fails", async () => {
     const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const { lifecycleParams, start, stop, threadStop, releaseEarlyGatewayErrorGuard } =
@@ -260,12 +265,9 @@ describe("runDiscordGatewayLifecycle", () => {
       });
       getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
       waitForDiscordGatewayStopMock.mockImplementationOnce(async () => {
-        emitter.emit("debug", "WebSocket connection opened");
-        await vi.advanceTimersByTimeAsync(30000);
-        emitter.emit("debug", "WebSocket connection opened");
-        await vi.advanceTimersByTimeAsync(30000);
-        emitter.emit("debug", "WebSocket connection opened");
-        await vi.advanceTimersByTimeAsync(30000);
+        await emitGatewayOpenAndWait(emitter);
+        await emitGatewayOpenAndWait(emitter);
+        await emitGatewayOpenAndWait(emitter);
       });
 
       const { lifecycleParams } = createLifecycleHarness({ gateway });
@@ -299,22 +301,17 @@ describe("runDiscordGatewayLifecycle", () => {
       });
       getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
       waitForDiscordGatewayStopMock.mockImplementationOnce(async () => {
-        emitter.emit("debug", "WebSocket connection opened");
-        await vi.advanceTimersByTimeAsync(30000);
+        await emitGatewayOpenAndWait(emitter);
 
         // Successful reconnect (READY/RESUMED sets isConnected=true), then
         // quick drop before the HELLO timeout window finishes.
         gateway.isConnected = true;
-        emitter.emit("debug", "WebSocket connection opened");
-        await vi.advanceTimersByTimeAsync(10);
+        await emitGatewayOpenAndWait(emitter, 10);
         emitter.emit("debug", "WebSocket connection closed with code 1006");
         gateway.isConnected = false;
 
-        emitter.emit("debug", "WebSocket connection opened");
-        await vi.advanceTimersByTimeAsync(30000);
-
-        emitter.emit("debug", "WebSocket connection opened");
-        await vi.advanceTimersByTimeAsync(30000);
+        await emitGatewayOpenAndWait(emitter);
+        await emitGatewayOpenAndWait(emitter);
       });
 
       const { lifecycleParams } = createLifecycleHarness({ gateway });

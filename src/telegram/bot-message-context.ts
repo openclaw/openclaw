@@ -40,6 +40,7 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "../routing/session-key.js";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   firstDefined,
@@ -754,6 +755,14 @@ export const buildTelegramMessageContext = async ({
     OriginatingTo: `telegram:${chatId}`,
   });
 
+  const pinnedMainDmOwner = !isGroup
+    ? resolvePinnedMainDmOwnerFromAllowlist({
+        dmScope: cfg.session?.dmScope,
+        allowFrom: dmAllowFrom,
+        normalizeEntry: (entry) => normalizeAllowFrom([entry]).entries[0],
+      })
+    : null;
+
   await recordInboundSession({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? sessionKey,
@@ -766,6 +775,18 @@ export const buildTelegramMessageContext = async ({
           accountId: route.accountId,
           // Preserve DM topic threadId for replies (fixes #8891)
           threadId: dmThreadId != null ? String(dmThreadId) : undefined,
+          mainDmOwnerPin:
+            pinnedMainDmOwner && senderId
+              ? {
+                  ownerRecipient: pinnedMainDmOwner,
+                  senderRecipient: senderId,
+                  onSkip: ({ ownerRecipient, senderRecipient }) => {
+                    logVerbose(
+                      `telegram: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                    );
+                  },
+                }
+              : undefined,
         }
       : undefined,
     onRecordError: (err) => {

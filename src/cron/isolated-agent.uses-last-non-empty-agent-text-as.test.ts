@@ -152,6 +152,19 @@ async function runTurnWithStoredModelOverride(
   });
 }
 
+async function runStoredOverrideAndExpectModel(params: {
+  home: string;
+  deterministicCatalog: Array<{ id: string; name: string; provider: string }>;
+  jobPayload: CronJob["payload"];
+  expected: { provider: string; model: string };
+}) {
+  vi.mocked(runEmbeddedPiAgent).mockClear();
+  vi.mocked(loadModelCatalog).mockResolvedValue(params.deterministicCatalog);
+  const res = (await runTurnWithStoredModelOverride(params.home, params.jobPayload)).res;
+  expect(res.status).toBe("ok");
+  expectEmbeddedProviderModel(params.expected);
+}
+
 describe("runCronIsolatedAgentTurn", () => {
   beforeEach(() => {
     vi.mocked(runEmbeddedPiAgent).mockClear();
@@ -352,30 +365,28 @@ describe("runCronIsolatedAgentTurn", () => {
       expect(res.status).toBe("ok");
       expectEmbeddedProviderModel({ provider: "openai", model: "gpt-4.1-mini" });
 
-      vi.mocked(runEmbeddedPiAgent).mockClear();
-      vi.mocked(loadModelCatalog).mockResolvedValue(deterministicCatalog);
-      res = (
-        await runTurnWithStoredModelOverride(home, {
+      await runStoredOverrideAndExpectModel({
+        home,
+        deterministicCatalog,
+        jobPayload: {
           kind: "agentTurn",
           message: DEFAULT_MESSAGE,
           deliver: false,
-        })
-      ).res;
-      expect(res.status).toBe("ok");
-      expectEmbeddedProviderModel({ provider: "openai", model: "gpt-4.1-mini" });
+        },
+        expected: { provider: "openai", model: "gpt-4.1-mini" },
+      });
 
-      vi.mocked(runEmbeddedPiAgent).mockClear();
-      vi.mocked(loadModelCatalog).mockResolvedValue(deterministicCatalog);
-      res = (
-        await runTurnWithStoredModelOverride(home, {
+      await runStoredOverrideAndExpectModel({
+        home,
+        deterministicCatalog,
+        jobPayload: {
           kind: "agentTurn",
           message: DEFAULT_MESSAGE,
           model: "anthropic/claude-opus-4-5",
           deliver: false,
-        })
-      ).res;
-      expect(res.status).toBe("ok");
-      expectEmbeddedProviderModel({ provider: "anthropic", model: "claude-opus-4-5" });
+        },
+        expected: { provider: "anthropic", model: "claude-opus-4-5" },
+      });
     });
   });
 

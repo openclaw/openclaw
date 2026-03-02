@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
-import { classifyMSTeamsSendError, isRevokedProxyError } from "./errors.js";
+import { classifyMSTeamsSendError } from "./errors.js";
 import { prepareFileConsentActivity, requiresFileConsent } from "./file-consent-helpers.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
@@ -20,6 +20,7 @@ import {
 } from "./graph-upload.js";
 import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
 import { parseMentions } from "./mentions.js";
+import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 
 /**
@@ -441,34 +442,42 @@ export async function sendMSTeamsMessages(params: {
     }
   };
 
-  const sendMessagesInContext = async (
+  const sendMessageInContext = async (
     ctx: SendContext,
-    batch: MSTeamsRenderedMessage[] = messages,
-    offset = 0,
+    message: MSTeamsRenderedMessage,
+    messageIndex: number,
+  ): Promise<string> => {
+    const response = await sendWithRetry(
+      async () =>
+        await ctx.sendActivity(
+          await buildActivity(
+            message,
+            params.conversationRef,
+            params.tokenProvider,
+            params.sharePointSiteId,
+            params.mediaMaxBytes,
+          ),
+        ),
+      { messageIndex, messageCount: messages.length },
+    );
+    return extractMessageId(response) ?? "unknown";
+  };
+
+  const sendMessageBatchInContext = async (
+    ctx: SendContext,
+    batch: MSTeamsRenderedMessage[],
+    startIndex: number,
   ): Promise<string[]> => {
     const messageIds: string[] = [];
     for (const [idx, message] of batch.entries()) {
-      const response = await sendWithRetry(
-        async () =>
-          await ctx.sendActivity(
-            await buildActivity(
-              message,
-              params.conversationRef,
-              params.tokenProvider,
-              params.sharePointSiteId,
-              params.mediaMaxBytes,
-            ),
-          ),
-        { messageIndex: offset + idx, messageCount: messages.length },
-      );
-      messageIds.push(extractMessageId(response) ?? "unknown");
+      messageIds.push(await sendMessageInContext(ctx, message, startIndex + idx));
     }
     return messageIds;
   };
 
   const sendProactively = async (
-    batch: MSTeamsRenderedMessage[] = messages,
-    offset = 0,
+    batch: MSTeamsRenderedMessage[],
+    startIndex: number,
   ): Promise<string[]> => {
     const baseRef = buildConversationReference(params.conversationRef);
     const proactiveRef: MSTeamsConversationReference = {
@@ -478,7 +487,7 @@ export async function sendMSTeamsMessages(params: {
 
     const messageIds: string[] = [];
     await params.adapter.continueConversation(params.appId, proactiveRef, async (ctx) => {
-      messageIds.push(...(await sendMessagesInContext(ctx, batch, offset)));
+      messageIds.push(...(await sendMessageBatchInContext(ctx, batch, startIndex)));
     });
     return messageIds;
   };
@@ -490,16 +499,21 @@ export async function sendMSTeamsMessages(params: {
     }
     const messageIds: string[] = [];
     for (const [idx, message] of messages.entries()) {
-      try {
-        messageIds.push(...(await sendMessagesInContext(ctx, [message], idx)));
-      } catch (err) {
-        if (!isRevokedProxyError(err)) {
-          throw err;
-        }
-        const remaining = messages.slice(idx);
-        if (remaining.length > 0) {
-          messageIds.push(...(await sendProactively(remaining, idx)));
-        }
+      const result = await withRevokedProxyFallback({
+        run: async () => ({
+          ids: [await sendMessageInContext(ctx, message, idx)],
+          fellBack: false,
+        }),
+        onRevoked: async () => {
+          const remaining = messages.slice(idx);
+          return {
+            ids: remaining.length > 0 ? await sendProactively(remaining, idx) : [],
+            fellBack: true,
+          };
+        },
+      });
+      messageIds.push(...result.ids);
+      if (result.fellBack) {
         return messageIds;
       }
     }
