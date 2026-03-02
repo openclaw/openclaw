@@ -8,7 +8,9 @@ const mocks = vi.hoisted(() => ({
   getAgentScopedMediaLocalRoots: vi.fn(() => ["/tmp/agent-roots"]),
   hookRunner: {
     hasHooks: vi.fn(() => false),
-    runMessageSending: vi.fn(async () => undefined),
+    runMessageSending: vi.fn(
+      async () => undefined as { content?: string; cancel?: boolean } | undefined,
+    ),
   },
 }));
 
@@ -137,9 +139,7 @@ describe("executeSendAction", () => {
   });
 
   it("applies message_sending hook content overrides before plugin dispatch", async () => {
-    mocks.hookRunner.hasHooks.mockImplementation(
-      (hookName: string) => hookName === "message_sending",
-    );
+    mocks.hookRunner.hasHooks.mockReturnValue(true);
     mocks.hookRunner.runMessageSending.mockResolvedValue({ content: "rewritten by hook" });
     mocks.dispatchChannelMessageAction.mockResolvedValue({
       ok: true,
