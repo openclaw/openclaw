@@ -104,7 +104,7 @@ function resolveDefaultReadOnlyTarget(
 /**
  * Resolve session relay-routing mode and optional relay target using live inbound context.
  */
-export function resolveRelayRoute(params: {
+export function resolveSessionRelayRoute(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
   channel?: string;

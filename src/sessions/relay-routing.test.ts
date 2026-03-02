@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveRelayRoute } from "./relay-routing.js";
+import { resolveSessionRelayRoute } from "./relay-routing.js";
 
-describe("resolveRelayRoute", () => {
+describe("resolveSessionRelayRoute", () => {
   it("defaults to read-write when relayRouting is not configured", () => {
     const cfg = {} as OpenClawConfig;
-    expect(resolveRelayRoute({ cfg }).mode).toBe("read-write");
+    expect(resolveSessionRelayRoute({ cfg }).mode).toBe("read-write");
   });
 
   it("uses first-match semantics when multiple rules match", () => {
@@ -23,7 +23,7 @@ describe("resolveRelayRoute", () => {
       },
     } as OpenClawConfig;
 
-    expect(resolveRelayRoute({ cfg, channel: "discord" }).mode).toBe("read-write");
+    expect(resolveSessionRelayRoute({ cfg, channel: "discord" }).mode).toBe("read-write");
   });
 
   it("matches keyPrefix against stripped session keys", () => {
@@ -38,10 +38,10 @@ describe("resolveRelayRoute", () => {
       },
     } as OpenClawConfig;
 
-    expect(resolveRelayRoute({ cfg, sessionKey: "agent:main:discord:group:dev" }).mode).toBe(
+    expect(resolveSessionRelayRoute({ cfg, sessionKey: "agent:main:discord:group:dev" }).mode).toBe(
       "read-only",
     );
-    expect(resolveRelayRoute({ cfg, sessionKey: "agent:main:slack:group:dev" }).mode).toBe(
+    expect(resolveSessionRelayRoute({ cfg, sessionKey: "agent:main:slack:group:dev" }).mode).toBe(
       "read-write",
     );
   });
@@ -64,10 +64,12 @@ describe("resolveRelayRoute", () => {
       },
     } as OpenClawConfig;
 
-    expect(resolveRelayRoute({ cfg, sessionKey: "agent:main:discord:group:dev" }).mode).toBe(
+    expect(resolveSessionRelayRoute({ cfg, sessionKey: "agent:main:discord:group:dev" }).mode).toBe(
       "read-only",
     );
-    expect(resolveRelayRoute({ cfg, sessionKey: "discord:group:dev" }).mode).toBe("read-write");
+    expect(resolveSessionRelayRoute({ cfg, sessionKey: "discord:group:dev" }).mode).toBe(
+      "read-write",
+    );
   });
 
   it("normalizes chatType matching (dm and direct are equivalent)", () => {
@@ -82,15 +84,15 @@ describe("resolveRelayRoute", () => {
       },
     } as OpenClawConfig;
 
-    expect(resolveRelayRoute({ cfg, chatType: "dm" }).mode).toBe("read-only");
-    expect(resolveRelayRoute({ cfg, chatType: "mystery-type" }).mode).toBe("read-write");
+    expect(resolveSessionRelayRoute({ cfg, chatType: "dm" }).mode).toBe("read-only");
+    expect(resolveSessionRelayRoute({ cfg, chatType: "mystery-type" }).mode).toBe("read-write");
   });
 
   it('falls back to read-write when defaultMode is "read-only" and targets are ambiguous', () => {
     const noTargets = {
       session: { relayRouting: { defaultMode: "read-only" } },
     } as OpenClawConfig;
-    expect(resolveRelayRoute({ cfg: noTargets }).mode).toBe("read-write");
+    expect(resolveSessionRelayRoute({ cfg: noTargets }).mode).toBe("read-write");
 
     const multipleTargets = {
       session: {
@@ -103,7 +105,7 @@ describe("resolveRelayRoute", () => {
         },
       },
     } as OpenClawConfig;
-    expect(resolveRelayRoute({ cfg: multipleTargets }).mode).toBe("read-write");
+    expect(resolveSessionRelayRoute({ cfg: multipleTargets }).mode).toBe("read-write");
   });
 
   it('uses the lone target when defaultMode is "read-only" and exactly one target exists', () => {
@@ -118,7 +120,7 @@ describe("resolveRelayRoute", () => {
       },
     } as OpenClawConfig;
 
-    const route = resolveRelayRoute({ cfg });
+    const route = resolveSessionRelayRoute({ cfg });
     expect(route.mode).toBe("read-only");
     if (route.mode === "read-only") {
       expect(route.target).toEqual({
@@ -142,7 +144,7 @@ describe("resolveRelayRoute", () => {
       },
     } as OpenClawConfig;
 
-    const route = resolveRelayRoute({
+    const route = resolveSessionRelayRoute({
       cfg,
       channel: "discord",
       sessionKey: "agent:main:discord:group:123",
@@ -184,7 +186,7 @@ describe("resolveRelayRoute", () => {
       },
     } as OpenClawConfig;
 
-    const route = resolveRelayRoute({
+    const route = resolveSessionRelayRoute({
       cfg,
       channel: "discord",
       sessionKey: "agent:main:slack:group:dev",
