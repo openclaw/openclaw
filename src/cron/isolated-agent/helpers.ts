@@ -87,8 +87,8 @@ export function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
 }
 
 /**
- * Check if all payloads are just heartbeat ack responses (HEARTBEAT_OK).
- * Returns true if delivery should be skipped because there's no real content.
+ * Check if delivery should be skipped because the agent signaled no user-visible update.
+ * Returns true when any payload is a heartbeat ack token and no payload contains media.
  */
 export function isHeartbeatOnlyResponse(payloads: DeliveryPayload[], ackMaxChars: number) {
   if (payloads.length === 0) {
