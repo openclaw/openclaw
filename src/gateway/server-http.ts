@@ -452,6 +452,25 @@ export function createGatewayHttpServer(opts: {
           return;
         }
       }
+      // Plugin routes run before Control UI so the SPA fallback doesn't swallow them.
+      if (handlePluginRequest) {
+        if ((shouldEnforcePluginGatewayAuth ?? isProtectedPluginRoutePath)(requestPath)) {
+          const pluginAuthOk = await enforcePluginRouteGatewayAuth({
+            req,
+            res,
+            auth: resolvedAuth,
+            trustedProxies,
+            allowRealIpFallback,
+            rateLimiter,
+          });
+          if (!pluginAuthOk) {
+            return;
+          }
+        }
+        if (await handlePluginRequest(req, res)) {
+          return;
+        }
+      }
       if (controlUiEnabled) {
         if (
           handleControlUiAvatarRequest(req, res, {
@@ -468,25 +487,6 @@ export function createGatewayHttpServer(opts: {
             root: controlUiRoot,
           })
         ) {
-          return;
-        }
-      }
-      // Plugins run last so built-in gateway routes keep precedence on overlapping paths.
-      if (handlePluginRequest) {
-        if ((shouldEnforcePluginGatewayAuth ?? isProtectedPluginRoutePath)(requestPath)) {
-          const pluginAuthOk = await enforcePluginRouteGatewayAuth({
-            req,
-            res,
-            auth: resolvedAuth,
-            trustedProxies,
-            allowRealIpFallback,
-            rateLimiter,
-          });
-          if (!pluginAuthOk) {
-            return;
-          }
-        }
-        if (await handlePluginRequest(req, res)) {
           return;
         }
       }
