@@ -3,12 +3,18 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
-import { handleFeishuMessage, type FeishuMessageEvent, type FeishuBotAddedEvent } from "./bot.js";
+import {
+  handleFeishuMessage,
+  parseFeishuMessageEvent,
+  type FeishuMessageEvent,
+  type FeishuBotAddedEvent,
+} from "./bot.js";
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
 import { createEventDispatcher } from "./client.js";
 import { fetchBotOpenIdForMonitor } from "./monitor.startup.js";
 import { botOpenIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
+import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -125,28 +131,101 @@ function registerEventHandlers(
   context: RegisterEventHandlersContext,
 ): void {
   const { cfg, accountId, runtime, chatHistories, fireAndForget } = context;
+  const core = getFeishuRuntime();
+  const inboundDebounceMs = core.channel.debounce.resolveInboundDebounceMs({
+    cfg,
+    channel: "feishu",
+  });
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
+  const dispatchFeishuMessage = async (event: FeishuMessageEvent) => {
+    await handleFeishuMessage({
+      cfg,
+      event,
+      botOpenId: botOpenIds.get(accountId),
+      runtime,
+      chatHistories,
+      accountId,
+    });
+  };
+  const resolveSenderDebounceId = (event: FeishuMessageEvent): string | undefined => {
+    const senderId =
+      event.sender.sender_id.open_id?.trim() || event.sender.sender_id.user_id?.trim();
+    return senderId || undefined;
+  };
+  const resolveDebounceText = (event: FeishuMessageEvent): string => {
+    const botOpenId = botOpenIds.get(accountId);
+    const parsed = parseFeishuMessageEvent(event, botOpenId);
+    return parsed.content.trim();
+  };
+  const inboundDebouncer = core.channel.debounce.createInboundDebouncer<FeishuMessageEvent>({
+    debounceMs: inboundDebounceMs,
+    buildKey: (event) => {
+      const chatId = event.message.chat_id?.trim();
+      const senderId = resolveSenderDebounceId(event);
+      if (!chatId || !senderId) {
+        return null;
+      }
+      const rootId = event.message.root_id?.trim();
+      const threadKey = rootId ? `thread:${rootId}` : "chat";
+      return `feishu:${accountId}:${chatId}:${threadKey}:${senderId}`;
+    },
+    shouldDebounce: (event) => {
+      if (event.message.message_type !== "text") {
+        return false;
+      }
+      const text = resolveDebounceText(event);
+      if (!text) {
+        return false;
+      }
+      return !core.channel.text.hasControlCommand(text, cfg);
+    },
+    onFlush: async (entries) => {
+      const last = entries.at(-1);
+      if (!last) {
+        return;
+      }
+      if (entries.length === 1) {
+        await dispatchFeishuMessage(last);
+        return;
+      }
+      const combinedText = entries
+        .map((entry) => resolveDebounceText(entry))
+        .filter(Boolean)
+        .join("\n");
+      if (!combinedText.trim()) {
+        await dispatchFeishuMessage(last);
+        return;
+      }
+      await dispatchFeishuMessage({
+        ...last,
+        message: {
+          ...last.message,
+          message_type: "text",
+          content: JSON.stringify({ text: combinedText }),
+          mentions: undefined,
+        },
+      });
+    },
+    onError: (err) => {
+      error(`feishu[${accountId}]: inbound debounce flush failed: ${String(err)}`);
+    },
+  });
 
   eventDispatcher.register({
     "im.message.receive_v1": async (data) => {
-      try {
+      const processMessage = async () => {
         const event = data as unknown as FeishuMessageEvent;
-        const promise = handleFeishuMessage({
-          cfg,
-          event,
-          botOpenId: botOpenIds.get(accountId),
-          runtime,
-          chatHistories,
-          accountId,
+        await inboundDebouncer.enqueue(event);
+      };
+      if (fireAndForget) {
+        void processMessage().catch((err) => {
+          error(`feishu[${accountId}]: error handling message: ${String(err)}`);
         });
-        if (fireAndForget) {
-          promise.catch((err) => {
-            error(`feishu[${accountId}]: error handling message: ${String(err)}`);
-          });
-        } else {
-          await promise;
-        }
+        return;
+      }
+      try {
+        await processMessage();
       } catch (err) {
         error(`feishu[${accountId}]: error handling message: ${String(err)}`);
       }
