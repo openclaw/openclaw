@@ -43,3 +43,26 @@ export {
   telegramUserbotConfigSchema,
 } from "./config-schema.js";
 export type { TelegramUserbotConfig } from "./config-schema.js";
+
+// Channel plugin + runtime
+export { telegramUserbotPlugin, getConnectionManager } from "./channel.js";
+export {
+  setTelegramUserbotRuntime,
+  clearTelegramUserbotRuntime,
+  tryGetTelegramUserbotRuntime,
+  getTelegramUserbotRuntime,
+} from "./runtime.js";
+
+// Adapters
+export {
+  telegramUserbotConfigAdapter,
+  listTelegramUserbotAccountIds,
+  resolveDefaultTelegramUserbotAccountId,
+  resolveTelegramUserbotAccount,
+} from "./adapters/config.js";
+export type { ResolvedTelegramUserbotAccount } from "./adapters/config.js";
+export { telegramUserbotAuthAdapter } from "./adapters/auth.js";
+export { telegramUserbotSetupAdapter } from "./adapters/setup.js";
+export { telegramUserbotStatusAdapter } from "./adapters/status.js";
+export type { TelegramUserbotProbe } from "./adapters/status.js";
+export { telegramUserbotSecurityAdapter } from "./adapters/security.js";
