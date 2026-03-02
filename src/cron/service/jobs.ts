@@ -129,7 +129,8 @@ function validateTelegramDeliveryTarget(to: string | undefined): string | undefi
 }
 
 function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
-  if (!job.delivery) {
+  // No delivery object or mode is "none" -- nothing to validate.
+  if (!job.delivery || job.delivery.mode === "none") {
     return;
   }
   if (job.delivery.mode === "webhook") {
