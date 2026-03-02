@@ -392,6 +392,81 @@ describe("chrome extension relay server", () => {
     ext2.close();
   });
 
+  it("keeps /json/version websocket endpoint during short extension disconnects", async () => {
+    const { port, ext } = await startRelayWithExtension();
+    ext.send(
+      JSON.stringify({
+        method: "forwardCDPEvent",
+        params: {
+          method: "Target.attachedToTarget",
+          params: {
+            sessionId: "cb-tab-disconnect",
+            targetInfo: {
+              targetId: "t-disconnect",
+              type: "page",
+              title: "Disconnect test",
+              url: "https://example.com",
+            },
+            waitingForDebugger: false,
+          },
+        },
+      }),
+    );
+
+    await waitForListMatch(
+      async () =>
+        (await fetch(`${cdpUrl}/json/list`, {
+          headers: relayAuthHeaders(cdpUrl),
+        }).then((r) => r.json())) as Array<{ id?: string }>,
+      (list) => list.some((entry) => entry.id === "t-disconnect"),
+    );
+
+    const extClosed = waitForClose(ext, 2_000);
+    ext.close();
+    await extClosed;
+
+    const version = (await fetch(`${cdpUrl}/json/version`, {
+      headers: relayAuthHeaders(cdpUrl),
+    }).then((r) => r.json())) as {
+      webSocketDebuggerUrl?: string;
+    };
+    expect(String(version.webSocketDebuggerUrl ?? "")).toContain("/cdp");
+
+    const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
+      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
+    });
+    await waitForOpen(cdp);
+    cdp.close();
+  });
+
+  it("accepts re-announce attach events with minimal targetInfo", async () => {
+    const { ext } = await startRelayWithExtension();
+    ext.send(
+      JSON.stringify({
+        method: "forwardCDPEvent",
+        params: {
+          method: "Target.attachedToTarget",
+          params: {
+            sessionId: "cb-tab-minimal",
+            targetInfo: {
+              targetId: "t-minimal",
+            },
+            waitingForDebugger: false,
+          },
+        },
+      }),
+    );
+
+    const list = await waitForListMatch(
+      async () =>
+        (await fetch(`${cdpUrl}/json/list`, {
+          headers: relayAuthHeaders(cdpUrl),
+        }).then((r) => r.json())) as Array<{ id?: string }>,
+      (entries) => entries.some((entry) => entry.id === "t-minimal"),
+    );
+    expect(list.some((entry) => entry.id === "t-minimal")).toBe(true);
+  });
+
   it("waits briefly for extension reconnect before failing CDP commands", async () => {
     const { port, ext: ext1 } = await startRelayWithExtension();
     const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
@@ -452,6 +527,46 @@ describe("chrome extension relay server", () => {
 
     ext.close();
     await waitForClose(cdp, 2_000);
+  });
+
+  it("stops advertising websocket endpoint after reconnect grace expires", async () => {
+    process.env.OPENCLAW_EXTENSION_RELAY_RECONNECT_GRACE_MS = "120";
+
+    const { ext } = await startRelayWithExtension();
+    ext.send(
+      JSON.stringify({
+        method: "forwardCDPEvent",
+        params: {
+          method: "Target.attachedToTarget",
+          params: {
+            sessionId: "cb-tab-grace-expire",
+            targetInfo: {
+              targetId: "t-grace-expire",
+              type: "page",
+              title: "Grace expire",
+              url: "https://example.com",
+            },
+            waitingForDebugger: false,
+          },
+        },
+      }),
+    );
+
+    await waitForListMatch(
+      async () =>
+        (await fetch(`${cdpUrl}/json/list`, {
+          headers: relayAuthHeaders(cdpUrl),
+        }).then((r) => r.json())) as Array<{ id?: string }>,
+      (list) => list.some((entry) => entry.id === "t-grace-expire"),
+    );
+
+    ext.close();
+    await new Promise((r) => setTimeout(r, 250));
+
+    const version = (await fetch(`${cdpUrl}/json/version`, {
+      headers: relayAuthHeaders(cdpUrl),
+    }).then((r) => r.json())) as { webSocketDebuggerUrl?: string };
+    expect(version.webSocketDebuggerUrl).toBeUndefined();
   });
 
   it("accepts extension websocket access with relay token query param", async () => {
@@ -722,6 +837,176 @@ describe("chrome extension relay server", () => {
       await new Promise<void>((resolve) => fakeRelay.close(() => resolve()));
     }
   });
+
+  it(
+    "restores tabs after extension reconnects and re-announces",
+    async () => {
+      process.env.OPENCLAW_EXTENSION_RELAY_RECONNECT_GRACE_MS = "200";
+
+      const { port, ext: ext1 } = await startRelayWithExtension();
+
+      ext1.send(
+        JSON.stringify({
+          method: "forwardCDPEvent",
+          params: {
+            method: "Target.attachedToTarget",
+            params: {
+              sessionId: "cb-tab-10",
+              targetInfo: {
+                targetId: "t10",
+                type: "page",
+                title: "My Page",
+                url: "https://example.com",
+              },
+              waitingForDebugger: false,
+            },
+          },
+        }),
+      );
+
+      const list1 = await waitForListMatch(
+        async () =>
+          (await fetch(`${cdpUrl}/json/list`, {
+            headers: relayAuthHeaders(cdpUrl),
+          }).then((r) => r.json())) as Array<{ id?: string }>,
+        (list) => list.some((t) => t.id === "t10"),
+      );
+      expect(list1.some((t) => t.id === "t10")).toBe(true);
+
+      // Disconnect extension and wait for grace period cleanup.
+      const ext1Closed = waitForClose(ext1, 2_000);
+      ext1.close();
+      await ext1Closed;
+      await new Promise((r) => setTimeout(r, 400));
+
+      const listEmpty = (await fetch(`${cdpUrl}/json/list`, {
+        headers: relayAuthHeaders(cdpUrl),
+      }).then((r) => r.json())) as Array<{ id?: string }>;
+      expect(listEmpty.length).toBe(0);
+
+      // Reconnect and re-announce the same tab (simulates reannounceAttachedTabs).
+      const ext2 = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
+        headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+      });
+      await waitForOpen(ext2);
+
+      ext2.send(
+        JSON.stringify({
+          method: "forwardCDPEvent",
+          params: {
+            method: "Target.attachedToTarget",
+            params: {
+              sessionId: "cb-tab-10",
+              targetInfo: {
+                targetId: "t10",
+                type: "page",
+                title: "My Page",
+                url: "https://example.com",
+              },
+              waitingForDebugger: false,
+            },
+          },
+        }),
+      );
+
+      const list2 = await waitForListMatch(
+        async () =>
+          (await fetch(`${cdpUrl}/json/list`, {
+            headers: relayAuthHeaders(cdpUrl),
+          }).then((r) => r.json())) as Array<{ id?: string; title?: string }>,
+        (list) => list.some((t) => t.id === "t10"),
+      );
+      expect(list2.some((t) => t.id === "t10" && t.title === "My Page")).toBe(true);
+
+      ext2.close();
+    },
+    RELAY_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "preserves tab across a fast extension reconnect within grace period",
+    async () => {
+      process.env.OPENCLAW_EXTENSION_RELAY_RECONNECT_GRACE_MS = "2000";
+
+      const { port, ext: ext1 } = await startRelayWithExtension();
+
+      ext1.send(
+        JSON.stringify({
+          method: "forwardCDPEvent",
+          params: {
+            method: "Target.attachedToTarget",
+            params: {
+              sessionId: "cb-tab-20",
+              targetInfo: {
+                targetId: "t20",
+                type: "page",
+                title: "Persistent",
+                url: "https://example.org",
+              },
+              waitingForDebugger: false,
+            },
+          },
+        }),
+      );
+
+      await waitForListMatch(
+        async () =>
+          (await fetch(`${cdpUrl}/json/list`, {
+            headers: relayAuthHeaders(cdpUrl),
+          }).then((r) => r.json())) as Array<{ id?: string }>,
+        (list) => list.some((t) => t.id === "t20"),
+      );
+
+      // Disconnect briefly (within grace period).
+      const ext1Closed = waitForClose(ext1, 2_000);
+      ext1.close();
+      await ext1Closed;
+      await new Promise((r) => setTimeout(r, 100));
+
+      // Tab should still be listed during grace period.
+      const listDuringGrace = (await fetch(`${cdpUrl}/json/list`, {
+        headers: relayAuthHeaders(cdpUrl),
+      }).then((r) => r.json())) as Array<{ id?: string }>;
+      expect(listDuringGrace.some((t) => t.id === "t20")).toBe(true);
+
+      // Reconnect within grace and re-announce with updated info.
+      const ext2 = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
+        headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+      });
+      await waitForOpen(ext2);
+
+      ext2.send(
+        JSON.stringify({
+          method: "forwardCDPEvent",
+          params: {
+            method: "Target.attachedToTarget",
+            params: {
+              sessionId: "cb-tab-20",
+              targetInfo: {
+                targetId: "t20",
+                type: "page",
+                title: "Persistent Updated",
+                url: "https://example.org/new",
+              },
+              waitingForDebugger: false,
+            },
+          },
+        }),
+      );
+
+      const list2 = await waitForListMatch(
+        async () =>
+          (await fetch(`${cdpUrl}/json/list`, {
+            headers: relayAuthHeaders(cdpUrl),
+          }).then((r) => r.json())) as Array<{ id?: string; title?: string; url?: string }>,
+        (list) => list.some((t) => t.id === "t20" && t.title === "Persistent Updated"),
+      );
+      expect(list2.some((t) => t.id === "t20" && t.url === "https://example.org/new")).toBe(true);
+
+      ext2.close();
+    },
+    RELAY_TEST_TIMEOUT_MS,
+  );
 
   it("does not swallow EADDRINUSE when occupied port is not an openclaw relay", async () => {
     const port = await getFreePort();

@@ -83,6 +83,76 @@ export function hasRootVersionAlias(argv: string[]): boolean {
   return hasAlias;
 }
 
+export function isRootVersionInvocation(argv: string[]): boolean {
+  const args = argv.slice(2);
+  let hasVersion = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (!arg) {
+      continue;
+    }
+    if (arg === FLAG_TERMINATOR) {
+      break;
+    }
+    if (arg === ROOT_VERSION_ALIAS_FLAG || VERSION_FLAGS.has(arg)) {
+      hasVersion = true;
+      continue;
+    }
+    if (ROOT_BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    if (arg.startsWith("--profile=") || arg.startsWith("--log-level=")) {
+      continue;
+    }
+    if (ROOT_VALUE_FLAGS.has(arg)) {
+      const next = args[i + 1];
+      if (isValueToken(next)) {
+        i += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      return false;
+    }
+    return false;
+  }
+  return hasVersion;
+}
+
+export function isRootHelpInvocation(argv: string[]): boolean {
+  const args = argv.slice(2);
+  let hasHelp = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (!arg) {
+      continue;
+    }
+    if (arg === FLAG_TERMINATOR) {
+      break;
+    }
+    if (HELP_FLAGS.has(arg)) {
+      hasHelp = true;
+      continue;
+    }
+    if (ROOT_BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    if (arg.startsWith("--profile=") || arg.startsWith("--log-level=")) {
+      continue;
+    }
+    if (ROOT_VALUE_FLAGS.has(arg)) {
+      const next = args[i + 1];
+      if (isValueToken(next)) {
+        i += 1;
+      }
+      continue;
+    }
+    // Unknown flags and subcommand-scoped help should fall back to Commander.
+    return false;
+  }
+  return hasHelp;
+}
+
 export function getFlagValue(argv: string[], name: string): string | null | undefined {
   const args = argv.slice(2);
   for (let i = 0; i < args.length; i += 1) {
