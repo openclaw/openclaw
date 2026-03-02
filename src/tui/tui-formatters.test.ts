@@ -249,6 +249,20 @@ describe("sanitizeRenderableText", () => {
     expect(sanitized).toBe(input);
   });
 
+  it("preserves long credential-like base64 tokens for copy safety", () => {
+    const input = "hPc5j+rBJs5Vh0LLEKnd9qdanH0TD3VjLRlYCTKImuw=";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves long hexadecimal digest tokens for copy safety", () => {
+    const input = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
   it("wraps rtl lines with directional isolation marks", () => {
     const input = "مرحبا بالعالم";
     const sanitized = sanitizeRenderableText(input);
