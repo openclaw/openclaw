@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
+import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import { parseHttpUrl, resolveProfile } from "./config.js";
 import { DEFAULT_BROWSER_DEFAULT_PROFILE_NAME } from "./constants.js";
@@ -38,6 +39,30 @@ export type DeleteProfileResult = {
 };
 
 const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
+
+const cdpPortRange = (resolved: {
+  controlPort: number;
+  cdpPortRangeStart?: number;
+  cdpPortRangeEnd?: number;
+}): { start: number; end: number } => {
+  const start = resolved.cdpPortRangeStart;
+  const end = resolved.cdpPortRangeEnd;
+  if (
+    typeof start === "number" &&
+    Number.isFinite(start) &&
+    Number.isInteger(start) &&
+    typeof end === "number" &&
+    Number.isFinite(end) &&
+    Number.isInteger(end) &&
+    start > 0 &&
+    end >= start &&
+    end <= 65535
+  ) {
+    return { start, end };
+  }
+
+  return deriveDefaultBrowserCdpPortRange(resolved.controlPort);
+};
 
 export function createBrowserProfilesService(ctx: BrowserRouteContext) {
   const listProfiles = async (): Promise<ProfileStatus[]> => {
@@ -79,10 +104,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       };
     } else {
       const usedPorts = getUsedPorts(resolvedProfiles);
-      const range = {
-        start: state.resolved.cdpPortRangeStart,
-        end: state.resolved.cdpPortRangeEnd,
-      };
+      const range = cdpPortRange(state.resolved);
       const cdpPort = allocateCdpPort(usedPorts, range);
       if (cdpPort === null) {
         throw new Error("no available CDP ports in range");
