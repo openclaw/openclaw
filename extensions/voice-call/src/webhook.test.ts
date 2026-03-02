@@ -14,6 +14,7 @@ const provider: VoiceCallProvider = {
   playTts: async () => {},
   startListening: async () => {},
   stopListening: async () => {},
+  getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
 };
 
 const createConfig = (overrides: Partial<VoiceCallConfig> = {}): VoiceCallConfig => {
