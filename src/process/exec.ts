@@ -135,10 +135,12 @@ export async function runCommandWithTimeout(
 
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
   const resolvedCommand = resolveCommand(argv[0] ?? "");
+  const isWindows = process.platform === "win32";
   const child = spawn(resolvedCommand, argv.slice(1), {
     stdio,
     cwd,
     env: resolvedEnv,
+    shell: isWindows,
     windowsVerbatimArguments,
     ...(shouldSpawnWithShell({ resolvedCommand, platform: process.platform })
       ? { shell: true }
