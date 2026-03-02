@@ -13,6 +13,7 @@ import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
+import { createPdfTool } from "./tools/pdf-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -82,6 +83,18 @@ export function createOpenClawTools(options?: {
             : undefined,
         fsPolicy: options?.fsPolicy,
         modelHasVision: options?.modelHasVision,
+      })
+    : null;
+  const pdfTool = options?.agentDir?.trim()
+    ? createPdfTool({
+        config: options?.config,
+        agentDir: options.agentDir,
+        workspaceDir,
+        sandbox:
+          options?.sandboxRoot && options?.sandboxFsBridge
+            ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
+            : undefined,
+        fsPolicy: options?.fsPolicy,
       })
     : null;
   const webSearchTool = createWebSearchTool({
@@ -173,6 +186,7 @@ export function createOpenClawTools(options?: {
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
+    ...(pdfTool ? [pdfTool] : []),
   ];
 
   const pluginTools = resolvePluginTools({
