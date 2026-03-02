@@ -145,8 +145,13 @@ describe("subagent announce formatting", () => {
   let runSubagentAnnounceFlow: (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
 
   beforeAll(async () => {
-    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
+    // Capture and set OPENCLAW_TEST_FAST *before* the dynamic import so the
+    // module-level FAST_TEST_MODE const picks it up. Without this, Windows CI
+    // (where the env var may not be pre-set) uses production retry intervals
+    // that are too slow for the tight timeoutMs values in these tests.
     previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
+    process.env.OPENCLAW_TEST_FAST = "1";
+    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
   });
 
   afterAll(() => {
