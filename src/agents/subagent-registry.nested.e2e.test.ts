@@ -162,4 +162,88 @@ describe("subagent registry nested agent tracking", () => {
     expect(countActiveDescendantRuns("agent:main:main")).toBe(1);
     expect(countActiveDescendantRuns("agent:main:subagent:orch-ended")).toBe(1);
   });
+
+  it("countPendingDescendantRuns includes ended descendants until cleanup completes", async () => {
+    const { addSubagentRunForTests, countPendingDescendantRuns } = subagentRegistry;
+
+    addSubagentRunForTests({
+      runId: "run-parent-ended-pending",
+      childSessionKey: "agent:main:subagent:orch-pending",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "orchestrate",
+      cleanup: "keep",
+      createdAt: 1,
+      startedAt: 1,
+      endedAt: 2,
+      cleanupHandled: false,
+      cleanupCompletedAt: undefined,
+    });
+    addSubagentRunForTests({
+      runId: "run-leaf-ended-pending",
+      childSessionKey: "agent:main:subagent:orch-pending:subagent:leaf",
+      requesterSessionKey: "agent:main:subagent:orch-pending",
+      requesterDisplayKey: "orch-pending",
+      task: "leaf",
+      cleanup: "keep",
+      createdAt: 1,
+      startedAt: 1,
+      endedAt: 2,
+      cleanupHandled: true,
+      cleanupCompletedAt: undefined,
+    });
+
+    expect(countPendingDescendantRuns("agent:main:main")).toBe(2);
+    expect(countPendingDescendantRuns("agent:main:subagent:orch-pending")).toBe(1);
+
+    addSubagentRunForTests({
+      runId: "run-leaf-completed",
+      childSessionKey: "agent:main:subagent:orch-pending:subagent:leaf-completed",
+      requesterSessionKey: "agent:main:subagent:orch-pending",
+      requesterDisplayKey: "orch-pending",
+      task: "leaf complete",
+      cleanup: "keep",
+      createdAt: 1,
+      startedAt: 1,
+      endedAt: 2,
+      cleanupHandled: true,
+      cleanupCompletedAt: 3,
+    });
+    expect(countPendingDescendantRuns("agent:main:subagent:orch-pending")).toBe(1);
+  });
+
+  it("countPendingDescendantRunsExcludingRun ignores only the active announce run", async () => {
+    const { addSubagentRunForTests, countPendingDescendantRunsExcludingRun } = subagentRegistry;
+
+    addSubagentRunForTests({
+      runId: "run-self",
+      childSessionKey: "agent:main:subagent:worker",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "self",
+      cleanup: "keep",
+      createdAt: 1,
+      startedAt: 1,
+      endedAt: 2,
+      cleanupHandled: false,
+      cleanupCompletedAt: undefined,
+    });
+
+    addSubagentRunForTests({
+      runId: "run-sibling",
+      childSessionKey: "agent:main:subagent:sibling",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "sibling",
+      cleanup: "keep",
+      createdAt: 1,
+      startedAt: 1,
+      endedAt: 2,
+      cleanupHandled: false,
+      cleanupCompletedAt: undefined,
+    });
+
+    expect(countPendingDescendantRunsExcludingRun("agent:main:main", "run-self")).toBe(1);
+    expect(countPendingDescendantRunsExcludingRun("agent:main:main", "run-sibling")).toBe(1);
+  });
 });
