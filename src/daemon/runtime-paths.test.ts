@@ -12,6 +12,7 @@ vi.mock("node:fs/promises", () => ({
 import {
   renderSystemNodeWarning,
   resolvePreferredNodePath,
+  resolveStableNodePath,
   resolveSystemNodeInfo,
 } from "./runtime-paths.js";
 
@@ -19,9 +20,9 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
-function mockNodePathPresent(nodePath: string) {
+function mockNodePathPresent(...nodePaths: string[]) {
   fsMocks.access.mockImplementation(async (target: string) => {
-    if (target === nodePath) {
+    if (nodePaths.includes(target)) {
       return;
     }
     throw new Error("missing");
@@ -139,6 +140,61 @@ describe("resolvePreferredNodePath", () => {
     });
 
     expect(result).toBeUndefined();
+  });
+});
+
+describe("resolveStableNodePath", () => {
+  it("resolves Homebrew Cellar path to stable symlink", async () => {
+    mockNodePathPresent("/opt/homebrew/bin/node");
+
+    const result = await resolveStableNodePath("/opt/homebrew/Cellar/node/25.7.0/bin/node");
+    expect(result).toBe("/opt/homebrew/bin/node");
+  });
+
+  it("resolves Intel Mac Cellar path to stable symlink", async () => {
+    mockNodePathPresent("/usr/local/bin/node");
+
+    const result = await resolveStableNodePath("/usr/local/Cellar/node/25.7.0/bin/node");
+    expect(result).toBe("/usr/local/bin/node");
+  });
+
+  it("returns original path when symlink does not exist", async () => {
+    fsMocks.access.mockRejectedValue(new Error("missing"));
+
+    const cellarPath = "/opt/homebrew/Cellar/node/25.7.0/bin/node";
+    const result = await resolveStableNodePath(cellarPath);
+    expect(result).toBe(cellarPath);
+  });
+
+  it("returns non-Cellar paths unchanged", async () => {
+    const fnmPath = "/Users/test/.fnm/node-versions/v24.11.1/installation/bin/node";
+    const result = await resolveStableNodePath(fnmPath);
+    expect(result).toBe(fnmPath);
+  });
+
+  it("returns system paths unchanged", async () => {
+    const result = await resolveStableNodePath("/opt/homebrew/bin/node");
+    expect(result).toBe("/opt/homebrew/bin/node");
+  });
+});
+
+describe("resolvePreferredNodePath — Homebrew Cellar", () => {
+  it("resolves Cellar execPath to stable Homebrew symlink", async () => {
+    const cellarNode = "/opt/homebrew/Cellar/node/25.7.0/bin/node";
+    const stableNode = "/opt/homebrew/bin/node";
+    mockNodePathPresent(stableNode);
+
+    const execFile = vi.fn().mockResolvedValue({ stdout: "25.7.0\n", stderr: "" });
+
+    const result = await resolvePreferredNodePath({
+      env: {},
+      runtime: "node",
+      platform: "darwin",
+      execFile,
+      execPath: cellarNode,
+    });
+
+    expect(result).toBe(stableNode);
   });
 });
 

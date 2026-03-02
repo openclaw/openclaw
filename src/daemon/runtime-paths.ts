@@ -153,6 +153,26 @@ export function renderSystemNodeWarning(
   return `System Node ${versionLabel} at ${systemNode.path} is below the required Node 22+.${selectedLabel} Install Node 22+ from nodejs.org or Homebrew.`;
 }
 
+/**
+ * Homebrew Cellar paths (e.g. /opt/homebrew/Cellar/node/25.7.0/bin/node)
+ * break when Homebrew upgrades Node and removes the old version directory.
+ * Resolve these to the stable Homebrew symlink path (/opt/homebrew/bin/node)
+ * which Homebrew updates automatically during upgrades.
+ */
+export async function resolveStableNodePath(nodePath: string): Promise<string> {
+  const cellarMatch = nodePath.match(/^(.+?)\/Cellar\/[^/]+\/[^/]+\/bin\/node$/);
+  if (!cellarMatch) {
+    return nodePath;
+  }
+  const stablePath = `${cellarMatch[1]}/bin/node`;
+  try {
+    await fs.access(stablePath);
+    return stablePath;
+  } catch {
+    return nodePath;
+  }
+}
+
 export async function resolvePreferredNodePath(params: {
   env?: Record<string, string | undefined>;
   runtime?: string;
@@ -172,7 +192,7 @@ export async function resolvePreferredNodePath(params: {
     const execFileImpl = params.execFile ?? execFileAsync;
     const version = await resolveNodeVersion(currentExecPath, execFileImpl);
     if (isSupportedNodeVersion(version)) {
-      return currentExecPath;
+      return resolveStableNodePath(currentExecPath);
     }
   }
 
