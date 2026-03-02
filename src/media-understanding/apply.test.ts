@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +7,7 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
+import { runExec } from "../process/exec.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { clearMediaUnderstandingBinaryCacheForTests } from "./runner.js";
 
@@ -32,10 +34,13 @@ vi.mock("../process/exec.js", () => ({
 }));
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
+const mockedRunExec = vi.mocked(runExec);
 
 const TEMP_MEDIA_PREFIX = "openclaw-media-";
 let suiteTempMediaRootDir = "";
 let tempMediaDirCounter = 0;
+let sharedTempMediaCacheDir = "";
+const tempMediaFileCache = new Map<string, string>();
 
 async function createTempMediaDir() {
   if (!suiteTempMediaRootDir) {
@@ -45,6 +50,13 @@ async function createTempMediaDir() {
   tempMediaDirCounter += 1;
   await fs.mkdir(dir, { recursive: true });
   return dir;
+}
+
+async function getSharedTempMediaCacheDir() {
+  if (!sharedTempMediaCacheDir) {
+    sharedTempMediaCacheDir = await createTempMediaDir();
+  }
+  return sharedTempMediaCacheDir;
 }
 
 function createGroqAudioConfig(): OpenClawConfig {
@@ -111,9 +123,20 @@ function createMediaDisabledConfigWithAllowedMimes(allowedMimes: string[]): Open
 }
 
 async function createTempMediaFile(params: { fileName: string; content: Buffer | string }) {
-  const dir = await createTempMediaDir();
-  const mediaPath = path.join(dir, params.fileName);
+  const normalizedContent =
+    typeof params.content === "string" ? Buffer.from(params.content) : params.content;
+  const contentHash = crypto.createHash("sha1").update(normalizedContent).digest("hex");
+  const cacheKey = `${params.fileName}:${contentHash}`;
+  const cachedPath = tempMediaFileCache.get(cacheKey);
+  if (cachedPath) {
+    return cachedPath;
+  }
+  const cacheRootDir = await getSharedTempMediaCacheDir();
+  const cacheDir = path.join(cacheRootDir, contentHash);
+  await fs.mkdir(cacheDir, { recursive: true });
+  const mediaPath = path.join(cacheDir, params.fileName);
   await fs.writeFile(mediaPath, params.content);
+  tempMediaFileCache.set(cacheKey, mediaPath);
   return mediaPath;
 }
 
@@ -170,8 +193,7 @@ async function setupAudioAutoDetectCase(stdout: string): Promise<{
     content: "audio",
   });
   const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
-  const execModule = await import("../process/exec.js");
-  vi.mocked(execModule.runExec).mockResolvedValueOnce({
+  mockedRunExec.mockResolvedValueOnce({
     stdout,
     stderr: "",
   });
@@ -220,6 +242,7 @@ describe("applyMediaUnderstanding", () => {
   beforeEach(() => {
     mockedResolveApiKey.mockClear();
     mockedFetchRemoteMedia.mockClear();
+    mockedRunExec.mockReset();
     mockedFetchRemoteMedia.mockResolvedValue({
       buffer: Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
       contentType: "audio/ogg",
@@ -234,6 +257,8 @@ describe("applyMediaUnderstanding", () => {
     }
     await fs.rm(suiteTempMediaRootDir, { recursive: true, force: true });
     suiteTempMediaRootDir = "";
+    sharedTempMediaCacheDir = "";
+    tempMediaFileCache.clear();
   });
 
   it("sets Transcript and replaces Body when audio transcription succeeds", async () => {
@@ -380,8 +405,7 @@ describe("applyMediaUnderstanding", () => {
       },
     };
 
-    const execModule = await import("../process/exec.js");
-    vi.mocked(execModule.runExec).mockResolvedValue({
+    mockedRunExec.mockResolvedValue({
       stdout: "cli transcript\n",
       stderr: "",
     });
@@ -414,8 +438,6 @@ describe("applyMediaUnderstanding", () => {
     await fs.writeFile(path.join(modelDir, "joiner.onnx"), "a");
 
     const { ctx, cfg } = await setupAudioAutoDetectCase('{"text":"sherpa ok"}');
-    const execModule = await import("../process/exec.js");
-    const mockedRunExec = vi.mocked(execModule.runExec);
 
     await withMediaAutoDetectEnv(
       {
@@ -444,8 +466,6 @@ describe("applyMediaUnderstanding", () => {
     await fs.writeFile(modelPath, "model");
 
     const { ctx, cfg } = await setupAudioAutoDetectCase("whisper cpp ok\n");
-    const execModule = await import("../process/exec.js");
-    const mockedRunExec = vi.mocked(execModule.runExec);
 
     await withMediaAutoDetectEnv(
       {
@@ -475,10 +495,6 @@ describe("applyMediaUnderstanding", () => {
       content: "audio",
     });
     const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
-
-    const execModule = await import("../process/exec.js");
-    const mockedRunExec = vi.mocked(execModule.runExec);
-    mockedRunExec.mockReset();
 
     await withMediaAutoDetectEnv(
       {
@@ -525,8 +541,7 @@ describe("applyMediaUnderstanding", () => {
       },
     };
 
-    const execModule = await import("../process/exec.js");
-    vi.mocked(execModule.runExec).mockResolvedValue({
+    mockedRunExec.mockResolvedValue({
       stdout: "image description\n",
       stderr: "",
     });
@@ -570,8 +585,7 @@ describe("applyMediaUnderstanding", () => {
       },
     };
 
-    const execModule = await import("../process/exec.js");
-    vi.mocked(execModule.runExec).mockResolvedValue({
+    mockedRunExec.mockResolvedValue({
       stdout: "shared description\n",
       stderr: "",
     });

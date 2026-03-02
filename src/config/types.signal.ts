@@ -6,6 +6,8 @@ export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
 export type SignalAccountConfig = CommonChannelMessagingConfig & {
   /** Optional explicit E.164 account for signal-cli. */
   account?: string;
+  /** Optional account UUID for signal-cli (used for loop protection). */
+  accountUuid?: string;
   /** Optional full base URL for signal-cli HTTP daemon. */
   httpUrl?: string;
   /** HTTP host for signal-cli daemon (default 127.0.0.1). */
@@ -46,4 +48,6 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
 export type SignalConfig = {
   /** Optional per-account Signal configuration (multi-account). */
   accounts?: Record<string, SignalAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
 } & SignalAccountConfig;
