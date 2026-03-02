@@ -33,11 +33,20 @@ const logShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const traceExporterCtor = vi.hoisted(() => vi.fn());
 
 vi.mock("@opentelemetry/api", () => ({
+  context: {
+    active: () => ({}),
+  },
   metrics: {
     getMeter: () => telemetryState.meter,
   },
   trace: {
     getTracer: () => telemetryState.tracer,
+    setSpanContext: (_ctx: unknown, spanContext: unknown) => ({
+      __parentSpanContext: spanContext,
+    }),
+  },
+  TraceFlags: {
+    SAMPLED: 1,
   },
   SpanStatusCode: {
     ERROR: 2,

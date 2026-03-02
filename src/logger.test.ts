@@ -7,10 +7,12 @@ import { isVerbose, isYes, logVerbose, setVerbose, setYes } from "./globals.js";
 import { logDebug, logError, logInfo, logSuccess, logWarn } from "./logger.js";
 import {
   DEFAULT_LOG_DIR,
+  getLogger,
   resetLogger,
   setLoggerOverride,
   stripRedundantSubsystemPrefixForConsole,
 } from "./logging.js";
+import { registerLogTransport } from "./logging/logger.js";
 import type { RuntimeEnv } from "./runtime.js";
 
 describe("logger helpers", () => {
@@ -91,6 +93,37 @@ describe("logger helpers", () => {
     expect(fs.existsSync(oldPath)).toBe(false);
 
     cleanup(todayPath);
+  });
+
+  it("registerLogTransport attaches to all active logger instances", () => {
+    const logPathA = pathForTest();
+    const logPathB = pathForTest();
+
+    setLoggerOverride({ level: "info", file: logPathA });
+    const loggerA = getLogger();
+
+    setLoggerOverride({ level: "info", file: logPathB });
+    const loggerB = getLogger();
+
+    const seen: string[] = [];
+    const unsubscribe = registerLogTransport((logObj) => {
+      seen.push(JSON.stringify(logObj));
+    });
+
+    loggerA.info("from-a");
+    loggerB.info("from-b");
+
+    expect(seen.some((line) => line.includes("from-a"))).toBe(true);
+    expect(seen.some((line) => line.includes("from-b"))).toBe(true);
+
+    const beforeUnsubscribe = seen.length;
+    unsubscribe();
+    loggerA.info("after-unsubscribe");
+    loggerB.info("after-unsubscribe");
+    expect(seen.length).toBe(beforeUnsubscribe);
+
+    cleanup(logPathA);
+    cleanup(logPathB);
   });
 });
 

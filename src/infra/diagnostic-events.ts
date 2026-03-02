@@ -2,9 +2,22 @@ import type { OpenClawConfig } from "../config/config.js";
 
 export type DiagnosticSessionState = "idle" | "processing" | "waiting";
 
+/** Lightweight trace context carried on diagnostic events for span correlation. */
+export type DiagnosticTraceContext = {
+  /** 32 hex chars, same across one message lifecycle. */
+  traceId: string;
+  /** 16 hex chars, unique per operation. */
+  spanId: string;
+  /** 16 hex chars, links child to parent. */
+  parentSpanId?: string;
+};
+
 type DiagnosticBaseEvent = {
   ts: number;
   seq: number;
+  traceCtx?: DiagnosticTraceContext;
+  traceId?: string;
+  parentSpanId?: string;
 };
 
 export type DiagnosticUsageEvent = DiagnosticBaseEvent & {

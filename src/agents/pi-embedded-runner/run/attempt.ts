@@ -10,6 +10,10 @@ import {
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import {
+  createChildContext,
+  diagnosticTraceStore,
+} from "../../../infra/diagnostic-trace-context.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -466,7 +470,14 @@ function summarizeSessionContext(messages: AgentMessage[]): {
   };
 }
 
+/** Thin wrapper that establishes a child trace context for this LLM attempt. */
 export async function runEmbeddedAttempt(
+  params: EmbeddedRunAttemptParams,
+): Promise<EmbeddedRunAttemptResult> {
+  return diagnosticTraceStore.run(createChildContext(), () => runEmbeddedAttemptInner(params));
+}
+
+async function runEmbeddedAttemptInner(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);

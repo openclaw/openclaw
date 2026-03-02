@@ -4,6 +4,7 @@ import { loadSessionStore, resolveStorePath, type SessionEntry } from "../../con
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { createTraceContext, diagnosticTraceStore } from "../../infra/diagnostic-trace-context.js";
 import {
   logMessageProcessed,
   logMessageQueued,
@@ -91,7 +92,18 @@ export type DispatchFromConfigResult = {
   counts: Record<ReplyDispatchKind, number>;
 };
 
+/** Thin wrapper that establishes a root trace context for the full message lifecycle. */
 export async function dispatchReplyFromConfig(params: {
+  ctx: FinalizedMsgContext;
+  cfg: OpenClawConfig;
+  dispatcher: ReplyDispatcher;
+  replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
+  replyResolver?: typeof getReplyFromConfig;
+}): Promise<DispatchFromConfigResult> {
+  return diagnosticTraceStore.run(createTraceContext(), () => dispatchReplyFromConfigInner(params));
+}
+
+async function dispatchReplyFromConfigInner(params: {
   ctx: FinalizedMsgContext;
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
