@@ -34,6 +34,9 @@ const botOpenIds = new Map<string, string>();
 const FEISHU_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const FEISHU_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
+const FEISHU_STARTUP_BOT_INFO_TIMEOUT_MS = 10_000;
+const FEISHU_BOT_INFO_FETCH_ABORTED = Symbol("feishu-bot-info-fetch-aborted");
+const FEISHU_BOT_INFO_FETCH_TIMED_OUT = Symbol("feishu-bot-info-fetch-timed-out");
 
 export type FeishuReactionCreatedEvent = {
   message_id: string;
@@ -188,12 +191,68 @@ export async function resolveReactionSyntheticEvent(
   };
 }
 
-async function fetchBotOpenId(account: ResolvedFeishuAccount): Promise<string | undefined> {
+type FetchBotOpenIdOptions = {
+  runtime?: RuntimeEnv;
+  abortSignal?: AbortSignal;
+  timeoutMs?: number;
+};
+
+async function fetchBotOpenId(
+  account: ResolvedFeishuAccount,
+  options: FetchBotOpenIdOptions = {},
+): Promise<string | undefined> {
+  if (options.abortSignal?.aborted) {
+    return undefined;
+  }
+
+  const timeoutMs = options.timeoutMs ?? FEISHU_STARTUP_BOT_INFO_TIMEOUT_MS;
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  let abortHandler: (() => void) | undefined;
   try {
-    const result = await probeFeishu(account);
-    return result.ok ? result.botOpenId : undefined;
+    const contenders: Array<
+      Promise<
+        | string
+        | undefined
+        | typeof FEISHU_BOT_INFO_FETCH_ABORTED
+        | typeof FEISHU_BOT_INFO_FETCH_TIMED_OUT
+      >
+    > = [
+      probeFeishu(account)
+        .then((result) => (result.ok ? result.botOpenId : undefined))
+        .catch(() => undefined),
+      new Promise((resolve) => {
+        timeoutHandle = setTimeout(() => resolve(FEISHU_BOT_INFO_FETCH_TIMED_OUT), timeoutMs);
+      }),
+    ];
+    if (options.abortSignal) {
+      contenders.push(
+        new Promise((resolve) => {
+          abortHandler = () => resolve(FEISHU_BOT_INFO_FETCH_ABORTED);
+          options.abortSignal?.addEventListener("abort", abortHandler, { once: true });
+        }),
+      );
+    }
+    const outcome = await Promise.race(contenders);
+    if (outcome === FEISHU_BOT_INFO_FETCH_ABORTED) {
+      return undefined;
+    }
+    if (outcome === FEISHU_BOT_INFO_FETCH_TIMED_OUT) {
+      const error = options.runtime?.error ?? console.error;
+      error(
+        `feishu[${account.accountId}]: bot info probe timed out after ${timeoutMs}ms; continuing startup`,
+      );
+      return undefined;
+    }
+    return outcome;
   } catch {
     return undefined;
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+    if (abortHandler) {
+      options.abortSignal?.removeEventListener("abort", abortHandler);
+    }
   }
 }
 
@@ -347,7 +406,9 @@ async function monitorSingleAccount(params: MonitorAccountParams): Promise<void>
   const log = runtime?.log ?? console.log;
 
   // Fetch bot open_id
-  const botOpenId = params.botOpenIdPrefetched ? params.botOpenId : await fetchBotOpenId(account);
+  const botOpenId = params.botOpenIdPrefetched
+    ? params.botOpenId
+    : await fetchBotOpenId(account, { runtime, abortSignal });
   botOpenIds.set(accountId, botOpenId ?? "");
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
 
@@ -550,8 +611,19 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
 
   const monitorPromises: Promise<void>[] = [];
   for (const account of accounts) {
+    if (opts.abortSignal?.aborted) {
+      log("feishu: abort signal received during startup preflight; stopping startup");
+      break;
+    }
     // Probe sequentially so large multi-account startups do not burst Feishu's bot-info endpoint.
-    const botOpenId = await fetchBotOpenId(account);
+    const botOpenId = await fetchBotOpenId(account, {
+      runtime: opts.runtime,
+      abortSignal: opts.abortSignal,
+    });
+    if (opts.abortSignal?.aborted) {
+      log("feishu: abort signal received during startup preflight; stopping startup");
+      break;
+    }
     monitorPromises.push(
       monitorSingleAccount({
         cfg,

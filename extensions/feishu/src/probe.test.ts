@@ -6,7 +6,7 @@ vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
-import { probeFeishu, clearProbeCache } from "./probe.js";
+import { FEISHU_PROBE_REQUEST_TIMEOUT_MS, probeFeishu, clearProbeCache } from "./probe.js";
 
 function makeRequestFn(response: Record<string, unknown>) {
   return vi.fn().mockResolvedValue(response);
@@ -57,6 +57,23 @@ describe("probeFeishu", () => {
       botOpenId: "ou_abc123",
     });
     expect(requestFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses explicit timeout for bot info request", async () => {
+    const requestFn = setupClient({
+      code: 0,
+      bot: { bot_name: "TestBot", open_id: "ou_abc123" },
+    });
+
+    await probeFeishu({ appId: "cli_123", appSecret: "secret" });
+
+    expect(requestFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "GET",
+        url: "/open-apis/bot/v3/info",
+        timeout: FEISHU_PROBE_REQUEST_TIMEOUT_MS,
+      }),
+    );
   });
 
   it("returns cached result on subsequent calls within TTL", async () => {

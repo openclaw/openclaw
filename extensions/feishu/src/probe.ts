@@ -8,6 +8,7 @@ import type { FeishuProbeResult } from "./types.js";
 const probeCache = new Map<string, { result: FeishuProbeResult; expiresAt: number }>();
 const PROBE_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_PROBE_CACHE_SIZE = 64;
+export const FEISHU_PROBE_REQUEST_TIMEOUT_MS = 10_000;
 
 export async function probeFeishu(creds?: FeishuClientCredentials): Promise<FeishuProbeResult> {
   if (!creds?.appId || !creds?.appSecret) {
@@ -35,6 +36,7 @@ export async function probeFeishu(creds?: FeishuClientCredentials): Promise<Feis
       method: "GET",
       url: "/open-apis/bot/v3/info",
       data: {},
+      timeout: FEISHU_PROBE_REQUEST_TIMEOUT_MS,
     });
 
     if (response.code !== 0) {
