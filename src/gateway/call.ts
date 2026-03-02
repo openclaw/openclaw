@@ -86,14 +86,30 @@ export function resolveExplicitGatewayAuth(opts?: ExplicitGatewayAuth): Explicit
 
 export function ensureExplicitGatewayAuth(params: {
   urlOverride?: string;
-  auth: ExplicitGatewayAuth;
+  urlOverrideSource?: "cli" | "env";
+  explicitAuth?: ExplicitGatewayAuth;
+  resolvedAuth?: ExplicitGatewayAuth;
   errorHint: string;
   configPath?: string;
 }): void {
   if (!params.urlOverride) {
     return;
   }
-  if (params.auth.token || params.auth.password) {
+  // URL overrides are untrusted redirects and can move WebSocket traffic off the intended host.
+  // Never allow an override to silently reuse implicit credentials or device token fallback.
+  const explicitToken = params.explicitAuth?.token;
+  const explicitPassword = params.explicitAuth?.password;
+  if (params.urlOverrideSource === "cli" && (explicitToken || explicitPassword)) {
+    return;
+  }
+  const hasResolvedAuth =
+    params.resolvedAuth?.token ||
+    params.resolvedAuth?.password ||
+    explicitToken ||
+    explicitPassword;
+  // Env overrides are supported for deployment ergonomics, but only when explicit auth is available.
+  // This avoids implicit device-token fallback against attacker-controlled WSS endpoints.
+  if (params.urlOverrideSource === "env" && hasResolvedAuth) {
     return;
   }
   const message = [
@@ -107,7 +123,12 @@ export function ensureExplicitGatewayAuth(params: {
 }
 
 export function buildGatewayConnectionDetails(
-  options: { config?: OpenClawConfig; url?: string; configPath?: string } = {},
+  options: {
+    config?: OpenClawConfig;
+    url?: string;
+    configPath?: string;
+    urlSource?: "cli" | "env";
+  } = {},
 ): GatewayConnectionDetails {
   const config = options.config ?? loadConfig();
   const configPath =
@@ -120,30 +141,40 @@ export function buildGatewayConnectionDetails(
   const scheme = tlsEnabled ? "wss" : "ws";
   // Self-connections should always target loopback; bind mode only controls listener exposure.
   const localUrl = `${scheme}://127.0.0.1:${localPort}`;
-  const urlOverride =
+  const cliUrlOverride =
     typeof options.url === "string" && options.url.trim().length > 0
       ? options.url.trim()
       : undefined;
+  const envUrlOverride = cliUrlOverride
+    ? undefined
+    : (trimToUndefined(process.env.OPENCLAW_GATEWAY_URL) ??
+      trimToUndefined(process.env.CLAWDBOT_GATEWAY_URL));
+  const urlOverride = cliUrlOverride ?? envUrlOverride;
   const remoteUrl =
     typeof remote?.url === "string" && remote.url.trim().length > 0 ? remote.url.trim() : undefined;
   const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;
+  const urlSourceHint =
+    options.urlSource ?? (cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined);
   const url = urlOverride || remoteUrl || localUrl;
   const urlSource = urlOverride
-    ? "cli --url"
+    ? urlSourceHint === "env"
+      ? "env OPENCLAW_GATEWAY_URL"
+      : "cli --url"
     : remoteUrl
       ? "config gateway.remote.url"
       : remoteMisconfigured
         ? "missing gateway.remote.url (fallback local)"
         : "local loopback";
+  const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
   const remoteFallbackNote = remoteMisconfigured
     ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
     : undefined;
-  const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
 
+  const allowPrivateWs = process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1";
   // Security check: block ALL insecure ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
   // This applies to the FINAL resolved URL, regardless of source (config, CLI override, etc).
   // Both credentials and chat/conversation data must not be transmitted over plaintext to remote hosts.
-  if (!isSecureWebSocketUrl(url)) {
+  if (!isSecureWebSocketUrl(url, { allowPrivateWs })) {
     throw new Error(
       [
         `SECURITY ERROR: Gateway URL "${url}" uses plaintext ws:// to a non-loopback address.`,
@@ -154,6 +185,9 @@ export function buildGatewayConnectionDetails(
         "Safe remote access defaults:",
         "- keep gateway.bind=loopback and use an SSH tunnel (ssh -N -L 18789:127.0.0.1:18789 user@gateway-host)",
         "- or use Tailscale Serve/Funnel for HTTPS remote access",
+        allowPrivateWs
+          ? undefined
+          : "Break-glass (trusted private networks only): set OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1",
         "Doctor: openclaw doctor --fix",
         "Docs: https://docs.openclaw.ai/gateway/remote",
       ].join("\n"),
@@ -192,6 +226,7 @@ type ResolvedGatewayCallContext = {
   isRemoteMode: boolean;
   remote?: GatewayRemoteSettings;
   urlOverride?: string;
+  urlOverrideSource?: "cli" | "env";
   remoteUrl?: string;
   explicitAuth: ExplicitGatewayAuth;
 };
@@ -222,10 +257,25 @@ function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewa
   const remote = isRemoteMode
     ? (config.gateway?.remote as GatewayRemoteSettings | undefined)
     : undefined;
-  const urlOverride = trimToUndefined(opts.url);
+  const cliUrlOverride = trimToUndefined(opts.url);
+  const envUrlOverride = cliUrlOverride
+    ? undefined
+    : (trimToUndefined(process.env.OPENCLAW_GATEWAY_URL) ??
+      trimToUndefined(process.env.CLAWDBOT_GATEWAY_URL));
+  const urlOverride = cliUrlOverride ?? envUrlOverride;
+  const urlOverrideSource = cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined;
   const remoteUrl = trimToUndefined(remote?.url);
   const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
-  return { config, configPath, isRemoteMode, remote, urlOverride, remoteUrl, explicitAuth };
+  return {
+    config,
+    configPath,
+    isRemoteMode,
+    remote,
+    urlOverride,
+    urlOverrideSource,
+    remoteUrl,
+    explicitAuth,
+  };
 }
 
 function ensureRemoteModeUrlConfigured(context: ResolvedGatewayCallContext): void {
@@ -250,6 +300,7 @@ function resolveGatewayCredentials(context: ResolvedGatewayCallContext): {
     env: process.env,
     explicitAuth: context.explicitAuth,
     urlOverride: context.urlOverride,
+    urlOverrideSource: context.urlOverrideSource,
     remotePasswordPrecedence: "env-first",
   });
 }
@@ -262,7 +313,7 @@ async function resolveGatewayTlsFingerprint(params: {
   const { opts, context, url } = params;
   const useLocalTls =
     context.config.gateway?.tls?.enabled === true &&
-    !context.urlOverride &&
+    !context.urlOverrideSource &&
     !context.remoteUrl &&
     url.startsWith("wss://");
   const tlsRuntime = useLocalTls
@@ -270,7 +321,10 @@ async function resolveGatewayTlsFingerprint(params: {
     : undefined;
   const overrideTlsFingerprint = trimToUndefined(opts.tlsFingerprint);
   const remoteTlsFingerprint =
-    context.isRemoteMode && !context.urlOverride && context.remoteUrl
+    // Env overrides may still inherit configured remote TLS pinning for private cert deployments.
+    // CLI overrides remain explicit-only and intentionally skip config remote TLS to avoid
+    // accidentally pinning against caller-supplied target URLs.
+    context.isRemoteMode && context.urlOverrideSource !== "cli"
       ? trimToUndefined(context.remote?.tlsFingerprint)
       : undefined;
   return (
@@ -384,9 +438,12 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
 ): Promise<T> {
   const { timeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(opts.timeoutMs);
   const context = resolveGatewayCallContext(opts);
+  const resolvedCredentials = resolveGatewayCredentials(context);
   ensureExplicitGatewayAuth({
     urlOverride: context.urlOverride,
-    auth: context.explicitAuth,
+    urlOverrideSource: context.urlOverrideSource,
+    explicitAuth: context.explicitAuth,
+    resolvedAuth: resolvedCredentials,
     errorHint: "Fix: pass --token or --password (or gatewayToken in tools).",
     configPath: context.configPath,
   });
@@ -394,11 +451,12 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const connectionDetails = buildGatewayConnectionDetails({
     config: context.config,
     url: context.urlOverride,
+    urlSource: context.urlOverrideSource,
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
   const url = connectionDetails.url;
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
-  const { token, password } = resolveGatewayCredentials(context);
+  const { token, password } = resolvedCredentials;
   return await executeGatewayRequestWithScopes<T>({
     opts,
     scopes,

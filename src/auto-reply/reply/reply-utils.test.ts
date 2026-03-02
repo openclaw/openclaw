@@ -108,6 +108,48 @@ describe("normalizeReplyPayload", () => {
       expect(reasons, testCase.name).toEqual([testCase.reason]);
     }
   });
+
+  it("strips NO_REPLY from mixed emoji message (#30916)", () => {
+    const result = normalizeReplyPayload({ text: "😄 NO_REPLY" });
+    expect(result).not.toBeNull();
+    expect(result!.text).toContain("😄");
+    expect(result!.text).not.toContain("NO_REPLY");
+  });
+
+  it("strips NO_REPLY appended after substantive text (#30916)", () => {
+    const result = normalizeReplyPayload({
+      text: "File's there. Not urgent.\n\nNO_REPLY",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toContain("File's there");
+    expect(result!.text).not.toContain("NO_REPLY");
+  });
+
+  it("keeps NO_REPLY when used as leading substantive text", () => {
+    const result = normalizeReplyPayload({ text: "NO_REPLY -- nope" });
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("NO_REPLY -- nope");
+  });
+
+  it("suppresses message when stripping NO_REPLY leaves nothing", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      { text: "  NO_REPLY  " },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
+
+  it("strips NO_REPLY but keeps media payload", () => {
+    const result = normalizeReplyPayload({
+      text: "NO_REPLY",
+      mediaUrl: "https://example.com/img.png",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("");
+    expect(result!.mediaUrl).toBe("https://example.com/img.png");
+  });
 });
 
 describe("typing controller", () => {

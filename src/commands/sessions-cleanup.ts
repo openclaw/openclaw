@@ -14,7 +14,10 @@ import {
 } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
-import { resolveSessionStoreTargets, type SessionStoreTarget } from "./session-store-targets.js";
+import {
+  resolveSessionStoreTargetsOrExit,
+  type SessionStoreTarget,
+} from "./session-store-targets.js";
 import {
   formatSessionAgeCell,
   formatSessionFlagsCell,
@@ -291,16 +294,16 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
   const cfg = loadConfig();
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
   const mode = opts.enforce ? "enforce" : resolveMaintenanceConfig().mode;
-  let targets: SessionStoreTarget[];
-  try {
-    targets = resolveSessionStoreTargets(cfg, {
+  const targets = resolveSessionStoreTargetsOrExit({
+    cfg,
+    opts: {
       store: opts.store,
       agent: opts.agent,
       allAgents: opts.allAgents,
-    });
-  } catch (error) {
-    runtime.error(error instanceof Error ? error.message : String(error));
-    runtime.exit(1);
+    },
+    runtime,
+  });
+  if (!targets) {
     return;
   }
 

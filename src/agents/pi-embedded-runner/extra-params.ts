@@ -46,6 +46,7 @@ export function resolveExtraParams(params: {
 type CacheRetention = "none" | "short" | "long";
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: CacheRetention;
+  openaiWsWarmup?: boolean;
 };
 
 /**
@@ -123,6 +124,9 @@ function createStreamFnWithExtraParams(
   } else if (transport != null) {
     const transportSummary = typeof transport === "string" ? transport : typeof transport;
     log.warn(`ignoring invalid transport param: ${transportSummary}`);
+  }
+  if (typeof extraParams.openaiWsWarmup === "boolean") {
+    streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
   }
   const cacheRetention = resolveCacheRetention(extraParams, provider);
   if (cacheRetention) {
@@ -319,6 +323,24 @@ function createCodexDefaultTransportWrapper(baseStreamFn: StreamFn | undefined):
     });
 }
 
+function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const typedOptions = options as
+      | (SimpleStreamOptions & { openaiWsWarmup?: boolean })
+      | undefined;
+    const mergedOptions = {
+      ...options,
+      transport: options?.transport ?? "auto",
+      // Warm-up is optional in OpenAI docs; enabled by default here for lower
+      // first-turn latency on WebSocket sessions. Set params.openaiWsWarmup=false
+      // to disable per model.
+      openaiWsWarmup: typedOptions?.openaiWsWarmup ?? true,
+    } as SimpleStreamOptions;
+    return underlying(model, context, mergedOptions);
+  };
+}
+
 function isAnthropic1MModel(modelId: string): boolean {
   const normalized = modelId.trim().toLowerCase();
   return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
@@ -496,6 +518,9 @@ function mapThinkingLevelToOpenRouterReasoningEffort(
   if (thinkingLevel === "off") {
     return "none";
   }
+  if (thinkingLevel === "adaptive") {
+    return "medium";
+  }
   return thinkingLevel;
 }
 
@@ -595,6 +620,15 @@ function createOpenRouterWrapper(
   };
 }
 
+/**
+ * Models on OpenRouter that do not support the `reasoning.effort` parameter.
+ * Injecting it causes "Invalid arguments passed to the model" errors.
+ */
+function isOpenRouterReasoningUnsupported(modelId: string): boolean {
+  const id = modelId.toLowerCase();
+  return id.startsWith("x-ai/");
+}
+
 function isGemini31Model(modelId: string): boolean {
   const normalized = modelId.toLowerCase();
   return normalized.includes("gemini-3.1-pro") || normalized.includes("gemini-3.1-flash");
@@ -609,6 +643,7 @@ function mapThinkLevelToGoogleThinkingLevel(
     case "low":
       return "LOW";
     case "medium":
+    case "adaptive":
       return "MEDIUM";
     case "high":
     case "xhigh":
@@ -740,6 +775,9 @@ export function applyExtraParamsToAgent(
   if (provider === "openai-codex") {
     // Default Codex to WebSocket-first when nothing else specifies transport.
     agent.streamFn = createCodexDefaultTransportWrapper(agent.streamFn);
+  } else if (provider === "openai") {
+    // Default OpenAI Responses to WebSocket-first with transparent SSE fallback.
+    agent.streamFn = createOpenAIDefaultTransportWrapper(agent.streamFn);
   }
   const override =
     extraParamsOverride && Object.keys(extraParamsOverride).length > 0
@@ -778,7 +816,13 @@ export function applyExtraParamsToAgent(
     // which would cause a 400 on models where reasoning is mandatory.
     // Users who need reasoning control should target a specific model ID.
     // See: openclaw/openclaw#24851
-    const openRouterThinkingLevel = modelId === "auto" ? undefined : thinkingLevel;
+    //
+    // x-ai/grok models do not support OpenRouter's reasoning.effort parameter
+    // and reject payloads containing it with "Invalid arguments passed to the
+    // model." Skip reasoning injection for these models.
+    // See: openclaw/openclaw#32039
+    const skipReasoningInjection = modelId === "auto" || isOpenRouterReasoningUnsupported(modelId);
+    const openRouterThinkingLevel = skipReasoningInjection ? undefined : thinkingLevel;
     agent.streamFn = createOpenRouterWrapper(agent.streamFn, openRouterThinkingLevel);
     agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
   }

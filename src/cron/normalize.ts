@@ -25,6 +25,9 @@ function coerceSchedule(schedule: UnknownRecord) {
   const next: UnknownRecord = { ...schedule };
   const rawKind = typeof schedule.kind === "string" ? schedule.kind.trim().toLowerCase() : "";
   const kind = rawKind === "at" || rawKind === "every" || rawKind === "cron" ? rawKind : undefined;
+  const exprRaw = typeof schedule.expr === "string" ? schedule.expr.trim() : "";
+  const legacyCronRaw = typeof schedule.cron === "string" ? schedule.cron.trim() : "";
+  const normalizedExpr = exprRaw || legacyCronRaw;
   const atMsRaw = schedule.atMs;
   const atRaw = schedule.at;
   const atString = typeof atRaw === "string" ? atRaw.trim() : "";
@@ -48,7 +51,7 @@ function coerceSchedule(schedule: UnknownRecord) {
       next.kind = "at";
     } else if (typeof schedule.everyMs === "number") {
       next.kind = "every";
-    } else if (typeof schedule.expr === "string") {
+    } else if (normalizedExpr) {
       next.kind = "cron";
     }
   }
@@ -60,6 +63,15 @@ function coerceSchedule(schedule: UnknownRecord) {
   }
   if ("atMs" in next) {
     delete next.atMs;
+  }
+
+  if (normalizedExpr) {
+    next.expr = normalizedExpr;
+  } else if ("expr" in next) {
+    delete next.expr;
+  }
+  if ("cron" in next) {
+    delete next.cron;
   }
 
   const staggerMs = normalizeCronStaggerMs(schedule.staggerMs);

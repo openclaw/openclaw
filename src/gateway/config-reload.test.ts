@@ -147,6 +147,25 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartChannels).toEqual(expected);
   });
 
+  it("restarts heartbeat when model-related config changes", () => {
+    const plan = buildGatewayReloadPlan([
+      "models.providers.openai.models",
+      "agents.defaults.model",
+    ]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartHeartbeat).toBe(true);
+    expect(plan.hotReasons).toEqual(
+      expect.arrayContaining(["models.providers.openai.models", "agents.defaults.model"]),
+    );
+  });
+
+  it("hot-reloads health monitor when channelHealthCheckMinutes changes", () => {
+    const plan = buildGatewayReloadPlan(["gateway.channelHealthCheckMinutes"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartHealthMonitor).toBe(true);
+    expect(plan.hotReasons).toContain("gateway.channelHealthCheckMinutes");
+  });
+
   it("treats gateway.remote as no-op", () => {
     const plan = buildGatewayReloadPlan(["gateway.remote.url"]);
     expect(plan.restartGateway).toBe(false);
@@ -157,6 +176,12 @@ describe("buildGatewayReloadPlan", () => {
     const plan = buildGatewayReloadPlan(["secrets.providers.default.path"]);
     expect(plan.restartGateway).toBe(false);
     expect(plan.noopPaths).toContain("secrets.providers.default.path");
+  });
+
+  it("treats diagnostics.stuckSessionWarnMs as no-op for gateway restart planning", () => {
+    const plan = buildGatewayReloadPlan(["diagnostics.stuckSessionWarnMs"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toContain("diagnostics.stuckSessionWarnMs");
   });
 
   it("defaults unknown paths to restart", () => {
