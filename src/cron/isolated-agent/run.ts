@@ -463,7 +463,14 @@ export async function runCronIsolatedAgentTurn(params: {
           throw new Error(abortReason());
         }
         if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {
-          const cliSessionId = getCliSessionId(cronSession.sessionEntry, providerOverride);
+          // Fresh isolated cron sessions must not reuse a stored CLI session ID.
+          // Passing an existing ID activates the resume watchdog profile
+          // (noOutputTimeoutRatio 0.3, maxMs 180 s) instead of the fresh profile
+          // (ratio 0.8, maxMs 600 s), causing jobs to time out at roughly 1/3 of
+          // the configured timeoutSeconds. See: https://github.com/openclaw/openclaw/issues/29774
+          const cliSessionId = cronSession.isNewSession
+            ? undefined
+            : getCliSessionId(cronSession.sessionEntry, providerOverride);
           return runCliAgent({
             sessionId: cronSession.sessionEntry.sessionId,
             sessionKey: agentSessionKey,
