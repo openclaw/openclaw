@@ -87,6 +87,27 @@ describe("handleZaloWebhookRequest", () => {
     }
   });
 
+  it("keeps the exact webhook route until the last target unregisters", () => {
+    const registry = createEmptyPluginRegistry();
+    setActivePluginRegistry(registry);
+    const unregisterA = registerTarget({ path: "/hook" });
+    const unregisterB = registerTarget({ path: "/hook" });
+
+    try {
+      expect(registry.httpRoutes).toHaveLength(1);
+
+      unregisterB();
+      expect(registry.httpRoutes).toHaveLength(1);
+      expect(registry.httpRoutes[0]?.path).toBe("/hook");
+
+      unregisterA();
+      expect(registry.httpRoutes).toHaveLength(0);
+    } finally {
+      unregisterA();
+      unregisterB();
+    }
+  });
+
   it("returns 400 for non-object payloads", async () => {
     const unregister = registerTarget({ path: "/hook" });
 

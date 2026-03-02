@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig, RegisterWebhookTargetOptions } from "openclaw/plugin-sdk";
 import {
   createDedupeCache,
   createFixedWindowRateLimiter,
@@ -106,8 +106,11 @@ function recordWebhookStatus(
   });
 }
 
-export function registerZaloWebhookTarget(target: ZaloWebhookTarget): () => void {
-  return registerWebhookTarget(webhookTargets, target).unregister;
+export function registerZaloWebhookTarget(
+  target: ZaloWebhookTarget,
+  opts?: RegisterWebhookTargetOptions,
+): () => void {
+  return registerWebhookTarget(webhookTargets, target, opts).unregister;
 }
 
 export async function handleZaloWebhookRequest(

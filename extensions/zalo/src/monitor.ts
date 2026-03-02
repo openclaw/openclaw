@@ -74,24 +74,22 @@ function logVerbose(core: ZaloCoreRuntime, runtime: ZaloRuntimeEnv, message: str
 }
 
 export function registerZaloWebhookTarget(target: ZaloWebhookTarget): () => void {
-  const unregisterHttpRoute = registerPluginHttpRoute({
-    path: target.path,
-    pluginId: "zalo",
-    source: "zalo-webhook",
-    handler: async (req, res) => {
-      const handled = await handleZaloWebhookRequest(req, res);
-      if (!handled && !res.headersSent) {
-        res.statusCode = 404;
-        res.setHeader("Content-Type", "text/plain; charset=utf-8");
-        res.end("Not Found");
-      }
-    },
+  return registerZaloWebhookTargetInternal(target, {
+    onFirstTargetForPath: (path) =>
+      registerPluginHttpRoute({
+        path,
+        pluginId: "zalo",
+        source: "zalo-webhook",
+        handler: async (req, res) => {
+          const handled = await handleZaloWebhookRequest(req, res);
+          if (!handled && !res.headersSent) {
+            res.statusCode = 404;
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.end("Not Found");
+          }
+        },
+      }),
   });
-  const unregisterWebhookTarget = registerZaloWebhookTargetInternal(target);
-  return () => {
-    unregisterHttpRoute();
-    unregisterWebhookTarget();
-  };
 }
 
 export {
