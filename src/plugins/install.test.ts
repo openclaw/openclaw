@@ -8,7 +8,6 @@ import { expectSingleNpmPackIgnoreScriptsCall } from "../test-utils/exec-asserti
 import {
   expectInstallUsesIgnoreScripts,
   expectIntegrityDriftRejected,
-  expectUnsupportedNpmSpec,
   mockNpmPackMetadataResult,
 } from "../test-utils/npm-spec-install-test-helpers.js";
 
@@ -20,6 +19,7 @@ let installPluginFromArchive: typeof import("./install.js").installPluginFromArc
 let installPluginFromDir: typeof import("./install.js").installPluginFromDir;
 let installPluginFromNpmSpec: typeof import("./install.js").installPluginFromNpmSpec;
 let installPluginFromPath: typeof import("./install.js").installPluginFromPath;
+let PLUGIN_INSTALL_ERROR_CODE: typeof import("./install.js").PLUGIN_INSTALL_ERROR_CODE;
 let runCommandWithTimeout: typeof import("../process/exec.js").runCommandWithTimeout;
 let suiteTempRoot = "";
 let tempDirCounter = 0;
@@ -255,6 +255,7 @@ beforeAll(async () => {
     installPluginFromDir,
     installPluginFromNpmSpec,
     installPluginFromPath,
+    PLUGIN_INSTALL_ERROR_CODE,
   } = await import("./install.js"));
   ({ runCommandWithTimeout } = await import("../process/exec.js"));
 });
@@ -372,6 +373,7 @@ describe("installPluginFromArchive", () => {
       return;
     }
     expect(result.error).toContain("openclaw.extensions");
+    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.MISSING_OPENCLAW_EXTENSIONS);
   });
 
   it("rejects legacy plugin package shape when openclaw.extensions is missing", async () => {
@@ -403,6 +405,7 @@ describe("installPluginFromArchive", () => {
     if (!result.ok) {
       expect(result.error).toContain("package.json missing openclaw.extensions");
       expect(result.error).toContain("update the plugin package");
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.MISSING_OPENCLAW_EXTENSIONS);
       return;
     }
     expect.unreachable("expected install to fail without openclaw.extensions");
@@ -668,7 +671,12 @@ describe("installPluginFromNpmSpec", () => {
   });
 
   it("rejects non-registry npm specs", async () => {
-    await expectUnsupportedNpmSpec((spec) => installPluginFromNpmSpec({ spec }));
+    const result = await installPluginFromNpmSpec({ spec: "github:evil/evil" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("unsupported npm spec");
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_NPM_SPEC);
+    }
   });
 
   it("aborts when integrity drift callback rejects the fetched artifact", async () => {
@@ -694,5 +702,26 @@ describe("installPluginFromNpmSpec", () => {
       expectedIntegrity: "sha512-old",
       actualIntegrity: "sha512-new",
     });
+  });
+
+  it("classifies npm package-not-found errors with a stable error code", async () => {
+    const run = vi.mocked(runCommandWithTimeout);
+    run.mockResolvedValue({
+      code: 1,
+      stdout: "",
+      stderr: "npm ERR! code E404\nnpm ERR! 404 Not Found - GET https://registry.npmjs.org/nope",
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/not-found",
+      logger: { info: () => {}, warn: () => {} },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND);
+    }
   });
 });

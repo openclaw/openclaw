@@ -10,6 +10,7 @@ import { createTypingCallbacks } from "../../../channels/typing.js";
 import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { resolveAgentOutboundIdentity } from "../../../infra/outbound/identity.js";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../security/dm-policy-shared.js";
 import { removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { normalizeSlackOutboundText } from "../../format.js";
@@ -22,6 +23,7 @@ import {
 import type { SlackStreamSession } from "../../streaming.js";
 import { appendSlackStream, startSlackStream, stopSlackStream } from "../../streaming.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
+import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import { createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } from "../replies.js";
 import type { PreparedSlackMessage } from "./types.js";
 
@@ -88,17 +90,33 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     const storePath = resolveStorePath(sessionCfg?.store, {
       agentId: route.agentId,
     });
-    await updateLastRoute({
-      storePath,
-      sessionKey: route.mainSessionKey,
-      deliveryContext: {
-        channel: "slack",
-        to: `user:${message.user}`,
-        accountId: route.accountId,
-        threadId: prepared.ctxPayload.MessageThreadId,
-      },
-      ctx: prepared.ctxPayload,
+    const pinnedMainDmOwner = resolvePinnedMainDmOwnerFromAllowlist({
+      dmScope: cfg.session?.dmScope,
+      allowFrom: ctx.allowFrom,
+      normalizeEntry: normalizeSlackAllowOwnerEntry,
     });
+    const senderRecipient = message.user?.trim().toLowerCase();
+    const skipMainUpdate =
+      pinnedMainDmOwner &&
+      senderRecipient &&
+      pinnedMainDmOwner.trim().toLowerCase() !== senderRecipient;
+    if (skipMainUpdate) {
+      logVerbose(
+        `slack: skip main-session last route for ${senderRecipient} (pinned owner ${pinnedMainDmOwner})`,
+      );
+    } else {
+      await updateLastRoute({
+        storePath,
+        sessionKey: route.mainSessionKey,
+        deliveryContext: {
+          channel: "slack",
+          to: `user:${message.user}`,
+          accountId: route.accountId,
+          threadId: prepared.ctxPayload.MessageThreadId,
+        },
+        ctx: prepared.ctxPayload,
+      });
+    }
   }
 
   const { statusThreadTs, isThreadReply } = resolveSlackThreadTargets({

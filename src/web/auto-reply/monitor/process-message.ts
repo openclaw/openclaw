@@ -22,6 +22,7 @@ import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import {
   readStoreAllowFromForDmPolicy,
+  resolvePinnedMainDmOwnerFromAllowlist,
   resolveDmGroupAccessWithCommandGate,
 } from "../../../security/dm-policy-shared.js";
 import { jidToE164, normalizeE164 } from "../../../utils.js";
@@ -111,22 +112,12 @@ function resolvePinnedMainDmRecipient(params: {
   cfg: ReturnType<typeof loadConfig>;
   msg: WebInboundMsg;
 }): string | null {
-  if ((params.cfg.session?.dmScope ?? "main") !== "main") {
-    return null;
-  }
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.msg.accountId });
-  const rawAllowFrom = account.allowFrom ?? [];
-  if (rawAllowFrom.includes("*")) {
-    return null;
-  }
-  const normalizedOwners = Array.from(
-    new Set(
-      rawAllowFrom
-        .map((entry) => normalizeE164(String(entry)))
-        .filter((entry): entry is string => Boolean(entry)),
-    ),
-  );
-  return normalizedOwners.length === 1 ? normalizedOwners[0] : null;
+  return resolvePinnedMainDmOwnerFromAllowlist({
+    dmScope: params.cfg.session?.dmScope,
+    allowFrom: account.allowFrom,
+    normalizeEntry: (entry) => normalizeE164(entry),
+  });
 }
 
 export async function processMessage(params: {
