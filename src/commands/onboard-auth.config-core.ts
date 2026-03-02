@@ -7,8 +7,10 @@ import {
   buildKilocodeProvider,
   buildKimiCodingProvider,
   buildQianfanProvider,
+  buildQiniuProvider,
   buildXiaomiProvider,
   QIANFAN_DEFAULT_MODEL_ID,
+  QINIU_DEFAULT_MODEL_ID,
   XIAOMI_DEFAULT_MODEL_ID,
 } from "../agents/models-config.providers.js";
 import {
@@ -37,6 +39,7 @@ import {
   MISTRAL_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
+  QINIU_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
@@ -295,6 +298,26 @@ export function applyXiaomiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
 export function applyXiaomiConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyXiaomiProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, XIAOMI_DEFAULT_MODEL_REF);
+}
+
+export function applyQiniuProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...(cfg.models?.models ?? {}) };
+  models[QINIU_DEFAULT_MODEL_REF] = {
+    ...models[QINIU_DEFAULT_MODEL_REF],
+    alias: models[QINIU_DEFAULT_MODEL_REF]?.alias ?? "Qiniu",
+  };
+  const defaultProvider = buildQiniuProvider();
+  return applyProviderConfig(cfg, {
+    models,
+    providerId: "qiniu",
+    provider: defaultProvider,
+    defaultModelId: QINIU_DEFAULT_MODEL_ID,
+  });
+}
+
+export function applyQiniuConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyQiniuProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, QINIU_DEFAULT_MODEL_REF);
 }
 
 /**

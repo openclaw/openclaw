@@ -138,6 +138,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["opencode-zen"],
   },
   {
+    value: "qiniu",
+    label: "Qiniu Cloud (七牛云)",
+    hint: "API key",
+    choices: ["qiniu-api-key"],
+  },
+  {
     value: "xiaomi",
     label: "Xiaomi",
     hint: "API key",
@@ -264,6 +270,10 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     value: "zai-cn",
     label: "CN",
     hint: "Z.AI CN (open.bigmodel.cn)",
+  },
+  {
+    value: "qiniu-api-key",
+    label: "Qiniu Cloud API key",
   },
   {
     value: "xiaomi-api-key",

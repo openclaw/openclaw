@@ -108,6 +108,16 @@ const XIAOMI_DEFAULT_COST = {
   cacheRead: 0,
   cacheWrite: 0,
 };
+const QINIU_BASE_URL = "https://api.qnaigc.com";
+export const QINIU_DEFAULT_MODEL_ID = "deepseek-r1";
+const QINIU_DEFAULT_CONTEXT_WINDOW = 131072;
+const QINIU_DEFAULT_MAX_TOKENS = 8192;
+const QINIU_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
 
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
 const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.5";
@@ -755,6 +765,23 @@ export function buildXiaomiProvider(): ProviderConfig {
     ],
   };
 }
+export function buildQiniuProvider(): ProviderConfig {
+  return {
+    baseUrl: QINIU_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: QINIU_DEFAULT_MODEL_ID,
+        name: "DeepSeek R1",
+        reasoning: true,
+        input: ["text"],
+        cost: QINIU_DEFAULT_COST,
+        contextWindow: QINIU_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: QINIU_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
 
 async function buildVeniceProvider(): Promise<ProviderConfig> {
   const models = await discoverVeniceModels();
@@ -1007,6 +1034,12 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "xiaomi", store: authStore });
   if (xiaomiKey) {
     providers.xiaomi = { ...buildXiaomiProvider(), apiKey: xiaomiKey };
+  }
+  const qiniuKey =
+    resolveEnvApiKeyVarName("qiniu") ??
+    resolveApiKeyFromProfiles({ provider: "qiniu", store: authStore });
+  if (qiniuKey) {
+    providers.qiniu = { ...buildQiniuProvider(), apiKey: qiniuKey };
   }
 
   const cloudflareProfiles = listProfilesForProvider(authStore, "cloudflare-ai-gateway");
