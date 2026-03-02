@@ -26,7 +26,7 @@ export class DiffArtifactStore {
   private nextCleanupAt = 0;
 
   constructor(params: { rootDir: string; logger?: PluginLogger; cleanupIntervalMs?: number }) {
-    this.rootDir = params.rootDir;
+    this.rootDir = path.resolve(params.rootDir);
     this.logger = params.logger;
     this.cleanupIntervalMs =
       params.cleanupIntervalMs === undefined
@@ -59,7 +59,7 @@ export class DiffArtifactStore {
     await fs.mkdir(artifactDir, { recursive: true });
     await fs.writeFile(htmlPath, params.html, "utf8");
     await this.writeMeta(meta);
-    this.maybeCleanupExpired();
+    this.scheduleCleanup();
     return meta;
   }
 
@@ -83,7 +83,8 @@ export class DiffArtifactStore {
     if (!meta) {
       throw new Error(`Diff artifact not found: ${id}`);
     }
-    return await fs.readFile(meta.htmlPath, "utf8");
+    const htmlPath = this.normalizeStoredPath(meta.htmlPath, "htmlPath");
+    return await fs.readFile(htmlPath, "utf8");
   }
 
   async updateImagePath(id: string, imagePath: string): Promise<DiffArtifactMeta> {
@@ -91,9 +92,10 @@ export class DiffArtifactStore {
     if (!meta) {
       throw new Error(`Diff artifact not found: ${id}`);
     }
+    const normalizedImagePath = this.normalizeStoredPath(imagePath, "imagePath");
     const next: DiffArtifactMeta = {
       ...meta,
-      imagePath,
+      imagePath: normalizedImagePath,
     };
     await this.writeMeta(next);
     return next;
@@ -106,6 +108,10 @@ export class DiffArtifactStore {
   allocateStandaloneImagePath(): string {
     const id = crypto.randomBytes(10).toString("hex");
     return path.join(this.artifactDir(id), "preview.png");
+  }
+
+  scheduleCleanup(): void {
+    this.maybeCleanupExpired();
   }
 
   async cleanupExpired(): Promise<void> {
@@ -164,7 +170,7 @@ export class DiffArtifactStore {
   }
 
   private artifactDir(id: string): string {
-    return path.join(this.rootDir, id);
+    return this.resolveWithinRoot(id);
   }
 
   private metaPath(id: string): string {
@@ -190,6 +196,31 @@ export class DiffArtifactStore {
 
   private async deleteArtifact(id: string): Promise<void> {
     await fs.rm(this.artifactDir(id), { recursive: true, force: true }).catch(() => {});
+  }
+
+  private resolveWithinRoot(...parts: string[]): string {
+    const candidate = path.resolve(this.rootDir, ...parts);
+    this.assertWithinRoot(candidate);
+    return candidate;
+  }
+
+  private normalizeStoredPath(rawPath: string, label: string): string {
+    const candidate = path.isAbsolute(rawPath)
+      ? path.resolve(rawPath)
+      : path.resolve(this.rootDir, rawPath);
+    this.assertWithinRoot(candidate, label);
+    return candidate;
+  }
+
+  private assertWithinRoot(candidate: string, label = "path"): void {
+    const relative = path.relative(this.rootDir, candidate);
+    if (
+      relative === "" ||
+      (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
+    ) {
+      return;
+    }
+    throw new Error(`Diff artifact ${label} escapes store root: ${candidate}`);
   }
 }
 

@@ -40,6 +40,7 @@ describe("diffs tool", () => {
   });
 
   it("returns an image artifact in image mode", async () => {
+    const cleanupSpy = vi.spyOn(store, "scheduleCleanup");
     const screenshotter = {
       screenshotHtml: vi.fn(async ({ html, outputPath }: { html: string; outputPath: string }) => {
         expect(html).not.toContain("/plugins/diffs/assets/viewer.js");
@@ -68,6 +69,7 @@ describe("diffs tool", () => {
     expect(result?.content).toHaveLength(1);
     expect((result?.details as Record<string, unknown>).imagePath).toBeDefined();
     expect((result?.details as Record<string, unknown>).viewerUrl).toBeUndefined();
+    expect(cleanupSpy).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to view output when both mode cannot render an image", async () => {
@@ -108,6 +110,38 @@ describe("diffs tool", () => {
         baseUrl: "javascript:alert(1)",
       }),
     ).rejects.toThrow("Invalid baseUrl");
+  });
+
+  it("rejects oversized before/after payloads", async () => {
+    const tool = createDiffsTool({
+      api: createApi(),
+      store,
+      defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
+    });
+    const large = "x".repeat(600_000);
+
+    await expect(
+      tool.execute?.("tool-large-before", {
+        before: large,
+        after: "ok",
+        mode: "view",
+      }),
+    ).rejects.toThrow("before exceeds maximum size");
+  });
+
+  it("rejects oversized patch payloads", async () => {
+    const tool = createDiffsTool({
+      api: createApi(),
+      store,
+      defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
+    });
+
+    await expect(
+      tool.execute?.("tool-large-patch", {
+        patch: "x".repeat(2_100_000),
+        mode: "view",
+      }),
+    ).rejects.toThrow("patch exceeds maximum size");
   });
 
   it("uses configured defaults when tool params omit them", async () => {

@@ -42,6 +42,10 @@
     "defaults.mode": {
       "label": "Default Output Mode",
       "help": "Tool default when mode is omitted. Use view for canvas/gateway viewer, image for PNG, or both."
+    },
+    "security.allowRemoteViewer": {
+      "label": "Allow Remote Viewer",
+      "help": "Allow non-loopback access to diff viewer URLs when the token path is known."
     }
   },
   "configSchema": {
@@ -99,6 +103,16 @@
             "type": "string",
             "enum": ["view", "image", "both"],
             "default": "both"
+          }
+        }
+      },
+      "security": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "allowRemoteViewer": {
+            "type": "boolean",
+            "default": false
           }
         }
       }
