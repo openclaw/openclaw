@@ -114,7 +114,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
       }
       return lastResult;
     }
-    return slackOutbound.sendText!({ ...ctx });
+    return slackOutbound.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
   },
   sendText: async ({ to, text, accountId, deps, replyToId, threadId, identity }) => {
     return await sendSlackOutboundMessage({

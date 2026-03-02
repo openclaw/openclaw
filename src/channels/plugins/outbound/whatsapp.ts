@@ -33,7 +33,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
       }
       return lastResult;
     }
-    return whatsappOutbound.sendText!({ ...ctx });
+    return whatsappOutbound.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
   },
   sendText: async ({ to, text, accountId, deps, gifPlayback }) => {
     const send =
