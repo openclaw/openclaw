@@ -254,3 +254,7 @@
   - `node --import tsx scripts/release-check.ts`
   - `pnpm release:check`
   - `pnpm test:install:smoke` or `OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke` for non-root smoke path.
+
+## Channel Plugin Patterns
+
+- **DM policy config paths**: use `resolveChannelAccountConfigBasePath()` from `openclaw/plugin-sdk`. Do not inline account-path resolution in `resolveDmPolicy` handlers — it handles per-account vs channel-root path selection.
