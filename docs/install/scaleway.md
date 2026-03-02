@@ -85,6 +85,7 @@ tofu apply -var-file=../terraform.tfvars
 ```
 
 This creates:
+
 - An S3 bucket for OpenTofu state (encrypted, versioned)
 - An encryption passphrase (save it: `tofu output -raw encryption_passphrase`)
 - 22 GitHub Actions Secrets (auto-provisioned)
@@ -129,26 +130,26 @@ You should see 5 containers running and the Pomerium SSO login page.
 
 ## What persists where (source of truth)
 
-| Component | Location | Persistence | Notes |
-|-----------|----------|-------------|-------|
-| OpenTofu state | Scaleway S3 bucket | Versioned, encrypted (AES-GCM) | Created by bootstrap |
-| Instance config | `cloud-init.yaml.tftpl` | Baked at first boot | Security hardening, Podman setup |
-| OpenClaw data | `/home/openclaw/` on instance | Disk (20 GB) | Survives reboot, not instance destroy |
-| Container images | Scaleway Container Registry | Rebuilt by CI on push | Trivy-scanned for vulnerabilities |
-| Secrets | OpenTofu state + GitHub Secrets | Auto-generated | SSH key, gateway token, Pomerium secrets |
-| DNS | Scaleway Domains | Managed by OpenTofu | A, CNAME, SPF, DKIM, DMARC |
+| Component        | Location                        | Persistence                    | Notes                                    |
+| ---------------- | ------------------------------- | ------------------------------ | ---------------------------------------- |
+| OpenTofu state   | Scaleway S3 bucket              | Versioned, encrypted (AES-GCM) | Created by bootstrap                     |
+| Instance config  | `cloud-init.yaml.tftpl`         | Baked at first boot            | Security hardening, Podman setup         |
+| OpenClaw data    | `/home/openclaw/` on instance   | Disk (20 GB)                   | Survives reboot, not instance destroy    |
+| Container images | Scaleway Container Registry     | Rebuilt by CI on push          | Trivy-scanned for vulnerabilities        |
+| Secrets          | OpenTofu state + GitHub Secrets | Auto-generated                 | SSH key, gateway token, Pomerium secrets |
+| DNS              | Scaleway Domains                | Managed by OpenTofu            | A, CNAME, SPF, DKIM, DMARC               |
 
 ## Cost
 
-| Resource | EUR/month |
-|----------|-----------|
-| DEV1-S (2 vCPU, 2 GB) | 6.42 |
-| Flexible IPv4 | 2.92 |
-| Pomerium (256 MB serverless) | 0.42 |
-| Domain (amortized) | ~2 |
-| Cockpit logs | ~1 |
-| LLM API (llama-3.1-8b) | ~4 |
-| **Total** | **~17** |
+| Resource                     | EUR/month |
+| ---------------------------- | --------- |
+| DEV1-S (2 vCPU, 2 GB)        | 6.42      |
+| Flexible IPv4                | 2.92      |
+| Pomerium (256 MB serverless) | 0.42      |
+| Domain (amortized)           | ~2        |
+| Cockpit logs                 | ~1        |
+| LLM API (llama-3.1-8b)       | ~4        |
+| **Total**                    | **~17**   |
 
 The kill switch automatically powers off the instance if monthly billing exceeds your configured threshold (default: 15 EUR). You can raise this in `terraform.tfvars`:
 
