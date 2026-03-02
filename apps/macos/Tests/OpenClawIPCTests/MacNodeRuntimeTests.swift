@@ -42,8 +42,27 @@ struct MacNodeRuntimeTests {
         #expect(payload.cmdText == "echo hello")
         #expect(payload.plan.argv == ["echo", "hello"])
         #expect(payload.plan.cwd == "/tmp")
+        #expect(payload.plan.rawCommand == "echo hello")
         #expect(payload.plan.agentId == "main")
         #expect(payload.plan.sessionKey == "session-key")
+    }
+
+    @Test func handleInvokeSystemRunPrepareKeepsRawCommandNilWhenNotProvided() async throws {
+        let runtime = MacNodeRuntime()
+        let params = OpenClawSystemRunParams(
+            command: ["/usr/bin/env", "BASH_ENV=/tmp/test", "bash", "-lc", "echo hi"])
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-2prepare-noraw",
+                command: OpenClawSystemCommand.runPrepare.rawValue,
+                paramsJSON: json))
+        #expect(response.ok == true)
+
+        let payloadJSON = try #require(response.payloadJSON)
+        let payload = try JSONDecoder().decode(OpenClawSystemRunPreparePayload.self, from: Data(payloadJSON.utf8))
+        #expect(!payload.cmdText.isEmpty)
+        #expect(payload.plan.rawCommand == nil)
     }
 
     @Test func handleInvokeRejectsEmptySystemWhich() async throws {

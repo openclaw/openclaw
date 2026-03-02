@@ -457,12 +457,13 @@ actor MacNodeRuntime {
         let normalizedCwd = params.cwd?.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedAgentId = params.agentId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedSessionKey = params.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedRawCommand = params.rawCommand?.trimmingCharacters(in: .whitespacesAndNewlines)
         let payload = OpenClawSystemRunPreparePayload(
             cmdText: cmdText,
             plan: OpenClawSystemRunApprovalPlan(
                 argv: params.command,
                 cwd: normalizedCwd?.isEmpty == false ? normalizedCwd : nil,
-                rawCommand: cmdText,
+                rawCommand: normalizedRawCommand?.isEmpty == false ? normalizedRawCommand : nil,
                 agentId: normalizedAgentId?.isEmpty == false ? normalizedAgentId : nil,
                 sessionKey: normalizedSessionKey?.isEmpty == false ? normalizedSessionKey : nil))
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: try Self.encodePayload(payload))
