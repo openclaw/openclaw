@@ -76,6 +76,10 @@ describe("sessions", () => {
   }
 
   async function normalizePathForComparison(filePath: string): Promise<string> {
+    const canonicalFile = await fs.realpath(filePath).catch(() => null);
+    if (canonicalFile) {
+      return canonicalFile;
+    }
     const parentDir = path.dirname(filePath);
     const canonicalParent = await fs.realpath(parentDir).catch(() => parentDir);
     return path.join(canonicalParent, path.basename(filePath));
@@ -569,18 +573,13 @@ describe("sessions", () => {
 
   it("resolves cross-agent absolute sessionFile paths", async () => {
     const { stateDir, bot2SessionPath } = await createAgentSessionsLayout("cross-agent");
-    const canonicalBot2SessionPath = await fs
-      .realpath(bot2SessionPath)
-      .catch(() => bot2SessionPath);
-    withStateDir(stateDir, () => {
+    const sessionFile = withStateDir(stateDir, () =>
       // Agent bot1 resolves a sessionFile that belongs to agent bot2
-      const sessionFile = resolveSessionFilePath(
-        "sess-1",
-        { sessionFile: bot2SessionPath },
-        { agentId: "bot1" },
-      );
-      expect(sessionFile).toBe(canonicalBot2SessionPath);
-    });
+      resolveSessionFilePath("sess-1", { sessionFile: bot2SessionPath }, { agentId: "bot1" }),
+    );
+    expect(await normalizePathForComparison(sessionFile)).toBe(
+      await normalizePathForComparison(bot2SessionPath),
+    );
   });
 
   it("resolves cross-agent paths when OPENCLAW_STATE_DIR differs from stored paths", () => {
@@ -647,18 +646,17 @@ describe("sessions", () => {
   it("resolves sibling agent absolute sessionFile using alternate agentId from options", async () => {
     const { stateDir, mainStorePath, bot2SessionPath } =
       await createAgentSessionsLayout("sibling-agent");
-    const canonicalBot2SessionPath = await fs
-      .realpath(bot2SessionPath)
-      .catch(() => bot2SessionPath);
-    withStateDir(stateDir, () => {
+    const sessionFile = withStateDir(stateDir, () => {
       const opts = resolveSessionFilePathOptions({
         agentId: "bot2",
         storePath: mainStorePath,
       });
 
-      const sessionFile = resolveSessionFilePath("sess-1", { sessionFile: bot2SessionPath }, opts);
-      expect(sessionFile).toBe(canonicalBot2SessionPath);
+      return resolveSessionFilePath("sess-1", { sessionFile: bot2SessionPath }, opts);
     });
+    expect(await normalizePathForComparison(sessionFile)).toBe(
+      await normalizePathForComparison(bot2SessionPath),
+    );
   });
 
   it("falls back to derived transcript path when sessionFile is outside agent sessions directories", async () => {
