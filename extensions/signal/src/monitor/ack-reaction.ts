@@ -3,6 +3,7 @@
  * Call this BEFORE inboundDebouncer.enqueue() in event-handler.ts.
  */
 
+import { resolveAckReaction } from "../../agents/identity.js";
 import { shouldAckReaction } from "../../channels/ack-reactions.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
@@ -33,7 +34,10 @@ export function maybeSendSignalAckReaction(params: {
     return;
   }
 
-  const emoji = (params.cfg.messages?.ackReaction ?? "👀").trim();
+  const emoji = resolveAckReaction(params.cfg, "main", {
+    channel: "signal",
+    accountId: params.accountId,
+  }).trim();
   if (!emoji) {
     return;
   }
