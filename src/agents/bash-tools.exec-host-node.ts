@@ -16,7 +16,9 @@ import { buildNodeShellCommand } from "../infra/node-shell.js";
 import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
 import { logInfo } from "../logger.js";
 import {
-  registerExecApprovalRequestForHost,
+  buildExecApprovalRequesterContext,
+  buildExecApprovalTurnSourceContext,
+  registerExecApprovalRequestForHostOrThrow,
   waitForExecApprovalDecision,
 } from "./bash-tools.exec-approval-request.js";
 import {
@@ -219,31 +221,26 @@ export async function executeNodeHostCommand(
     let expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
     let preResolvedDecision: string | null | undefined;
 
-    try {
-      // Register first so the returned approval ID is actionable immediately.
-      const registration = await registerExecApprovalRequestForHost({
-        approvalId,
-        command: prepared.cmdText,
-        commandArgv: prepared.plan.argv,
-        systemRunPlan: prepared.plan,
-        env: nodeEnv,
-        workdir: runCwd,
-        host: "node",
-        nodeId,
-        security: hostSecurity,
-        ask: hostAsk,
+    // Register first so the returned approval ID is actionable immediately.
+    const registration = await registerExecApprovalRequestForHostOrThrow({
+      approvalId,
+      command: prepared.cmdText,
+      commandArgv: prepared.plan.argv,
+      systemRunPlan: prepared.plan,
+      env: nodeEnv,
+      workdir: runCwd,
+      host: "node",
+      nodeId,
+      security: hostSecurity,
+      ask: hostAsk,
+      ...buildExecApprovalRequesterContext({
         agentId: runAgentId,
         sessionKey: runSessionKey,
-        turnSourceChannel: params.turnSourceChannel,
-        turnSourceTo: params.turnSourceTo,
-        turnSourceAccountId: params.turnSourceAccountId,
-        turnSourceThreadId: params.turnSourceThreadId,
-      });
-      expiresAtMs = registration.expiresAtMs;
-      preResolvedDecision = registration.finalDecision;
-    } catch (err) {
-      throw new Error(`Exec approval registration failed: ${String(err)}`, { cause: err });
-    }
+      }),
+      ...buildExecApprovalTurnSourceContext(params),
+    });
+    expiresAtMs = registration.expiresAtMs;
+    preResolvedDecision = registration.finalDecision;
 
     void (async () => {
       let decision: string | null = preResolvedDecision ?? null;

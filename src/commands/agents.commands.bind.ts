@@ -60,6 +60,35 @@ function formatBindingOwnerLine(binding: AgentBinding): string {
   return `${normalizeAgentId(binding.agentId)} <- ${describeBinding(binding)}`;
 }
 
+function resolveTargetAgentIdOrExit(params: {
+  cfg: Awaited<ReturnType<typeof requireValidConfig>>;
+  runtime: RuntimeEnv;
+  agentInput: string | undefined;
+}): string | null {
+  const agentId = resolveAgentId(params.cfg, params.agentInput?.trim(), {
+    fallbackToDefault: true,
+  });
+  if (!agentId) {
+    params.runtime.error("Unable to resolve agent id.");
+    params.runtime.exit(1);
+    return null;
+  }
+  if (!hasAgent(params.cfg, agentId)) {
+    params.runtime.error(`Agent "${agentId}" not found.`);
+    params.runtime.exit(1);
+    return null;
+  }
+  return agentId;
+}
+
+function formatBindingConflicts(
+  conflicts: Array<{ binding: AgentBinding; existingAgentId: string }>,
+): string[] {
+  return conflicts.map(
+    (conflict) => `${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
+  );
+}
+
 export async function agentsBindingsCommand(
   opts: AgentsBindingsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -123,15 +152,8 @@ export async function agentsBindCommand(
     return;
   }
 
-  const agentId = resolveAgentId(cfg, opts.agent?.trim(), { fallbackToDefault: true });
+  const agentId = resolveTargetAgentIdOrExit({ cfg, runtime, agentInput: opts.agent });
   if (!agentId) {
-    runtime.error("Unable to resolve agent id.");
-    runtime.exit(1);
-    return;
-  }
-  if (!hasAgent(cfg, agentId)) {
-    runtime.error(`Agent "${agentId}" not found.`);
-    runtime.exit(1);
     return;
   }
 
@@ -162,9 +184,7 @@ export async function agentsBindCommand(
     added: result.added.map(describeBinding),
     updated: result.updated.map(describeBinding),
     skipped: result.skipped.map(describeBinding),
-    conflicts: result.conflicts.map(
-      (conflict) => `${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
-    ),
+    conflicts: formatBindingConflicts(result.conflicts),
   };
   if (opts.json) {
     runtime.log(JSON.stringify(payload, null, 2));
@@ -215,15 +235,8 @@ export async function agentsUnbindCommand(
     return;
   }
 
-  const agentId = resolveAgentId(cfg, opts.agent?.trim(), { fallbackToDefault: true });
+  const agentId = resolveTargetAgentIdOrExit({ cfg, runtime, agentInput: opts.agent });
   if (!agentId) {
-    runtime.error("Unable to resolve agent id.");
-    runtime.exit(1);
-    return;
-  }
-  if (!hasAgent(cfg, agentId)) {
-    runtime.error(`Agent "${agentId}" not found.`);
-    runtime.exit(1);
     return;
   }
   if (opts.all && (opts.bind?.length ?? 0) > 0) {
@@ -288,9 +301,7 @@ export async function agentsUnbindCommand(
     agentId,
     removed: result.removed.map(describeBinding),
     missing: result.missing.map(describeBinding),
-    conflicts: result.conflicts.map(
-      (conflict) => `${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
-    ),
+    conflicts: formatBindingConflicts(result.conflicts),
   };
   if (opts.json) {
     runtime.log(JSON.stringify(payload, null, 2));

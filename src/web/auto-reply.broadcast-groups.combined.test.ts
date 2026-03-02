@@ -18,6 +18,25 @@ installWebAutoReplyTestHomeHooks();
 describe("broadcast groups", () => {
   installWebAutoReplyUnitTestHooks();
 
+  it("skips unknown broadcast agent ids when agents.list is present", async () => {
+    setLoadConfigMock({
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: { maxConcurrent: 10 },
+        list: [{ id: "alfred" }],
+      },
+      broadcast: {
+        "+1000": ["alfred", "missing"],
+      },
+    } satisfies OpenClawConfig);
+
+    const { seen, resolver } = await sendWebDirectInboundAndCollectSessionKeys();
+
+    expect(resolver).toHaveBeenCalledTimes(1);
+    expect(seen[0]).toContain("agent:alfred:");
+    resetLoadConfigMock();
+  });
+
   it("broadcasts sequentially in configured order", async () => {
     setLoadConfigMock({
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -38,6 +57,7 @@ describe("broadcast groups", () => {
     expect(seen[1]).toContain("agent:baerbel:");
     resetLoadConfigMock();
   });
+
   it("shares group history across broadcast agents and clears after replying", async () => {
     setLoadConfigMock({
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -89,7 +109,6 @@ describe("broadcast groups", () => {
       };
       expect(payload.Body).toContain("Chat messages since your last reply");
       expect(payload.Body).toContain("Alice (+111): hello group");
-      // Message id hints are not included in prompts anymore.
       expect(payload.Body).not.toContain("[message_id:");
       expect(payload.Body).toContain("@bot ping");
       expect(payload.SenderName).toBe("Bob");
@@ -118,6 +137,7 @@ describe("broadcast groups", () => {
 
     resetLoadConfigMock();
   });
+
   it("broadcasts in parallel by default", async () => {
     setLoadConfigMock({
       channels: { whatsapp: { allowFrom: ["*"] } },
