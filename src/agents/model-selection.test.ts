@@ -503,6 +503,72 @@ describe("model-selection", () => {
         }),
       ).toBe("high");
     });
+
+    it("accepts per-model params.thinking=adaptive", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-6": {
+                params: { thinking: "adaptive" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          catalog: [
+            {
+              provider: "anthropic",
+              id: "claude-opus-4-6",
+              name: "Claude Opus 4.6",
+              reasoning: true,
+            },
+          ],
+        }),
+      ).toBe("adaptive");
+    });
+
+    it("defaults Anthropic Claude 4.6 models to adaptive", () => {
+      const cfg = {} as OpenClawConfig;
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          catalog: [
+            {
+              provider: "anthropic",
+              id: "claude-opus-4-6",
+              name: "Claude Opus 4.6",
+              reasoning: true,
+            },
+          ],
+        }),
+      ).toBe("adaptive");
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "amazon-bedrock",
+          model: "us.anthropic.claude-sonnet-4-6-v1:0",
+          catalog: [
+            {
+              provider: "amazon-bedrock",
+              id: "us.anthropic.claude-sonnet-4-6-v1:0",
+              name: "Claude Sonnet 4.6",
+              reasoning: true,
+            },
+          ],
+        }),
+      ).toBe("adaptive");
+    });
   });
 });
 
