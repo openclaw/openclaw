@@ -220,6 +220,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Disables Chromium sandbox isolation flags for environments where sandboxing fails at runtime. Keep this off whenever possible because process isolation protections are reduced.",
   "browser.attachOnly":
     "Restricts browser mode to attach-only behavior without starting local browser processes. Use this when all browser sessions are externally managed by a remote CDP provider.",
+  "browser.cdpPortRangeStart":
+    "Starting local CDP port used for auto-allocated browser profile ports. Increase this when host-level port defaults conflict with other local services.",
   "browser.defaultProfile":
     "Default browser profile name selected when callers do not explicitly choose a profile. Use a stable low-privilege profile as the default to reduce accidental cross-context state use.",
   "browser.profiles":
