@@ -859,12 +859,57 @@ describe("runWithModelFallback", () => {
     expect(run.mock.calls[1]?.[0]).not.toBe("ollama");
   });
 
+  it("falls back when context-overflow text includes an explicit top-level transport phrase", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          "Request size exceeds model context window after connect ENOTFOUND api.openai.com",
+        ),
+      )
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
   it("does not treat standalone DNS text as transport failure for true overflow errors", async () => {
     const cfg = makeCfg();
     const run = vi
       .fn()
       .mockRejectedValueOnce(
         new Error("Request size exceeds model context window. Debug dump includes DNS records."),
+      )
+      .mockResolvedValueOnce("ok");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      }),
+    ).rejects.toThrow("Request size exceeds model context window");
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not treat top-level transport token lists as transport failures for true overflow errors", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          "Request size exceeds model context window. Debug text includes ENOTFOUND and getaddrinfo tokens.",
+        ),
       )
       .mockResolvedValueOnce("ok");
 

@@ -79,6 +79,8 @@ const TRANSPORT_ERROR_CODES = new Set([
 ]);
 const TRANSPORT_ERROR_MESSAGE_RE =
   /\b(getaddrinfo|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ENETRESET|ETIMEDOUT|ESOCKETTIMEDOUT|EHOSTUNREACH|ENETUNREACH|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT_TIMEOUT|UND_ERR_CONNECT|UND_ERR_SOCKET)\b/i;
+const TOP_LEVEL_TRANSPORT_PHRASE_RE =
+  /\b(connect|getaddrinfo|socket)\s+(ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ENETRESET|ETIMEDOUT|ESOCKETTIMEDOUT|EHOSTUNREACH|ENETUNREACH|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT_TIMEOUT|UND_ERR_CONNECT|UND_ERR_SOCKET)\b/i;
 
 function hasDnsTransportPhrase(message: string): boolean {
   const lower = message.toLowerCase();
@@ -95,17 +97,29 @@ function hasDnsTransportPhrase(message: string): boolean {
   );
 }
 
+function hasTopLevelTransportMessageHint(message: string): boolean {
+  return hasDnsTransportPhrase(message) || TOP_LEVEL_TRANSPORT_PHRASE_RE.test(message);
+}
+
 function hasTransportFailureHint(err: unknown): boolean {
-  const queue: unknown[] = [err];
+  const queue: Array<{ value: unknown; depth: number }> = [{ value: err, depth: 0 }];
   const seen = new Set<object>();
 
   while (queue.length > 0) {
-    const current = queue.shift();
+    const currentEntry = queue.shift();
+    if (!currentEntry) {
+      continue;
+    }
+    const { value: current, depth } = currentEntry;
     if (!current) {
       continue;
     }
     if (typeof current === "string") {
-      if (TRANSPORT_ERROR_MESSAGE_RE.test(current) || hasDnsTransportPhrase(current)) {
+      const hasMessageHint =
+        depth === 0
+          ? hasTopLevelTransportMessageHint(current)
+          : TRANSPORT_ERROR_MESSAGE_RE.test(current) || hasDnsTransportPhrase(current);
+      if (hasMessageHint) {
         return true;
       }
       continue;
@@ -134,23 +148,25 @@ function hasTransportFailureHint(err: unknown): boolean {
     }
     if (
       typeof candidate.message === "string" &&
-      (TRANSPORT_ERROR_MESSAGE_RE.test(candidate.message) ||
-        hasDnsTransportPhrase(candidate.message))
+      (depth === 0
+        ? hasTopLevelTransportMessageHint(candidate.message)
+        : TRANSPORT_ERROR_MESSAGE_RE.test(candidate.message) ||
+          hasDnsTransportPhrase(candidate.message))
     ) {
       return true;
     }
 
     if (candidate.cause) {
-      queue.push(candidate.cause);
+      queue.push({ value: candidate.cause, depth: depth + 1 });
     }
     if (candidate.reason) {
-      queue.push(candidate.reason);
+      queue.push({ value: candidate.reason, depth: depth + 1 });
     }
     if (candidate.original) {
-      queue.push(candidate.original);
+      queue.push({ value: candidate.original, depth: depth + 1 });
     }
     if (candidate.error) {
-      queue.push(candidate.error);
+      queue.push({ value: candidate.error, depth: depth + 1 });
     }
   }
   return false;
