@@ -6,11 +6,13 @@ import {
 import type { GatewayAuthChoice } from "../commands/onboard-types.js";
 import type { GatewayBindMode, GatewayTailscaleMode, OpenClawConfig } from "../config/config.js";
 import {
+  appendAllowedOrigin,
+  buildTailnetHttpsOrigin,
   TAILSCALE_DOCS_LINES,
   TAILSCALE_EXPOSURE_OPTIONS,
   TAILSCALE_MISSING_BIN_NOTE_LINES,
 } from "../gateway/gateway-config-prompts.shared.js";
-import { findTailscaleBinary } from "../infra/tailscale.js";
+import { findTailscaleBinary, getTailnetHostname } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
 import type {
@@ -48,6 +50,21 @@ type ConfigureGatewayResult = {
   nextConfig: OpenClawConfig;
   settings: GatewayWizardSettings;
 };
+
+function buildDefaultControlUiAllowedOrigins(params: {
+  port: number;
+  bind: GatewayWizardSettings["bind"];
+  customBindHost?: string;
+}): string[] {
+  const origins = new Set<string>([
+    `http://localhost:${params.port}`,
+    `http://127.0.0.1:${params.port}`,
+  ]);
+  if (params.bind === "custom" && params.customBindHost) {
+    origins.add(`http://${params.customBindHost}:${params.port}`);
+  }
+  return [...origins];
+}
 
 export async function configureGatewayForOnboarding(
   opts: ConfigureGatewayOptions,
@@ -122,8 +139,10 @@ export async function configureGatewayForOnboarding(
         });
 
   // Detect Tailscale binary before proceeding with serve/funnel setup.
+  // Persist the path so getTailnetHostname can reuse it for origin injection.
+  let tailscaleBin: string | null = null;
   if (tailscaleMode !== "off") {
-    const tailscaleBin = await findTailscaleBinary();
+    tailscaleBin = await findTailscaleBinary();
     if (!tailscaleBin) {
       await prompter.note(TAILSCALE_MISSING_BIN_NOTE_LINES.join("\n"), "Tailscale Warning");
     }
@@ -215,6 +234,50 @@ export async function configureGatewayForOnboarding(
       },
     },
   };
+
+  const controlUiEnabled = nextConfig.gateway?.controlUi?.enabled ?? true;
+  const hasExplicitControlUiAllowedOrigins =
+    (nextConfig.gateway?.controlUi?.allowedOrigins ?? []).some(
+      (origin) => origin.trim().length > 0,
+    ) || nextConfig.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
+  if (controlUiEnabled && bind !== "loopback" && !hasExplicitControlUiAllowedOrigins) {
+    nextConfig = {
+      ...nextConfig,
+      gateway: {
+        ...nextConfig.gateway,
+        controlUi: {
+          ...nextConfig.gateway?.controlUi,
+          allowedOrigins: buildDefaultControlUiAllowedOrigins({
+            port,
+            bind,
+            customBindHost,
+          }),
+        },
+      },
+    };
+  }
+
+  // Auto-add Tailscale origin to controlUi.allowedOrigins so the Control UI
+  // is accessible via the Tailscale hostname without manual config.
+  if (tailscaleMode === "serve" || tailscaleMode === "funnel") {
+    const tsOrigin = await getTailnetHostname(undefined, tailscaleBin ?? undefined)
+      .then((host) => buildTailnetHttpsOrigin(host))
+      .catch(() => null);
+    if (tsOrigin) {
+      const existing = nextConfig.gateway?.controlUi?.allowedOrigins ?? [];
+      const updatedOrigins = appendAllowedOrigin(existing, tsOrigin);
+      nextConfig = {
+        ...nextConfig,
+        gateway: {
+          ...nextConfig.gateway,
+          controlUi: {
+            ...nextConfig.gateway?.controlUi,
+            allowedOrigins: updatedOrigins,
+          },
+        },
+      };
+    }
+  }
 
   // If this is a new gateway setup (no existing gateway settings), start with a
   // denylist for high-risk node commands. Users can arm these temporarily via

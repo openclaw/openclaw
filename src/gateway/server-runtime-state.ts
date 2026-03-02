@@ -11,7 +11,8 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { HooksConfigResolved } from "./hooks.js";
-import { resolveGatewayListenHosts } from "./net.js";
+import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
+import { isProtectedPluginRoutePath } from "./security-path.js";
 import {
   createGatewayBroadcaster,
   type GatewayBroadcastFn,
@@ -27,7 +28,10 @@ import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-h
 import type { DedupeEntry } from "./server-shared.js";
 import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
-import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
+import {
+  createGatewayPluginRequestHandler,
+  isRegisteredPluginHttpRoutePath,
+} from "./server/plugins-http.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -115,8 +119,20 @@ export async function createGatewayRuntimeState(params: {
     registry: params.pluginRegistry,
     log: params.logPlugins,
   });
+  const shouldEnforcePluginGatewayAuth = (requestPath: string): boolean => {
+    if (isProtectedPluginRoutePath(requestPath)) {
+      return true;
+    }
+    return isRegisteredPluginHttpRoutePath(params.pluginRegistry, requestPath);
+  };
 
   const bindHosts = await resolveGatewayListenHosts(params.bindHost);
+  if (!isLoopbackHost(params.bindHost)) {
+    params.log.warn(
+      "⚠️  Gateway is binding to a non-loopback address. " +
+        "Ensure authentication is configured before exposing to public networks.",
+    );
+  }
   const httpServers: HttpServer[] = [];
   const httpBindHosts: string[] = [];
   for (const host of bindHosts) {
@@ -132,6 +148,7 @@ export async function createGatewayRuntimeState(params: {
       strictTransportSecurityHeader: params.strictTransportSecurityHeader,
       handleHooksRequest,
       handlePluginRequest,
+      shouldEnforcePluginGatewayAuth,
       resolvedAuth: params.resolvedAuth,
       rateLimiter: params.rateLimiter,
       tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,

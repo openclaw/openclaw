@@ -1,4 +1,4 @@
-import type { Dispatcher } from "undici";
+import { EnvHttpProxyAgent, type Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { bindAbortRelay } from "../../utils/fetch-timeout.js";
 import {
@@ -22,6 +22,7 @@ export type GuardedFetchOptions = {
   policy?: SsrFPolicy;
   lookupFn?: LookupFn;
   pinDns?: boolean;
+  proxy?: "env";
   auditContext?: string;
 };
 
@@ -32,12 +33,30 @@ export type GuardedFetchResult = {
 };
 
 const DEFAULT_MAX_REDIRECTS = 3;
+const ENV_PROXY_KEYS = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+] as const;
 const CROSS_ORIGIN_REDIRECT_SENSITIVE_HEADERS = [
   "authorization",
   "proxy-authorization",
   "cookie",
   "cookie2",
 ];
+
+function hasEnvProxyConfigured(): boolean {
+  for (const key of ENV_PROXY_KEYS) {
+    const value = process.env[key];
+    if (typeof value === "string" && value.trim()) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
@@ -138,7 +157,9 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         lookupFn: params.lookupFn,
         policy: params.policy,
       });
-      if (params.pinDns !== false) {
+      if (params.proxy === "env" && hasEnvProxyConfigured()) {
+        dispatcher = new EnvHttpProxyAgent();
+      } else if (params.pinDns !== false) {
         dispatcher = createPinnedDispatcher(pinned);
       }
 

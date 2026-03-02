@@ -19,7 +19,6 @@ import {
   shouldAckReaction as shouldAckReactionGate,
   type AckReactionScope,
 } from "../../../channels/ack-reactions.js";
-import { formatAllowlistMatchMeta } from "../../../channels/allowlist-match.js";
 import { resolveControlCommandGate } from "../../../channels/command-gating.js";
 import { resolveConversationLabel } from "../../../channels/conversation-label.js";
 import { logInboundDrop } from "../../../channels/logging.js";
@@ -28,13 +27,12 @@ import { recordInboundSession } from "../../../channels/session.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
-import { buildPairingReply } from "../../../pairing/pairing-messages.js";
-import { upsertChannelPairingRequest } from "../../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
-import type { ResolvedSlackAccount } from "../../accounts.js";
+import { resolveSlackReplyToMode, type ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { sendMessageSlack } from "../../send.js";
+import { hasSlackThreadParticipation } from "../../sent-thread-cache.js";
 import { resolveSlackThreadContext } from "../../threading.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "../allow-list.js";
@@ -42,8 +40,10 @@ import { resolveSlackEffectiveAllowFrom } from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import { stripSlackMentionsForCommandDetection } from "../commands.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
+import { authorizeSlackDirectMessage } from "../dm-auth.js";
 import {
   resolveSlackAttachmentContent,
+  MAX_SLACK_MEDIA_FILES,
   resolveSlackMedia,
   resolveSlackThreadHistory,
   resolveSlackThreadStarter,
@@ -126,7 +126,9 @@ export async function prepareSlackMessage(params: {
     return null;
   }
 
-  const { allowFromLower } = await resolveSlackEffectiveAllowFrom(ctx);
+  const { allowFromLower } = await resolveSlackEffectiveAllowFrom(ctx, {
+    includePairingStore: isDirectMessage,
+  });
 
   if (isDirectMessage) {
     const directUserId = message.user;
@@ -134,57 +136,31 @@ export async function prepareSlackMessage(params: {
       logVerbose("slack: drop dm message (missing user id)");
       return null;
     }
-    if (!ctx.dmEnabled || ctx.dmPolicy === "disabled") {
-      logVerbose("slack: drop dm (dms disabled)");
+    const allowed = await authorizeSlackDirectMessage({
+      ctx,
+      accountId: account.accountId,
+      senderId: directUserId,
+      allowFromLower,
+      resolveSenderName: ctx.resolveUserName,
+      sendPairingReply: async (text) => {
+        await sendMessageSlack(message.channel, text, {
+          token: ctx.botToken,
+          client: ctx.app.client,
+          accountId: account.accountId,
+        });
+      },
+      onDisabled: () => {
+        logVerbose("slack: drop dm (dms disabled)");
+      },
+      onUnauthorized: ({ allowMatchMeta }) => {
+        logVerbose(
+          `Blocked unauthorized slack sender ${message.user} (dmPolicy=${ctx.dmPolicy}, ${allowMatchMeta})`,
+        );
+      },
+      log: logVerbose,
+    });
+    if (!allowed) {
       return null;
-    }
-    if (ctx.dmPolicy !== "open") {
-      const allowMatch = resolveSlackAllowListMatch({
-        allowList: allowFromLower,
-        id: directUserId,
-        allowNameMatching: ctx.allowNameMatching,
-      });
-      const allowMatchMeta = formatAllowlistMatchMeta(allowMatch);
-      if (!allowMatch.allowed) {
-        if (ctx.dmPolicy === "pairing") {
-          const sender = await ctx.resolveUserName(directUserId);
-          const senderName = sender?.name ?? undefined;
-          const { code, created } = await upsertChannelPairingRequest({
-            channel: "slack",
-            id: directUserId,
-            meta: { name: senderName },
-          });
-          if (created) {
-            logVerbose(
-              `slack pairing request sender=${directUserId} name=${
-                senderName ?? "unknown"
-              } (${allowMatchMeta})`,
-            );
-            try {
-              await sendMessageSlack(
-                message.channel,
-                buildPairingReply({
-                  channel: "slack",
-                  idLine: `Your Slack user id: ${directUserId}`,
-                  code,
-                }),
-                {
-                  token: ctx.botToken,
-                  client: ctx.app.client,
-                  accountId: account.accountId,
-                },
-              );
-            } catch (err) {
-              logVerbose(`slack pairing reply failed for ${message.user}: ${String(err)}`);
-            }
-          }
-        } else {
-          logVerbose(
-            `Blocked unauthorized slack sender ${message.user} (dmPolicy=${ctx.dmPolicy}, ${allowMatchMeta})`,
-          );
-        }
-        return null;
-      }
     }
   }
 
@@ -200,13 +176,26 @@ export async function prepareSlackMessage(params: {
   });
 
   const baseSessionKey = route.sessionKey;
-  const threadContext = resolveSlackThreadContext({ message, replyToMode: ctx.replyToMode });
+  const chatType = isDirectMessage ? "direct" : isGroupDm ? "group" : "channel";
+  const replyToMode = resolveSlackReplyToMode(account, chatType);
+  const threadContext = resolveSlackThreadContext({ message, replyToMode });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
+  // Keep channel/group sessions thread-scoped to avoid cross-thread context bleed.
+  // For DMs, preserve existing auto-thread behavior when replyToMode="all".
+  const autoThreadId =
+    !isThreadReply && replyToMode === "all" && threadContext.messageTs
+      ? threadContext.messageTs
+      : undefined;
+  const canonicalThreadId = isRoomish
+    ? (threadContext.incomingThreadTs ?? message.ts)
+    : isThreadReply
+      ? threadTs
+      : autoThreadId;
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey,
-    threadId: isThreadReply ? threadTs : undefined,
-    parentSessionKey: isThreadReply && ctx.threadInheritParent ? baseSessionKey : undefined,
+    threadId: canonicalThreadId,
+    parentSessionKey: canonicalThreadId && ctx.threadInheritParent ? baseSessionKey : undefined,
   });
   const sessionKey = threadKeys.sessionKey;
   const historyKey =
@@ -233,7 +222,8 @@ export async function prepareSlackMessage(params: {
     !isDirectMessage &&
     ctx.botUserId &&
     message.thread_ts &&
-    message.parent_user_id === ctx.botUserId,
+    (message.parent_user_id === ctx.botUserId ||
+      hasSlackThreadParticipation(account.accountId, message.channel, message.thread_ts)),
   );
 
   const sender = message.user ? await ctx.resolveUserName(message.user) : null;
@@ -282,7 +272,10 @@ export async function prepareSlackMessage(params: {
     useAccessGroups: ctx.useAccessGroups,
     authorizers: [
       { configured: allowFromLower.length > 0, allowed: ownerAuthorized },
-      { configured: channelUsersAllowlistConfigured, allowed: channelCommandAuthorized },
+      {
+        configured: channelUsersAllowlistConfigured,
+        allowed: channelCommandAuthorized,
+      },
     ],
     allowTextCommands,
     hasControlCommand: hasControlCommandInMessage,
@@ -362,8 +355,38 @@ export async function prepareSlackMessage(params: {
   const mediaPlaceholder = effectiveDirectMedia
     ? effectiveDirectMedia.map((m) => m.placeholder).join(" ")
     : undefined;
+
+  // When files were attached but all downloads failed, create a fallback
+  // placeholder so the message is still delivered to the agent instead of
+  // being silently dropped (#25064).
+  const fileOnlyFallback =
+    !mediaPlaceholder && (message.files?.length ?? 0) > 0
+      ? message
+          .files!.slice(0, MAX_SLACK_MEDIA_FILES)
+          .map((f) => f.name?.trim() || "file")
+          .join(", ")
+      : undefined;
+  const fileOnlyPlaceholder = fileOnlyFallback ? `[Slack file: ${fileOnlyFallback}]` : undefined;
+
+  // Bot messages (e.g. Prometheus, Gatus webhooks) often carry content only in
+  // non-forwarded attachments (is_share !== true).  Extract their text/fallback
+  // so the message isn't silently dropped when `allowBots: true` (#27616).
+  const botAttachmentText =
+    isBotMessage && !attachmentContent?.text
+      ? (message.attachments ?? [])
+          .map((a) => a.text?.trim() || a.fallback?.trim())
+          .filter(Boolean)
+          .join("\n")
+      : undefined;
+
   const rawBody =
-    [(message.text ?? "").trim(), attachmentContent?.text, mediaPlaceholder]
+    [
+      (message.text ?? "").trim(),
+      attachmentContent?.text,
+      botAttachmentText,
+      mediaPlaceholder,
+      fileOnlyPlaceholder,
+    ]
       .filter(Boolean)
       .join("\n") || "";
   if (!rawBody) {
@@ -440,7 +463,7 @@ export async function prepareSlackMessage(params: {
   const envelopeOptions = resolveEnvelopeFormatOptions(ctx.cfg);
   const previousTimestamp = readSessionUpdatedAt({
     storePath,
-    sessionKey: route.sessionKey,
+    sessionKey,
   });
   const body = formatInboundEnvelope({
     channel: "Slack",
@@ -588,13 +611,15 @@ export async function prepareSlackMessage(params: {
           timestamp: entry.timestamp,
         }))
       : undefined;
+  const commandBody = textForCommandDetection.trim();
 
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
     BodyForAgent: rawBody,
     InboundHistory: inboundHistory,
     RawBody: rawBody,
-    CommandBody: rawBody,
+    CommandBody: commandBody,
+    BodyForCommands: commandBody,
     From: slackFrom,
     To: slackTo,
     SessionKey: sessionKey,
@@ -678,6 +703,7 @@ export async function prepareSlackMessage(params: {
     channelConfig,
     replyTarget,
     ctxPayload,
+    replyToMode,
     isDirectMessage,
     isRoomish,
     historyKey,

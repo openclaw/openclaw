@@ -59,20 +59,22 @@ export function respondUnavailableOnNodeInvokeError<T extends { ok: boolean; err
   if (res.ok) {
     return true;
   }
-  const message =
-    res.error && typeof res.error === "object" && "message" in res.error
-      ? (res.error as { message?: unknown }).message
+  const nodeError =
+    res.error && typeof res.error === "object"
+      ? (res.error as { code?: unknown; message?: unknown })
       : null;
+  const nodeCode = typeof nodeError?.code === "string" ? nodeError.code.trim() : "";
+  const nodeMessage =
+    typeof nodeError?.message === "string" && nodeError.message.trim().length > 0
+      ? nodeError.message.trim()
+      : "node invoke failed";
+  const message = nodeCode ? `${nodeCode}: ${nodeMessage}` : nodeMessage;
   respond(
     false,
     undefined,
-    errorShape(
-      ErrorCodes.UNAVAILABLE,
-      typeof message === "string" ? message : "node invoke failed",
-      {
-        details: { nodeError: res.error ?? null },
-      },
-    ),
+    errorShape(ErrorCodes.UNAVAILABLE, message, {
+      details: { nodeError: res.error ?? null },
+    }),
   );
   return false;
 }

@@ -1,3 +1,6 @@
+import { getAcpSessionManager } from "../acp/control-plane/manager.js";
+import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../acp/policy.js";
+import { toAcpRuntimeError } from "../acp/runtime/errors.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -11,6 +14,7 @@ import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session
 import { runCliAgent } from "../agents/cli-runner.js";
 import { getCliSessionId } from "../agents/cli-session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { formatAgentInternalEventsForPrompt } from "../agents/internal-events.js";
 import { AGENT_LANE_SUBAGENT } from "../agents/lanes.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runWithModelFallback } from "../agents/model-fallback.js";
@@ -41,6 +45,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { type CliDeps, createDefaultDeps } from "../cli/deps.js";
 import { loadConfig } from "../config/config.js";
 import {
+  mergeSessionEntry,
   parseSessionThreadInfo,
   resolveAndPersistSessionFile,
   resolveAgentIdFromSessionKey,
@@ -55,6 +60,7 @@ import {
   emitAgentEvent,
   registerAgentRunContext,
 } from "../infra/agent-events.js";
+import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
@@ -75,11 +81,40 @@ type PersistSessionEntryParams = {
   entry: SessionEntry;
 };
 
+type OverrideFieldClearedByDelete =
+  | "providerOverride"
+  | "modelOverride"
+  | "authProfileOverride"
+  | "authProfileOverrideSource"
+  | "authProfileOverrideCompactionCount"
+  | "fallbackNoticeSelectedModel"
+  | "fallbackNoticeActiveModel"
+  | "fallbackNoticeReason";
+
+const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
+  "providerOverride",
+  "modelOverride",
+  "authProfileOverride",
+  "authProfileOverrideSource",
+  "authProfileOverrideCompactionCount",
+  "fallbackNoticeSelectedModel",
+  "fallbackNoticeActiveModel",
+  "fallbackNoticeReason",
+];
+
 async function persistSessionEntry(params: PersistSessionEntryParams): Promise<void> {
-  params.sessionStore[params.sessionKey] = params.entry;
-  await updateSessionStore(params.storePath, (store) => {
-    store[params.sessionKey] = params.entry;
+  const persisted = await updateSessionStore(params.storePath, (store) => {
+    const merged = mergeSessionEntry(store[params.sessionKey], params.entry);
+    // Preserve explicit `delete` clears done by session override helpers.
+    for (const field of OVERRIDE_FIELDS_CLEARED_BY_DELETE) {
+      if (!Object.hasOwn(params.entry, field)) {
+        Reflect.deleteProperty(merged, field);
+      }
+    }
+    store[params.sessionKey] = merged;
+    return merged;
   });
+  params.sessionStore[params.sessionKey] = persisted;
 }
 
 function resolveFallbackRetryPrompt(params: { body: string; isFallbackRetry: boolean }): string {
@@ -87,6 +122,20 @@ function resolveFallbackRetryPrompt(params: { body: string; isFallbackRetry: boo
     return params.body;
   }
   return "Continue where you left off. The previous model attempt failed or timed out.";
+}
+
+function prependInternalEventContext(
+  body: string,
+  events: AgentCommandOpts["internalEvents"],
+): string {
+  if (body.includes("OpenClaw runtime context (internal):")) {
+    return body;
+  }
+  const renderedEvents = formatAgentInternalEventsForPrompt(events);
+  if (!renderedEvents) {
+    return body;
+  }
+  return [renderedEvents, body].filter(Boolean).join("\n\n");
 }
 
 function runAgentAttempt(params: {
@@ -191,10 +240,11 @@ export async function agentCommand(
   runtime: RuntimeEnv = defaultRuntime,
   deps: CliDeps = createDefaultDeps(),
 ) {
-  const body = (opts.message ?? "").trim();
-  if (!body) {
+  const message = (opts.message ?? "").trim();
+  if (!message) {
     throw new Error("Message (--message) is required");
   }
+  const body = prependInternalEventContext(message, opts.internalEvents);
   if (!opts.to && !opts.sessionId && !opts.sessionKey && !opts.agentId) {
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
@@ -283,6 +333,11 @@ export async function agentCommand(
       sessionKey: sessionKey ?? opts.sessionKey?.trim(),
       config: cfg,
     });
+  const outboundSession = buildOutboundSessionContext({
+    cfg,
+    agentId: sessionAgentId,
+    sessionKey,
+  });
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const workspace = await ensureAgentWorkspace({
@@ -292,6 +347,13 @@ export async function agentCommand(
   const workspaceDir = workspace.dir;
   let sessionEntry = resolvedSessionEntry;
   const runId = opts.runId?.trim() || sessionId;
+  const acpManager = getAcpSessionManager();
+  const acpResolution = sessionKey
+    ? acpManager.resolveSession({
+        cfg,
+        sessionKey,
+      })
+    : null;
 
   try {
     if (opts.deliver === true) {
@@ -305,6 +367,127 @@ export async function agentCommand(
       if (sendPolicy === "deny") {
         throw new Error("send blocked by session policy");
       }
+    }
+
+    if (acpResolution?.kind === "stale") {
+      throw acpResolution.error;
+    }
+
+    if (acpResolution?.kind === "ready" && sessionKey) {
+      const startedAt = Date.now();
+      registerAgentRunContext(runId, {
+        sessionKey,
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "start",
+          startedAt,
+        },
+      });
+
+      let streamedText = "";
+      let stopReason: string | undefined;
+      try {
+        const dispatchPolicyError = resolveAcpDispatchPolicyError(cfg);
+        if (dispatchPolicyError) {
+          throw dispatchPolicyError;
+        }
+        const acpAgent = normalizeAgentId(
+          acpResolution.meta.agent || resolveAgentIdFromSessionKey(sessionKey),
+        );
+        const agentPolicyError = resolveAcpAgentPolicyError(cfg, acpAgent);
+        if (agentPolicyError) {
+          throw agentPolicyError;
+        }
+
+        await acpManager.runTurn({
+          cfg,
+          sessionKey,
+          text: body,
+          mode: "prompt",
+          requestId: runId,
+          signal: opts.abortSignal,
+          onEvent: (event) => {
+            if (event.type === "done") {
+              stopReason = event.stopReason;
+              return;
+            }
+            if (event.type !== "text_delta") {
+              return;
+            }
+            if (event.stream && event.stream !== "output") {
+              return;
+            }
+            if (!event.text) {
+              return;
+            }
+            streamedText += event.text;
+            emitAgentEvent({
+              runId,
+              stream: "assistant",
+              data: {
+                text: streamedText,
+                delta: event.text,
+              },
+            });
+          },
+        });
+      } catch (error) {
+        const acpError = toAcpRuntimeError({
+          error,
+          fallbackCode: "ACP_TURN_FAILED",
+          fallbackMessage: "ACP turn failed before completion.",
+        });
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: {
+            phase: "error",
+            error: acpError.message,
+            endedAt: Date.now(),
+          },
+        });
+        throw acpError;
+      }
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: Date.now(),
+        },
+      });
+
+      const finalText = streamedText.trim();
+      const payloads = finalText
+        ? [
+            {
+              text: finalText,
+            },
+          ]
+        : [];
+      const result = {
+        payloads,
+        meta: {
+          durationMs: Date.now() - startedAt,
+          aborted: opts.abortSignal?.aborted === true,
+          stopReason,
+        },
+      };
+
+      return await deliverAgentCommandResult({
+        cfg,
+        deps,
+        runtime,
+        opts,
+        outboundSession,
+        sessionEntry,
+        result,
+        payloads,
+      });
     }
 
     let resolvedThinkLevel =
@@ -649,6 +832,7 @@ export async function agentCommand(
       deps,
       runtime,
       opts,
+      outboundSession,
       sessionEntry,
       result,
       payloads,

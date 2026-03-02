@@ -2,11 +2,25 @@ import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { parseSlackModalPrivateMetadata } from "../../modal-metadata.js";
+import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 
 // Prefix for OpenClaw-generated action IDs to scope our handler
 const OPENCLAW_ACTION_PREFIX = "openclaw:";
+const SLACK_INTERACTION_EVENT_PREFIX = "Slack interaction: ";
+const REDACTED_INTERACTION_VALUE = "[redacted]";
+const SLACK_INTERACTION_EVENT_MAX_CHARS = 2400;
+const SLACK_INTERACTION_STRING_MAX_CHARS = 160;
+const SLACK_INTERACTION_ARRAY_MAX_ITEMS = 64;
+const SLACK_INTERACTION_COMPACT_INPUTS_MAX_ITEMS = 3;
+const SLACK_INTERACTION_REDACTED_KEYS = new Set([
+  "triggerId",
+  "responseUrl",
+  "workflowTriggerUrl",
+  "privateMetadata",
+  "viewHash",
+]);
 
 type InteractionMessageBlock = {
   type?: string;
@@ -78,6 +92,7 @@ type SlackModalBody = {
 type SlackModalEventBase = {
   callbackId: string;
   userId: string;
+  expectedUserId?: string;
   viewId?: string;
   sessionRouting: ReturnType<typeof resolveModalSessionRouting>;
   payload: {
@@ -104,6 +119,145 @@ type RegisterSlackModalHandler = (
   matcher: RegExp,
   handler: (args: SlackModalEventHandlerArgs) => Promise<void>,
 ) => void;
+
+function truncateInteractionString(
+  value: string,
+  max = SLACK_INTERACTION_STRING_MAX_CHARS,
+): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= max) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, max - 1)}…`;
+}
+
+function sanitizeSlackInteractionPayloadValue(value: unknown, key?: string): unknown {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (key && SLACK_INTERACTION_REDACTED_KEYS.has(key)) {
+    if (typeof value !== "string" || value.trim().length === 0) {
+      return undefined;
+    }
+    return REDACTED_INTERACTION_VALUE;
+  }
+  if (typeof value === "string") {
+    return truncateInteractionString(value);
+  }
+  if (Array.isArray(value)) {
+    const sanitized = value
+      .slice(0, SLACK_INTERACTION_ARRAY_MAX_ITEMS)
+      .map((entry) => sanitizeSlackInteractionPayloadValue(entry))
+      .filter((entry) => entry !== undefined);
+    if (value.length > SLACK_INTERACTION_ARRAY_MAX_ITEMS) {
+      sanitized.push(`…+${value.length - SLACK_INTERACTION_ARRAY_MAX_ITEMS} more`);
+    }
+    return sanitized;
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const output: Record<string, unknown> = {};
+  for (const [entryKey, entryValue] of Object.entries(value as Record<string, unknown>)) {
+    const sanitized = sanitizeSlackInteractionPayloadValue(entryValue, entryKey);
+    if (sanitized === undefined) {
+      continue;
+    }
+    if (typeof sanitized === "string" && sanitized.length === 0) {
+      continue;
+    }
+    if (Array.isArray(sanitized) && sanitized.length === 0) {
+      continue;
+    }
+    output[entryKey] = sanitized;
+  }
+  return output;
+}
+
+function buildCompactSlackInteractionPayload(
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  const rawInputs = Array.isArray(payload.inputs) ? payload.inputs : [];
+  const compactInputs = rawInputs
+    .slice(0, SLACK_INTERACTION_COMPACT_INPUTS_MAX_ITEMS)
+    .flatMap((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return [];
+      }
+      const typed = entry as Record<string, unknown>;
+      return [
+        {
+          actionId: typed.actionId,
+          blockId: typed.blockId,
+          actionType: typed.actionType,
+          inputKind: typed.inputKind,
+          selectedValues: typed.selectedValues,
+          selectedLabels: typed.selectedLabels,
+          inputValue: typed.inputValue,
+          inputNumber: typed.inputNumber,
+          selectedDate: typed.selectedDate,
+          selectedTime: typed.selectedTime,
+          selectedDateTime: typed.selectedDateTime,
+          richTextPreview: typed.richTextPreview,
+        },
+      ];
+    });
+
+  return {
+    interactionType: payload.interactionType,
+    actionId: payload.actionId,
+    callbackId: payload.callbackId,
+    actionType: payload.actionType,
+    userId: payload.userId,
+    teamId: payload.teamId,
+    channelId: payload.channelId ?? payload.routedChannelId,
+    messageTs: payload.messageTs,
+    threadTs: payload.threadTs,
+    viewId: payload.viewId,
+    isCleared: payload.isCleared,
+    selectedValues: payload.selectedValues,
+    selectedLabels: payload.selectedLabels,
+    selectedDate: payload.selectedDate,
+    selectedTime: payload.selectedTime,
+    selectedDateTime: payload.selectedDateTime,
+    workflowId: payload.workflowId,
+    routedChannelType: payload.routedChannelType,
+    inputs: compactInputs.length > 0 ? compactInputs : undefined,
+    inputsOmitted:
+      rawInputs.length > SLACK_INTERACTION_COMPACT_INPUTS_MAX_ITEMS
+        ? rawInputs.length - SLACK_INTERACTION_COMPACT_INPUTS_MAX_ITEMS
+        : undefined,
+    payloadTruncated: true,
+  };
+}
+
+function formatSlackInteractionSystemEvent(payload: Record<string, unknown>): string {
+  const toEventText = (value: Record<string, unknown>): string =>
+    `${SLACK_INTERACTION_EVENT_PREFIX}${JSON.stringify(value)}`;
+
+  const sanitizedPayload =
+    (sanitizeSlackInteractionPayloadValue(payload) as Record<string, unknown> | undefined) ?? {};
+  let eventText = toEventText(sanitizedPayload);
+  if (eventText.length <= SLACK_INTERACTION_EVENT_MAX_CHARS) {
+    return eventText;
+  }
+
+  const compactPayload = sanitizeSlackInteractionPayloadValue(
+    buildCompactSlackInteractionPayload(sanitizedPayload),
+  ) as Record<string, unknown>;
+  eventText = toEventText(compactPayload);
+  if (eventText.length <= SLACK_INTERACTION_EVENT_MAX_CHARS) {
+    return eventText;
+  }
+
+  return toEventText({
+    interactionType: sanitizedPayload.interactionType,
+    actionId: sanitizedPayload.actionId ?? "unknown",
+    userId: sanitizedPayload.userId,
+    channelId: sanitizedPayload.channelId ?? sanitizedPayload.routedChannelId,
+    payloadTruncated: true,
+  });
+}
 
 function readOptionValues(options: unknown): string[] | undefined {
   if (!Array.isArray(options)) {
@@ -366,11 +520,15 @@ function summarizeViewState(values: unknown): ModalInputSummary[] {
 
 function resolveModalSessionRouting(params: {
   ctx: SlackMonitorContext;
-  privateMetadata: unknown;
+  metadata: ReturnType<typeof parseSlackModalPrivateMetadata>;
 }): { sessionKey: string; channelId?: string; channelType?: string } {
-  const metadata = parseSlackModalPrivateMetadata(params.privateMetadata);
+  const metadata = params.metadata;
   if (metadata.sessionKey) {
-    return { sessionKey: metadata.sessionKey };
+    return {
+      sessionKey: metadata.sessionKey,
+      channelId: metadata.channelId,
+      channelType: metadata.channelType,
+    };
   }
   if (metadata.channelId) {
     return {
@@ -416,17 +574,19 @@ function resolveSlackModalEventBase(params: {
   ctx: SlackMonitorContext;
   body: SlackModalBody;
 }): SlackModalEventBase {
+  const metadata = parseSlackModalPrivateMetadata(params.body.view?.private_metadata);
   const callbackId = params.body.view?.callback_id ?? "unknown";
   const userId = params.body.user?.id ?? "unknown";
   const viewId = params.body.view?.id;
   const inputs = summarizeViewState(params.body.view?.state?.values);
   const sessionRouting = resolveModalSessionRouting({
     ctx: params.ctx,
-    privateMetadata: params.body.view?.private_metadata,
+    metadata,
   });
   return {
     callbackId,
     userId,
+    expectedUserId: metadata.userId,
     viewId,
     sessionRouting,
     payload: {
@@ -449,16 +609,17 @@ function resolveSlackModalEventBase(params: {
   };
 }
 
-function emitSlackModalLifecycleEvent(params: {
+async function emitSlackModalLifecycleEvent(params: {
   ctx: SlackMonitorContext;
   body: SlackModalBody;
   interactionType: SlackModalInteractionKind;
   contextPrefix: "slack:interaction:view" | "slack:interaction:view-closed";
-}): void {
-  const { callbackId, userId, viewId, sessionRouting, payload } = resolveSlackModalEventBase({
-    ctx: params.ctx,
-    body: params.body,
-  });
+}): Promise<void> {
+  const { callbackId, userId, expectedUserId, viewId, sessionRouting, payload } =
+    resolveSlackModalEventBase({
+      ctx: params.ctx,
+      body: params.body,
+    });
   const isViewClosed = params.interactionType === "view_closed";
   const isCleared = params.body.is_cleared === true;
   const eventPayload = isViewClosed
@@ -482,7 +643,28 @@ function emitSlackModalLifecycleEvent(params: {
     );
   }
 
-  enqueueSystemEvent(`Slack interaction: ${JSON.stringify(eventPayload)}`, {
+  if (!expectedUserId) {
+    params.ctx.runtime.log?.(
+      `slack:interaction drop modal callback=${callbackId} user=${userId} reason=missing-expected-user`,
+    );
+    return;
+  }
+
+  const auth = await authorizeSlackSystemEventSender({
+    ctx: params.ctx,
+    senderId: userId,
+    channelId: sessionRouting.channelId,
+    channelType: sessionRouting.channelType,
+    expectedSenderId: expectedUserId,
+  });
+  if (!auth.allowed) {
+    params.ctx.runtime.log?.(
+      `slack:interaction drop modal callback=${callbackId} user=${userId} reason=${auth.reason ?? "unauthorized"}`,
+    );
+    return;
+  }
+
+  enqueueSystemEvent(formatSlackInteractionSystemEvent(eventPayload), {
     sessionKey: sessionRouting.sessionKey,
     contextKey: [params.contextPrefix, callbackId, viewId, userId].filter(Boolean).join(":"),
   });
@@ -497,7 +679,13 @@ function registerModalLifecycleHandler(params: {
 }) {
   params.register(params.matcher, async ({ ack, body }: SlackModalEventHandlerArgs) => {
     await ack();
-    emitSlackModalLifecycleEvent({
+    if (params.ctx.shouldDropMismatchedSlackEvent?.(body)) {
+      params.ctx.runtime.log?.(
+        `slack:interaction drop ${params.interactionType} payload (mismatched app/team)`,
+      );
+      return;
+    }
+    await emitSlackModalLifecycleEvent({
       ctx: params.ctx,
       body: body as SlackModalBody,
       interactionType: params.interactionType,
@@ -531,6 +719,10 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
 
       // Acknowledge the action immediately to prevent the warning icon
       await ack();
+      if (ctx.shouldDropMismatchedSlackEvent?.(body)) {
+        ctx.runtime.log?.("slack:interaction drop block action payload (mismatched app/team)");
+        return;
+      }
 
       // Extract action details using proper Bolt types
       const typedAction = readInteractionAction(action);
@@ -557,6 +749,27 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
       const channelId = typedBody.channel?.id ?? typedBody.container?.channel_id;
       const messageTs = typedBody.message?.ts ?? typedBody.container?.message_ts;
       const threadTs = typedBody.container?.thread_ts;
+      const auth = await authorizeSlackSystemEventSender({
+        ctx,
+        senderId: userId,
+        channelId,
+      });
+      if (!auth.allowed) {
+        ctx.runtime.log?.(
+          `slack:interaction drop action=${actionId} user=${userId} channel=${channelId ?? "unknown"} reason=${auth.reason ?? "unauthorized"}`,
+        );
+        if (respond) {
+          try {
+            await respond({
+              text: "You are not authorized to use this control.",
+              response_type: "ephemeral",
+            });
+          } catch {
+            // Best-effort feedback only.
+          }
+        }
+        return;
+      }
       const actionSummary = summarizeAction(typedAction);
       const eventPayload: InteractionSummary = {
         interactionType: "block_action",
@@ -581,14 +794,14 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
       // Pass undefined (not "unknown") to allow proper main session fallback
       const sessionKey = ctx.resolveSlackSystemEventSessionKey({
         channelId: channelId,
-        channelType: undefined,
+        channelType: auth.channelType,
       });
 
       // Build context key - only include defined values to avoid "unknown" noise
       const contextParts = ["slack:interaction", channelId, messageTs, actionId].filter(Boolean);
       const contextKey = contextParts.join(":");
 
-      enqueueSystemEvent(`Slack interaction: ${JSON.stringify(eventPayload)}`, {
+      enqueueSystemEvent(formatSlackInteractionSystemEvent(eventPayload), {
         sessionKey,
         contextKey,
       });

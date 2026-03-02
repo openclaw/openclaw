@@ -38,15 +38,20 @@ export function normalizeSlackChannelType(
   channelId?: string | null,
 ): SlackMessageEvent["channel_type"] {
   const normalized = channelType?.trim().toLowerCase();
+  const inferred = inferSlackChannelType(channelId);
   if (
     normalized === "im" ||
     normalized === "mpim" ||
     normalized === "channel" ||
     normalized === "group"
   ) {
+    // D-prefix channel IDs are always DMs — override a contradicting channel_type.
+    if (inferred === "im" && normalized !== "im") {
+      return "im";
+    }
     return normalized;
   }
-  return inferSlackChannelType(channelId) ?? "channel";
+  return inferred ?? "channel";
 }
 
 export type SlackMonitorContext = {
@@ -360,9 +365,18 @@ export function createSlackMonitorContext(params: {
     if (!body || typeof body !== "object") {
       return false;
     }
-    const raw = body as { api_app_id?: unknown; team_id?: unknown };
+    const raw = body as {
+      api_app_id?: unknown;
+      team_id?: unknown;
+      team?: { id?: unknown };
+    };
     const incomingApiAppId = typeof raw.api_app_id === "string" ? raw.api_app_id : "";
-    const incomingTeamId = typeof raw.team_id === "string" ? raw.team_id : "";
+    const incomingTeamId =
+      typeof raw.team_id === "string"
+        ? raw.team_id
+        : typeof raw.team?.id === "string"
+          ? raw.team.id
+          : "";
 
     if (params.apiAppId && incomingApiAppId && incomingApiAppId !== params.apiAppId) {
       logVerbose(

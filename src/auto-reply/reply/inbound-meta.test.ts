@@ -145,6 +145,36 @@ describe("buildInboundUserContextPrefix", () => {
     expect(conversationInfo["sender"]).toBe("+15551234567");
   });
 
+  it("includes formatted timestamp in conversation info when provided", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      MessageSid: "msg-with-ts",
+      Timestamp: Date.UTC(2026, 1, 15, 13, 35),
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["timestamp"]).toEqual(expect.any(String));
+  });
+
+  it("omits invalid timestamps instead of throwing", () => {
+    expect(() =>
+      buildInboundUserContextPrefix({
+        ChatType: "group",
+        MessageSid: "msg-with-bad-ts",
+        Timestamp: 1e20,
+      } as TemplateContext),
+    ).not.toThrow();
+
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      MessageSid: "msg-with-bad-ts",
+      Timestamp: 1e20,
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["timestamp"]).toBeUndefined();
+  });
+
   it("includes message_id in conversation info", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",

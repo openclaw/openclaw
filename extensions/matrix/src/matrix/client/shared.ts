@@ -84,7 +84,26 @@ async function ensureSharedClientStarted(params: {
       }
     }
 
-    await client.start();
+    // bot-sdk start() returns a promise that never resolves on success
+    // (infinite sync loop), so we must not await it or startup hangs forever.
+    // However, it DOES reject on errors (bad token, unreachable homeserver).
+    // Strategy: race client.start() against a grace timer. If start() rejects
+    // during or after the window, mark the client as failed so subsequent
+    // resolveSharedMatrixClient() calls know to retry.
+    const startPromiseInner = client.start();
+    let settled = false;
+    let startError: unknown = undefined;
+    startPromiseInner.catch((err: unknown) => {
+      settled = true;
+      startError = err;
+      params.state.started = false;
+      LogService.error("MatrixClientLite", "client.start() error:", err);
+    });
+    // Give the sync loop a moment to initialize before marking ready
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    if (settled) {
+      throw startError;
+    }
     params.state.started = true;
   })();
   sharedClientStartPromises.set(key, startPromise);

@@ -1,4 +1,9 @@
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  NODE_BROWSER_PROXY_COMMAND,
+  NODE_SYSTEM_NOTIFY_COMMAND,
+  NODE_SYSTEM_RUN_COMMANDS,
+} from "../infra/node-commands.js";
 import type { NodeSession } from "./node-registry.js";
 
 const CANVAS_COMMANDS = [
@@ -18,8 +23,11 @@ const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip"];
 const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
 
 const LOCATION_COMMANDS = ["location.get"];
+const NOTIFICATION_COMMANDS = ["notifications.list"];
+const ANDROID_NOTIFICATION_COMMANDS = [...NOTIFICATION_COMMANDS, "notifications.actions"];
 
 const DEVICE_COMMANDS = ["device.info", "device.status"];
+const ANDROID_DEVICE_COMMANDS = [...DEVICE_COMMANDS, "device.permissions", "device.health"];
 
 const CONTACTS_COMMANDS = ["contacts.search"];
 const CONTACTS_DANGEROUS_COMMANDS = ["contacts.add"];
@@ -37,9 +45,19 @@ const MOTION_COMMANDS = ["motion.activity", "motion.pedometer"];
 const SMS_DANGEROUS_COMMANDS = ["sms.send"];
 
 // iOS nodes don't implement system.run/which, but they do support notifications.
-const IOS_SYSTEM_COMMANDS = ["system.notify"];
+const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
 
-const SYSTEM_COMMANDS = ["system.run", "system.which", "system.notify", "browser.proxy"];
+const SYSTEM_COMMANDS = [
+  ...NODE_SYSTEM_RUN_COMMANDS,
+  NODE_SYSTEM_NOTIFY_COMMAND,
+  NODE_BROWSER_PROXY_COMMAND,
+];
+const UNKNOWN_PLATFORM_COMMANDS = [
+  ...CANVAS_COMMANDS,
+  ...CAMERA_COMMANDS,
+  ...LOCATION_COMMANDS,
+  NODE_SYSTEM_NOTIFY_COMMAND,
+];
 
 // "High risk" node commands. These can be enabled by explicitly adding them to
 // `gateway.nodes.allowCommands` (and ensuring they're not blocked by denyCommands).
@@ -69,7 +87,9 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...CANVAS_COMMANDS,
     ...CAMERA_COMMANDS,
     ...LOCATION_COMMANDS,
-    ...DEVICE_COMMANDS,
+    ...ANDROID_NOTIFICATION_COMMANDS,
+    NODE_SYSTEM_NOTIFY_COMMAND,
+    ...ANDROID_DEVICE_COMMANDS,
     ...CONTACTS_COMMANDS,
     ...CALENDAR_COMMANDS,
     ...REMINDERS_COMMANDS,
@@ -90,11 +110,19 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
   ],
   linux: [...SYSTEM_COMMANDS],
   windows: [...SYSTEM_COMMANDS],
-  unknown: [...CANVAS_COMMANDS, ...CAMERA_COMMANDS, ...LOCATION_COMMANDS, ...SYSTEM_COMMANDS],
+  // Fail-safe: unknown metadata should not receive host exec defaults.
+  unknown: [...UNKNOWN_PLATFORM_COMMANDS],
 };
 
+function normalizePlatformToken(value?: string): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  return value.trim().normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
+}
+
 function normalizePlatformId(platform?: string, deviceFamily?: string): string {
-  const raw = (platform ?? "").trim().toLowerCase();
+  const raw = normalizePlatformToken(platform);
   if (raw.startsWith("ios")) {
     return "ios";
   }
@@ -113,7 +141,7 @@ function normalizePlatformId(platform?: string, deviceFamily?: string): string {
   if (raw.startsWith("linux")) {
     return "linux";
   }
-  const family = (deviceFamily ?? "").trim().toLowerCase();
+  const family = normalizePlatformToken(deviceFamily);
   if (family.includes("iphone") || family.includes("ipad") || family.includes("ios")) {
     return "ios";
   }

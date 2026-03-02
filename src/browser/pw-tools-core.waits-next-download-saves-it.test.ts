@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -22,6 +24,15 @@ describe("pw-tools-core", () => {
     }
     tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw");
   });
+
+  async function withTempDir<T>(run: (tempDir: string) => Promise<T>): Promise<T> {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-browser-download-test-"));
+    try {
+      return await run(tempDir);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }
 
   async function waitForImplicitDownloadOutput(params: {
     downloadUrl: string;
@@ -67,64 +78,121 @@ describe("pw-tools-core", () => {
     };
   }
 
-  it("waits for the next download and saves it", async () => {
-    const harness = createDownloadEventHarness();
+  it("waits for the next download and atomically finalizes explicit output paths", async () => {
+    await withTempDir(async (tempDir) => {
+      const harness = createDownloadEventHarness();
+      const targetPath = path.join(tempDir, "file.bin");
 
-    const saveAs = vi.fn(async () => {});
-    const download = {
-      url: () => "https://example.com/file.bin",
-      suggestedFilename: () => "file.bin",
-      saveAs,
-    };
+      const saveAs = vi.fn(async (outPath: string) => {
+        await fs.writeFile(outPath, "file-content", "utf8");
+      });
+      const download = {
+        url: () => "https://example.com/file.bin",
+        suggestedFilename: () => "file.bin",
+        saveAs,
+      };
 
-    const targetPath = path.resolve("/tmp/file.bin");
-    const p = mod.waitForDownloadViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      path: targetPath,
-      timeoutMs: 1000,
+      const p = mod.waitForDownloadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        path: targetPath,
+        timeoutMs: 1000,
+      });
+
+      await Promise.resolve();
+      harness.expectArmed();
+      harness.trigger(download);
+
+      const res = await p;
+      const savedPath = saveAs.mock.calls[0]?.[0];
+      expect(typeof savedPath).toBe("string");
+      expect(savedPath).not.toBe(targetPath);
+      expect(path.dirname(String(savedPath))).toBe(tempDir);
+      expect(path.basename(String(savedPath))).toContain(".openclaw-output-");
+      expect(path.basename(String(savedPath))).toContain(".part");
+      expect(await fs.readFile(targetPath, "utf8")).toBe("file-content");
+      expect(res.path).toBe(targetPath);
     });
-
-    await Promise.resolve();
-    harness.expectArmed();
-    harness.trigger(download);
-
-    const res = await p;
-    expect(saveAs).toHaveBeenCalledWith(targetPath);
-    expect(res.path).toBe(targetPath);
   });
-  it("clicks a ref and saves the resulting download", async () => {
-    const harness = createDownloadEventHarness();
+  it("clicks a ref and atomically finalizes explicit download paths", async () => {
+    await withTempDir(async (tempDir) => {
+      const harness = createDownloadEventHarness();
 
-    const click = vi.fn(async () => {});
-    setPwToolsCoreCurrentRefLocator({ click });
+      const click = vi.fn(async () => {});
+      setPwToolsCoreCurrentRefLocator({ click });
 
-    const saveAs = vi.fn(async () => {});
-    const download = {
-      url: () => "https://example.com/report.pdf",
-      suggestedFilename: () => "report.pdf",
-      saveAs,
-    };
+      const saveAs = vi.fn(async (outPath: string) => {
+        await fs.writeFile(outPath, "report-content", "utf8");
+      });
+      const download = {
+        url: () => "https://example.com/report.pdf",
+        suggestedFilename: () => "report.pdf",
+        saveAs,
+      };
 
-    const targetPath = path.resolve("/tmp/report.pdf");
-    const p = mod.downloadViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      ref: "e12",
-      path: targetPath,
-      timeoutMs: 1000,
+      const targetPath = path.join(tempDir, "report.pdf");
+      const p = mod.downloadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ref: "e12",
+        path: targetPath,
+        timeoutMs: 1000,
+      });
+
+      await Promise.resolve();
+      harness.expectArmed();
+      expect(click).toHaveBeenCalledWith({ timeout: 1000 });
+
+      harness.trigger(download);
+
+      const res = await p;
+      const savedPath = saveAs.mock.calls[0]?.[0];
+      expect(typeof savedPath).toBe("string");
+      expect(savedPath).not.toBe(targetPath);
+      expect(path.dirname(String(savedPath))).toBe(tempDir);
+      expect(path.basename(String(savedPath))).toContain(".openclaw-output-");
+      expect(path.basename(String(savedPath))).toContain(".part");
+      expect(await fs.readFile(targetPath, "utf8")).toBe("report-content");
+      expect(res.path).toBe(targetPath);
     });
-
-    await Promise.resolve();
-    harness.expectArmed();
-    expect(click).toHaveBeenCalledWith({ timeout: 1000 });
-
-    harness.trigger(download);
-
-    const res = await p;
-    expect(saveAs).toHaveBeenCalledWith(targetPath);
-    expect(res.path).toBe(targetPath);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "does not overwrite outside files when explicit output path is a hardlink alias",
+    async () => {
+      await withTempDir(async (tempDir) => {
+        const outsidePath = path.join(tempDir, "outside.txt");
+        await fs.writeFile(outsidePath, "outside-before", "utf8");
+        const linkedPath = path.join(tempDir, "linked.txt");
+        await fs.link(outsidePath, linkedPath);
+
+        const harness = createDownloadEventHarness();
+        const saveAs = vi.fn(async (outPath: string) => {
+          await fs.writeFile(outPath, "download-content", "utf8");
+        });
+        const p = mod.waitForDownloadViaPlaywright({
+          cdpUrl: "http://127.0.0.1:18792",
+          targetId: "T1",
+          path: linkedPath,
+          timeoutMs: 1000,
+        });
+
+        await Promise.resolve();
+        harness.expectArmed();
+        harness.trigger({
+          url: () => "https://example.com/file.bin",
+          suggestedFilename: () => "file.bin",
+          saveAs,
+        });
+
+        const res = await p;
+        expect(res.path).toBe(linkedPath);
+        expect(await fs.readFile(linkedPath, "utf8")).toBe("download-content");
+        expect(await fs.readFile(outsidePath, "utf8")).toBe("outside-before");
+      });
+    },
+  );
+
   it("uses preferred tmp dir when waiting for download without explicit path", async () => {
     tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw-preferred");
     const { res, outPath } = await waitForImplicitDownloadOutput({
