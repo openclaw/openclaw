@@ -1,4 +1,5 @@
 import { html } from "lit";
+import type { AgentIdentityResult, AgentsFilesListResult, AgentsListResult } from "../types.ts";
 import {
   listCoreToolSections,
   PROFILE_OPTIONS as TOOL_PROFILE_OPTIONS,
@@ -8,7 +9,6 @@ import {
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
-import type { AgentIdentityResult, AgentsFilesListResult, AgentsListResult } from "../types.ts";
 
 export const TOOL_SECTIONS = listCoreToolSections();
 
@@ -297,8 +297,7 @@ export function sortLocaleStrings(values: Iterable<string>): string[] {
     let j = middle;
     let k = left;
     while (i < middle && j < right) {
-      buffer[k++] =
-        sorted[i].localeCompare(sorted[j]) <= 0 ? sorted[i++] : sorted[j++];
+      buffer[k++] = sorted[i].localeCompare(sorted[j]) <= 0 ? sorted[i++] : sorted[j++];
     }
     while (i < middle) {
       buffer[k++] = sorted[i++];
