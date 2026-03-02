@@ -4,27 +4,12 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { resolveUserPath } from "../../utils.js";
 import { getDefaultLocalRoots, loadWebMediaRaw } from "../../web/media.js";
-import { ensureAuthProfileStore, listProfilesForProvider } from "../auth-profiles.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
-import { getApiKeyForModel, requireApiKey, resolveEnvApiKey } from "../model-auth.js";
-import { runWithImageModelFallback } from "../model-fallback.js";
-import { resolveConfiguredModelRef } from "../model-selection.js";
-import { ensureOpenClawModelsJson } from "../models-config.js";
-import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
-import {
-  createSandboxBridgeReadFile,
-  resolveSandboxedBridgeMediaPath,
-  type SandboxedBridgeMediaPathConfig,
-} from "../sandbox-media-paths.js";
-import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
-import type { ToolFsPolicy } from "../tool-fs-policy.js";
-import { normalizeWorkspaceDir } from "../workspace-dir.js";
-import type { AnyAgentTool } from "./common.js";
 import {
   coerceImageModelConfig,
   type ImageModelConfig,
   resolveProviderVisionModelFromConfig,
 } from "./image-tool.helpers.js";
+import { hasAuthForProvider, resolveDefaultModelRef } from "./model-config.helpers.js";
 import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
 import {
   coercePdfAssistantText,
@@ -33,6 +18,21 @@ import {
   providerSupportsNativePdf,
   resolvePdfToolMaxTokens,
 } from "./pdf-tool.helpers.js";
+import {
+  createSandboxBridgeReadFile,
+  discoverAuthStorage,
+  discoverModels,
+  ensureOpenClawModelsJson,
+  getApiKeyForModel,
+  normalizeWorkspaceDir,
+  requireApiKey,
+  resolveSandboxedBridgeMediaPath,
+  runWithImageModelFallback,
+  type AnyAgentTool,
+  type SandboxedBridgeMediaPathConfig,
+  type SandboxFsBridge,
+  type ToolFsPolicy,
+} from "./tool-runtime.helpers.js";
 
 const DEFAULT_PROMPT = "Analyze this PDF document.";
 const DEFAULT_MAX_PDFS = 10;
@@ -47,26 +47,6 @@ const PDF_MAX_PIXELS = 4_000_000;
 // ---------------------------------------------------------------------------
 // Model resolution (mirrors image tool pattern)
 // ---------------------------------------------------------------------------
-
-function resolveDefaultModelRef(cfg?: OpenClawConfig): { provider: string; model: string } {
-  if (cfg) {
-    const resolved = resolveConfiguredModelRef({
-      cfg,
-      defaultProvider: DEFAULT_PROVIDER,
-      defaultModel: DEFAULT_MODEL,
-    });
-    return { provider: resolved.provider, model: resolved.model };
-  }
-  return { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL };
-}
-
-function hasAuthForProvider(params: { provider: string; agentDir: string }): boolean {
-  if (resolveEnvApiKey(params.provider)?.apiKey) {
-    return true;
-  }
-  const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
-  return listProfilesForProvider(store, params.provider).length > 0;
-}
 
 /**
  * Resolve the effective PDF model config.

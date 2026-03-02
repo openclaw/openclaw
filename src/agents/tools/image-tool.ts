@@ -3,23 +3,7 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveUserPath } from "../../utils.js";
 import { getDefaultLocalRoots, loadWebMedia } from "../../web/media.js";
-import { ensureAuthProfileStore, listProfilesForProvider } from "../auth-profiles.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
-import { getApiKeyForModel, requireApiKey, resolveEnvApiKey } from "../model-auth.js";
-import { runWithImageModelFallback } from "../model-fallback.js";
-import { resolveConfiguredModelRef } from "../model-selection.js";
-import { ensureOpenClawModelsJson } from "../models-config.js";
-import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
-import {
-  createSandboxBridgeReadFile,
-  resolveSandboxedBridgeMediaPath,
-  type SandboxedBridgeMediaPathConfig,
-} from "../sandbox-media-paths.js";
-import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
-import type { ToolFsPolicy } from "../tool-fs-policy.js";
-import { normalizeWorkspaceDir } from "../workspace-dir.js";
-import type { AnyAgentTool } from "./common.js";
 import {
   coerceImageAssistantText,
   coerceImageModelConfig,
@@ -27,6 +11,22 @@ import {
   type ImageModelConfig,
   resolveProviderVisionModelFromConfig,
 } from "./image-tool.helpers.js";
+import { hasAuthForProvider, resolveDefaultModelRef } from "./model-config.helpers.js";
+import {
+  createSandboxBridgeReadFile,
+  discoverAuthStorage,
+  discoverModels,
+  ensureOpenClawModelsJson,
+  getApiKeyForModel,
+  normalizeWorkspaceDir,
+  requireApiKey,
+  resolveSandboxedBridgeMediaPath,
+  runWithImageModelFallback,
+  type AnyAgentTool,
+  type SandboxedBridgeMediaPathConfig,
+  type SandboxFsBridge,
+  type ToolFsPolicy,
+} from "./tool-runtime.helpers.js";
 
 const DEFAULT_PROMPT = "Describe the image.";
 const ANTHROPIC_IMAGE_PRIMARY = "anthropic/claude-opus-4-6";
@@ -48,31 +48,6 @@ function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requested
     return requestedMaxTokens;
   }
   return Math.min(requestedMaxTokens, modelMaxTokens);
-}
-
-function resolveDefaultModelRef(cfg?: OpenClawConfig): {
-  provider: string;
-  model: string;
-} {
-  if (cfg) {
-    const resolved = resolveConfiguredModelRef({
-      cfg,
-      defaultProvider: DEFAULT_PROVIDER,
-      defaultModel: DEFAULT_MODEL,
-    });
-    return { provider: resolved.provider, model: resolved.model };
-  }
-  return { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL };
-}
-
-function hasAuthForProvider(params: { provider: string; agentDir: string }): boolean {
-  if (resolveEnvApiKey(params.provider)?.apiKey) {
-    return true;
-  }
-  const store = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-  });
-  return listProfilesForProvider(store, params.provider).length > 0;
 }
 
 /**
