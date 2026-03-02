@@ -76,16 +76,30 @@ async function runPinCase(input: PinCase = {}): Promise<void> {
 
 describe("registerSlackPinEvents", () => {
   const cases: Array<{ name: string; args: PinCase; expectedCalls: number }> = [
-    { name: "enqueues DM pin system events when dmPolicy is open", args: { overrides: { dmPolicy: "open" } }, expectedCalls: 1 },
-    { name: "blocks DM pin system events when dmPolicy is disabled", args: { overrides: { dmPolicy: "disabled" } }, expectedCalls: 0 },
+    {
+      name: "enqueues DM pin system events when dmPolicy is open",
+      args: { overrides: { dmPolicy: "open" } },
+      expectedCalls: 1,
+    },
+    {
+      name: "blocks DM pin system events when dmPolicy is disabled",
+      args: { overrides: { dmPolicy: "disabled" } },
+      expectedCalls: 0,
+    },
     {
       name: "blocks DM pin system events for unauthorized senders in allowlist mode",
-      args: { overrides: { dmPolicy: "allowlist", allowFrom: ["U2"] }, event: makePinEvent({ user: "U1" }) },
+      args: {
+        overrides: { dmPolicy: "allowlist", allowFrom: ["U2"] },
+        event: makePinEvent({ user: "U1" }),
+      },
       expectedCalls: 0,
     },
     {
       name: "allows DM pin system events for authorized senders in allowlist mode",
-      args: { overrides: { dmPolicy: "allowlist", allowFrom: ["U1"] }, event: makePinEvent({ user: "U1" }) },
+      args: {
+        overrides: { dmPolicy: "allowlist", allowFrom: ["U1"] },
+        event: makePinEvent({ user: "U1" }),
+      },
       expectedCalls: 1,
     },
     {

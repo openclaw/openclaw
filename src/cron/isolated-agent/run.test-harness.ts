@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { type Mock, vi } from "vitest";
 
 type CronSessionEntry = {
   sessionId: string;
@@ -17,23 +17,23 @@ type CronSession = {
   [key: string]: unknown;
 };
 
-export const buildWorkspaceSkillSnapshotMock = vi.fn();
-export const resolveAgentConfigMock = vi.fn();
-export const resolveAgentModelFallbacksOverrideMock = vi.fn();
-export const resolveAgentSkillsFilterMock = vi.fn();
-export const getModelRefStatusMock = vi.fn();
-export const isCliProviderMock = vi.fn();
-export const resolveAllowedModelRefMock = vi.fn();
-export const resolveConfiguredModelRefMock = vi.fn();
-export const resolveHooksGmailModelMock = vi.fn();
-export const resolveThinkingDefaultMock = vi.fn();
-export const runWithModelFallbackMock = vi.fn();
-export const runEmbeddedPiAgentMock = vi.fn();
-export const runCliAgentMock = vi.fn();
-export const getCliSessionIdMock = vi.fn();
-export const updateSessionStoreMock = vi.fn();
-export const resolveCronSessionMock = vi.fn();
-export const logWarnMock = vi.fn();
+export const buildWorkspaceSkillSnapshotMock: Mock = vi.fn();
+export const resolveAgentConfigMock: Mock = vi.fn();
+export const resolveAgentModelFallbacksOverrideMock: Mock = vi.fn();
+export const resolveAgentSkillsFilterMock: Mock = vi.fn();
+export const getModelRefStatusMock: Mock = vi.fn();
+export const isCliProviderMock: Mock = vi.fn();
+export const resolveAllowedModelRefMock: Mock = vi.fn();
+export const resolveConfiguredModelRefMock: Mock = vi.fn();
+export const resolveHooksGmailModelMock: Mock = vi.fn();
+export const resolveThinkingDefaultMock: Mock = vi.fn();
+export const runWithModelFallbackMock: Mock = vi.fn();
+export const runEmbeddedPiAgentMock: Mock = vi.fn();
+export const runCliAgentMock: Mock = vi.fn();
+export const getCliSessionIdMock: Mock = vi.fn();
+export const updateSessionStoreMock: Mock = vi.fn();
+export const resolveCronSessionMock: Mock = vi.fn();
+export const logWarnMock: Mock = vi.fn();
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: resolveAgentConfigMock,

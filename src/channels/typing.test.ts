@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { MockInstance } from "vitest";
 import { createTypingCallbacks } from "./typing.js";
+
+type TypingCallbackOverrides = Partial<Parameters<typeof createTypingCallbacks>[0]>;
+type TypingHarnessStart = ReturnType<typeof vi.fn<() => Promise<void>>>;
+type TypingHarnessError = ReturnType<typeof vi.fn<(err: unknown) => void>>;
 
 const flushMicrotasks = async () => {
   await Promise.resolve();
@@ -16,17 +19,25 @@ async function withFakeTimers(run: () => Promise<void>) {
   }
 }
 
-function createTypingHarness(overrides: Partial<Parameters<typeof createTypingCallbacks>[0]> = {}) {
-  const start = (overrides.start ?? vi.fn().mockResolvedValue(undefined)) as MockInstance<
-    [],
-    Promise<void>
-  >;
-  const stop = (overrides.stop ?? vi.fn().mockResolvedValue(undefined)) as MockInstance<
-    [],
-    Promise<void>
-  >;
-  const onStartError = (overrides.onStartError ?? vi.fn()) as MockInstance<[unknown], void>;
-  const onStopError = (overrides.onStopError ?? vi.fn()) as MockInstance<[unknown], void>;
+function createTypingHarness(overrides: TypingCallbackOverrides = {}) {
+  const start: TypingHarnessStart = vi.fn<() => Promise<void>>(async () => {});
+  const stop: TypingHarnessStart = vi.fn<() => Promise<void>>(async () => {});
+  const onStartError: TypingHarnessError = vi.fn<(err: unknown) => void>();
+  const onStopError: TypingHarnessError = vi.fn<(err: unknown) => void>();
+
+  if (overrides.start) {
+    start.mockImplementation(overrides.start);
+  }
+  if (overrides.stop) {
+    stop.mockImplementation(overrides.stop);
+  }
+  if (overrides.onStartError) {
+    onStartError.mockImplementation(overrides.onStartError);
+  }
+  if (overrides.onStopError) {
+    onStopError.mockImplementation(overrides.onStopError);
+  }
+
   const callbacks = createTypingCallbacks({
     start,
     stop,
