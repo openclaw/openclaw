@@ -12,6 +12,7 @@ import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { resolveAgentOutboundIdentity } from "../../../infra/outbound/identity.js";
 import { removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
+import { markdownToSlackMrkdwn } from "../../format.js";
 import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
 import {
   applyAppendOnlyStreamUpdate,
@@ -290,7 +291,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             token: ctx.botToken,
             channel: draftChannelId,
             ts: draftMessageId,
-            text: finalText.trim(),
+            text: markdownToSlackMrkdwn(finalText.trim()),
           });
           return;
         } catch (err) {
