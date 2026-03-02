@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **Cognitive Dual Engine** — System 1/System 2 cognitive routing with FLARE planning engine. Automatically assesses task complexity and routes to fast intuitive processing or deliberate lookahead planning.
+  npm: `cognitive-dual-engine`
+  repo: `https://github.com/tonyhu2006/cognitive-dual-engine`
+  install: `openclaw plugins install cognitive-dual-engine`
