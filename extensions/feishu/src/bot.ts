@@ -13,7 +13,7 @@ import {
 } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { tryRecordMessagePersistent } from "./dedup.js";
+import { tryRecordMessage, tryRecordMessagePersistent } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { downloadMessageResourceFeishu } from "./media.js";
@@ -29,6 +29,7 @@ import {
   resolveFeishuAllowlistMatch,
   isFeishuGroupAllowed,
 } from "./policy.js";
+import { parsePostContent } from "./post.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, sendMessageFeishu } from "./send.js";
@@ -167,6 +168,7 @@ export type FeishuMessageEvent = {
     chat_type: "p2p" | "group";
     message_type: string;
     content: string;
+    create_time?: string;
     mentions?: Array<{
       key: string;
       id: {
@@ -192,15 +194,16 @@ export type FeishuBotAddedEvent = {
 };
 
 function parseMessageContent(content: string, messageType: string): string {
+  if (messageType === "post") {
+    // Extract text content from rich text post
+    const { textContent } = parsePostContent(content);
+    return textContent;
+  }
+
   try {
     const parsed = JSON.parse(content);
     if (messageType === "text") {
       return parsed.text || "";
-    }
-    if (messageType === "post") {
-      // Extract text content from rich text post
-      const { textContent } = parsePostContent(content);
-      return textContent;
     }
     if (messageType === "share_chat") {
       // Preserve available summary text for merged/forwarded chat messages.
@@ -399,82 +402,6 @@ function parseMediaKeys(
 }
 
 /**
- * Parse post (rich text) content and extract embedded image keys.
- * Post structure: { title?: string, content: [[{ tag, text?, image_key?, ... }]] }
- */
-function parsePostContent(content: string): {
-  textContent: string;
-  imageKeys: string[];
-  mentionedOpenIds: string[];
-} {
-  try {
-    const parsed = JSON.parse(content);
-    const title = parsed.title || "";
-    const contentBlocks = parsed.content || [];
-    let textContent = title ? `${title}\n\n` : "";
-    const imageKeys: string[] = [];
-    const mentionedOpenIds: string[] = [];
-
-    for (const paragraph of contentBlocks) {
-      if (Array.isArray(paragraph)) {
-        for (const element of paragraph) {
-          if (element.tag === "text") {
-            textContent += element.text || "";
-          } else if (element.tag === "a") {
-            // Link: show text or href
-            textContent += element.text || element.href || "";
-          } else if (element.tag === "at") {
-            // Mention: @username
-            textContent += `@${element.user_name || element.user_id || ""}`;
-            if (element.user_id) {
-              mentionedOpenIds.push(element.user_id);
-            }
-          } else if (element.tag === "img" && element.image_key) {
-            // Embedded image
-            const imageKey = normalizeFeishuExternalKey(element.image_key);
-            if (imageKey) {
-              imageKeys.push(imageKey);
-            }
-          } else if (element.tag === "code") {
-            // Inline code
-            const code =
-              typeof element.text === "string"
-                ? element.text
-                : typeof element.content === "string"
-                  ? element.content
-                  : "";
-            if (code) {
-              textContent += `\`${code}\``;
-            }
-          } else if (element.tag === "code_block" || element.tag === "pre") {
-            // Multiline code block
-            const lang = typeof element.language === "string" ? element.language : "";
-            const code =
-              typeof element.text === "string"
-                ? element.text
-                : typeof element.content === "string"
-                  ? element.content
-                  : "";
-            if (code) {
-              textContent += `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
-            }
-          }
-        }
-        textContent += "\n";
-      }
-    }
-
-    return {
-      textContent: textContent.trim() || "[Rich text message]",
-      imageKeys,
-      mentionedOpenIds,
-    };
-  } catch {
-    return { textContent: "[Rich text message]", imageKeys: [], mentionedOpenIds: [] };
-  }
-}
-
-/**
  * Map Feishu message type to messageResource.get resource type.
  * Feishu messageResource API supports only: image | file.
  */
@@ -527,14 +454,19 @@ async function resolveFeishuMediaList(params: {
   const out: FeishuMediaInfo[] = [];
   const core = getFeishuRuntime();
 
-  // Handle post (rich text) messages with embedded images
+  // Handle post (rich text) messages with embedded images/media.
   if (messageType === "post") {
-    const { imageKeys } = parsePostContent(content);
-    if (imageKeys.length === 0) {
+    const { imageKeys, mediaKeys: postMediaKeys } = parsePostContent(content);
+    if (imageKeys.length === 0 && postMediaKeys.length === 0) {
       return [];
     }
 
-    log?.(`feishu: post message contains ${imageKeys.length} embedded image(s)`);
+    if (imageKeys.length > 0) {
+      log?.(`feishu: post message contains ${imageKeys.length} embedded image(s)`);
+    }
+    if (postMediaKeys.length > 0) {
+      log?.(`feishu: post message contains ${postMediaKeys.length} embedded media file(s)`);
+    }
 
     for (const imageKey of imageKeys) {
       try {
@@ -568,6 +500,40 @@ async function resolveFeishuMediaList(params: {
         log?.(`feishu: downloaded embedded image ${imageKey}, saved to ${saved.path}`);
       } catch (err) {
         log?.(`feishu: failed to download embedded image ${imageKey}: ${String(err)}`);
+      }
+    }
+
+    for (const media of postMediaKeys) {
+      try {
+        const result = await downloadMessageResourceFeishu({
+          cfg,
+          messageId,
+          fileKey: media.fileKey,
+          type: "file",
+          accountId,
+        });
+
+        let contentType = result.contentType;
+        if (!contentType) {
+          contentType = await core.media.detectMime({ buffer: result.buffer });
+        }
+
+        const saved = await core.channel.media.saveMediaBuffer(
+          result.buffer,
+          contentType,
+          "inbound",
+          maxBytes,
+        );
+
+        out.push({
+          path: saved.path,
+          contentType: saved.contentType,
+          placeholder: "<media:video>",
+        });
+
+        log?.(`feishu: downloaded embedded media ${media.fileKey}, saved to ${saved.path}`);
+      } catch (err) {
+        log?.(`feishu: failed to download embedded media ${media.fileKey}: ${String(err)}`);
       }
     }
 
@@ -727,8 +693,15 @@ export async function handleFeishuMessage(params: {
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
 
-  // Dedup check: skip if this message was already processed (memory + disk).
+  // Dedup: synchronous memory guard prevents concurrent duplicate dispatch
+  // before the async persistent check completes.
   const messageId = event.message.message_id;
+  const memoryDedupeKey = `${account.accountId}:${messageId}`;
+  if (!tryRecordMessage(memoryDedupeKey)) {
+    log(`feishu: skipping duplicate message ${messageId} (memory dedup)`);
+    return;
+  }
+  // Persistent dedup survives restarts and reconnects.
   if (!(await tryRecordMessagePersistent(messageId, account.accountId, log))) {
     log(`feishu: skipping duplicate message ${messageId}`);
     return;
@@ -771,23 +744,26 @@ export async function handleFeishuMessage(params: {
   }
 
   // Resolve sender display name (best-effort) so the agent can attribute messages correctly.
-  const senderResult = await resolveFeishuSenderName({
-    account,
-    senderId: ctx.senderOpenId,
-    log,
-  });
-  if (senderResult.name) ctx = { ...ctx, senderName: senderResult.name };
-
-  // Track permission error to inform agent later (with cooldown to avoid repetition)
+  // Optimization: skip if disabled to save API quota (Feishu free tier limit).
   let permissionErrorForAgent: PermissionError | undefined;
-  if (senderResult.permissionError) {
-    const appKey = account.appId ?? "default";
-    const now = Date.now();
-    const lastNotified = permissionErrorNotifiedAt.get(appKey) ?? 0;
+  if (feishuCfg?.resolveSenderNames ?? true) {
+    const senderResult = await resolveFeishuSenderName({
+      account,
+      senderId: ctx.senderOpenId,
+      log,
+    });
+    if (senderResult.name) ctx = { ...ctx, senderName: senderResult.name };
 
-    if (now - lastNotified > PERMISSION_ERROR_COOLDOWN_MS) {
-      permissionErrorNotifiedAt.set(appKey, now);
-      permissionErrorForAgent = senderResult.permissionError;
+    // Track permission error to inform agent later (with cooldown to avoid repetition)
+    if (senderResult.permissionError) {
+      const appKey = account.appId ?? "default";
+      const now = Date.now();
+      const lastNotified = permissionErrorNotifiedAt.get(appKey) ?? 0;
+
+      if (now - lastNotified > PERMISSION_ERROR_COOLDOWN_MS) {
+        permissionErrorNotifiedAt.set(appKey, now);
+        permissionErrorForAgent = senderResult.permissionError;
+      }
     }
   }
 
@@ -813,6 +789,10 @@ export async function handleFeishuMessage(params: {
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
 
   if (isGroup) {
+    if (groupConfig?.enabled === false) {
+      log(`feishu[${account.accountId}]: group ${ctx.chatId} is disabled`);
+      return;
+    }
     const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
     const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
       providerConfigPresent: cfg.channels?.feishu !== undefined,
@@ -837,7 +817,9 @@ export async function handleFeishuMessage(params: {
     });
 
     if (!groupAllowed) {
-      log(`feishu[${account.accountId}]: sender ${ctx.senderOpenId} not in group allowlist`);
+      log(
+        `feishu[${account.accountId}]: group ${ctx.chatId} not in groupAllowFrom (groupPolicy=${groupPolicy})`,
+      );
       return;
     }
 
@@ -1069,10 +1051,10 @@ export async function handleFeishuMessage(params: {
       ? `Feishu[${account.accountId}] message in group ${ctx.chatId}`
       : `Feishu[${account.accountId}] DM from ${ctx.senderOpenId}`;
 
-    core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
-      sessionKey: route.sessionKey,
-      contextKey: `feishu:message:${ctx.chatId}:${ctx.messageId}`,
-    });
+    // Do not enqueue inbound user previews as system events.
+    // System events are prepended to future prompts and can be misread as
+    // authoritative transcript turns.
+    log(`feishu[${account.accountId}]: ${inboundLabel}: ${preview}`);
 
     // Resolve media from message
     const mediaMaxBytes = (feishuCfg?.mediaMaxMb ?? 30) * 1024 * 1024; // 30MB default
@@ -1161,6 +1143,10 @@ export async function handleFeishuMessage(params: {
       Body: combinedBody,
       BodyForAgent: messageBody,
       InboundHistory: inboundHistory,
+      // Quote/reply message support: use standard ReplyToId for parent,
+      // and pass root_id for thread reconstruction.
+      ReplyToId: ctx.parentId,
+      RootMessageId: ctx.rootId,
       RawBody: ctx.content,
       CommandBody: ctx.content,
       From: feishuFrom,
@@ -1183,6 +1169,11 @@ export async function handleFeishuMessage(params: {
       ...mediaPayload,
     });
 
+    // Parse message create_time (Feishu uses millisecond epoch string).
+    const messageCreateTimeMs = event.message.create_time
+      ? parseInt(event.message.create_time, 10)
+      : undefined;
+
     const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
       cfg,
       agentId: route.agentId,
@@ -1194,6 +1185,7 @@ export async function handleFeishuMessage(params: {
       rootId: ctx.rootId,
       mentionTargets: ctx.mentionTargets,
       accountId: account.accountId,
+      messageCreateTimeMs,
     });
 
     log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
