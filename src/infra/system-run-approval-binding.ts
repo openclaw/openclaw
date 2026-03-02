@@ -1,20 +1,9 @@
 import crypto from "node:crypto";
 import type { SystemRunApprovalBinding, SystemRunApprovalPlan } from "./exec-approvals.js";
 import { normalizeEnvVarKey } from "./host-env-security.js";
+import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
 
 type NormalizedSystemRunEnvEntry = [key: string, value: string];
-
-function normalizeString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
-
-function normalizeStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.map((entry) => String(entry)) : [];
-}
 
 export function normalizeSystemRunApprovalPlan(value: unknown): SystemRunApprovalPlan | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -27,10 +16,10 @@ export function normalizeSystemRunApprovalPlan(value: unknown): SystemRunApprova
   }
   return {
     argv,
-    cwd: normalizeString(candidate.cwd),
-    rawCommand: normalizeString(candidate.rawCommand),
-    agentId: normalizeString(candidate.agentId),
-    sessionKey: normalizeString(candidate.sessionKey),
+    cwd: normalizeNonEmptyString(candidate.cwd),
+    rawCommand: normalizeNonEmptyString(candidate.rawCommand),
+    agentId: normalizeNonEmptyString(candidate.agentId),
+    sessionKey: normalizeNonEmptyString(candidate.sessionKey),
   };
 }
 
@@ -82,9 +71,9 @@ export function buildSystemRunApprovalBinding(params: {
   return {
     binding: {
       argv: normalizeStringArray(params.argv),
-      cwd: normalizeString(params.cwd),
-      agentId: normalizeString(params.agentId),
-      sessionKey: normalizeString(params.sessionKey),
+      cwd: normalizeNonEmptyString(params.cwd),
+      agentId: normalizeNonEmptyString(params.agentId),
+      sessionKey: normalizeNonEmptyString(params.sessionKey),
       envHash: envBinding.envHash,
     },
     envKeys: envBinding.envKeys,

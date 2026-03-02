@@ -289,25 +289,7 @@ export async function scanStatus(
 
       progress.setLabel("Checking memory…");
       const memoryPlugin = resolveMemoryPluginStatus(cfg);
-      const memory = await (async (): Promise<MemoryStatusSnapshot | null> => {
-        if (!memoryPlugin.enabled) {
-          return null;
-        }
-        if (memoryPlugin.slot !== "memory-core") {
-          return null;
-        }
-        const agentId = agentStatus.defaultId ?? "main";
-        const { manager } = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
-        if (!manager) {
-          return null;
-        }
-        try {
-          await manager.probeVectorAvailability();
-        } catch {}
-        const status = manager.status();
-        await manager.close?.().catch(() => {});
-        return { agentId, ...status };
-      })();
+      const memory = await resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin });
       progress.tick();
 
       progress.setLabel("Reading sessions…");
