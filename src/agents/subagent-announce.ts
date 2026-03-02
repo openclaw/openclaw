@@ -468,7 +468,14 @@ function resolveAnnounceOrigin(
       normalizedEntry?.channel === normalizedRequester.channel &&
       normalizedEntry?.to === normalizedRequester.to;
     if (sameDestination) {
-      return mergeDeliveryContext(normalizedRequester, normalizedEntry);
+      const entryForMerge =
+        normalizedRequester.threadId == null && normalizedEntry?.threadId != null
+          ? (() => {
+              const { threadId: _ignore, ...rest } = normalizedEntry;
+              return rest;
+            })()
+          : normalizedEntry;
+      return mergeDeliveryContext(normalizedRequester, entryForMerge);
     }
     return normalizedRequester;
   }
