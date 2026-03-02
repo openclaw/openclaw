@@ -7,6 +7,7 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
+import { runExec } from "../process/exec.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { clearMediaUnderstandingBinaryCacheForTests } from "./runner.js";
 
@@ -33,6 +34,7 @@ vi.mock("../process/exec.js", () => ({
 }));
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
+const mockedRunExec = vi.mocked(runExec);
 
 const TEMP_MEDIA_PREFIX = "openclaw-media-";
 let suiteTempMediaRootDir = "";
@@ -191,8 +193,7 @@ async function setupAudioAutoDetectCase(stdout: string): Promise<{
     content: "audio",
   });
   const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
-  const execModule = await import("../process/exec.js");
-  vi.mocked(execModule.runExec).mockResolvedValueOnce({
+  mockedRunExec.mockResolvedValueOnce({
     stdout,
     stderr: "",
   });
@@ -241,6 +242,7 @@ describe("applyMediaUnderstanding", () => {
   beforeEach(() => {
     mockedResolveApiKey.mockClear();
     mockedFetchRemoteMedia.mockClear();
+    mockedRunExec.mockReset();
     mockedFetchRemoteMedia.mockResolvedValue({
       buffer: Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
       contentType: "audio/ogg",
@@ -403,8 +405,7 @@ describe("applyMediaUnderstanding", () => {
       },
     };
 
-    const execModule = await import("../process/exec.js");
-    vi.mocked(execModule.runExec).mockResolvedValue({
+    mockedRunExec.mockResolvedValue({
       stdout: "cli transcript\n",
       stderr: "",
     });
@@ -437,8 +438,6 @@ describe("applyMediaUnderstanding", () => {
     await fs.writeFile(path.join(modelDir, "joiner.onnx"), "a");
 
     const { ctx, cfg } = await setupAudioAutoDetectCase('{"text":"sherpa ok"}');
-    const execModule = await import("../process/exec.js");
-    const mockedRunExec = vi.mocked(execModule.runExec);
 
     await withMediaAutoDetectEnv(
       {
@@ -467,8 +466,6 @@ describe("applyMediaUnderstanding", () => {
     await fs.writeFile(modelPath, "model");
 
     const { ctx, cfg } = await setupAudioAutoDetectCase("whisper cpp ok\n");
-    const execModule = await import("../process/exec.js");
-    const mockedRunExec = vi.mocked(execModule.runExec);
 
     await withMediaAutoDetectEnv(
       {
@@ -498,10 +495,6 @@ describe("applyMediaUnderstanding", () => {
       content: "audio",
     });
     const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
-
-    const execModule = await import("../process/exec.js");
-    const mockedRunExec = vi.mocked(execModule.runExec);
-    mockedRunExec.mockReset();
 
     await withMediaAutoDetectEnv(
       {
@@ -548,8 +541,7 @@ describe("applyMediaUnderstanding", () => {
       },
     };
 
-    const execModule = await import("../process/exec.js");
-    vi.mocked(execModule.runExec).mockResolvedValue({
+    mockedRunExec.mockResolvedValue({
       stdout: "image description\n",
       stderr: "",
     });
@@ -593,8 +585,7 @@ describe("applyMediaUnderstanding", () => {
       },
     };
 
-    const execModule = await import("../process/exec.js");
-    vi.mocked(execModule.runExec).mockResolvedValue({
+    mockedRunExec.mockResolvedValue({
       stdout: "shared description\n",
       stderr: "",
     });

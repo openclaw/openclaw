@@ -15,6 +15,13 @@ const windowsAuditEnv = {
   USERNAME: "Tester",
   USERDOMAIN: "DESKTOP-TEST",
 };
+const execDockerRawUnavailable: NonNullable<SecurityAuditOptions["execDockerRawFn"]> = async () => {
+  return {
+    stdout: Buffer.alloc(0),
+    stderr: Buffer.from("docker unavailable"),
+    code: 1,
+  };
+};
 
 function stubChannelPlugin(params: {
   id: "discord" | "slack" | "telegram";
@@ -609,6 +616,7 @@ description: test skill
       platform: "win32",
       env: windowsAuditEnv,
       execIcacls,
+      execDockerRawFn: execDockerRawUnavailable,
     });
 
     const forbidden = new Set([
@@ -655,6 +663,7 @@ description: test skill
       platform: "win32",
       env: windowsAuditEnv,
       execIcacls,
+      execDockerRawFn: execDockerRawUnavailable,
     });
 
     expect(
@@ -2673,6 +2682,7 @@ description: test skill
       includeChannelSecurity: false,
       deep: false,
       stateDir: sharedCodeSafetyStateDir,
+      execDockerRawFn: execDockerRawUnavailable,
     });
     expect(nonDeepRes.findings.some((f) => f.checkId === "plugins.code_safety")).toBe(false);
 
@@ -2687,6 +2697,7 @@ description: test skill
       deep: true,
       stateDir: sharedCodeSafetyStateDir,
       probeGatewayFn: async (opts) => successfulProbeResult(opts.url),
+      execDockerRawFn: execDockerRawUnavailable,
     });
 
     const pluginFinding = deepRes.findings.find(
