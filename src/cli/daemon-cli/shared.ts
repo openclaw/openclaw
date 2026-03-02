@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -167,8 +169,18 @@ export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.
   const profile = env.OPENCLAW_PROFILE;
   switch (process.platform) {
     case "darwin": {
-      const label = resolveGatewayLaunchAgentLabel(profile);
-      return [...base, `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/${label}.plist`];
+      const launchdLabel =
+        env.OPENCLAW_LAUNCHD_LABEL?.trim() || resolveGatewayLaunchAgentLabel(profile);
+      const home = env.HOME?.trim() || env.USERPROFILE?.trim() || "";
+      const launchAgentsDir = home ? path.join(home, "Library", "LaunchAgents") : "";
+      const plistCandidates = launchdLabel.endsWith(".nop")
+        ? [`${launchdLabel}.plist`]
+        : [`${launchdLabel}.nop.plist`, `${launchdLabel}.plist`];
+      const plistName =
+        plistCandidates.find((candidate) => {
+          return Boolean(launchAgentsDir && fs.existsSync(path.join(launchAgentsDir, candidate)));
+        }) ?? `${launchdLabel}.plist`;
+      return [...base, `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/${plistName}`];
     }
     case "linux": {
       const unit = resolveGatewaySystemdServiceName(profile);
