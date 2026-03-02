@@ -953,27 +953,30 @@ function matchesPathPattern(targetPath: string, patterns: string[]): boolean {
  * Check if a path is in a read-only directory.
  */
 function isPathReadOnly(targetPath: string, readOnlyPaths?: string[]): boolean {
-  // console.error("[DEBUG isPathReadOnly] targetPath:", targetPath, "readOnlyPaths:", readOnlyPaths);
   if (!readOnlyPaths || readOnlyPaths.length === 0) {
     return false;
   }
   try {
     // Resolve symlinks to handle symbolic links correctly
     const resolvedPath = fsSync.realpathSync(targetPath);
-    // console.error("[DEBUG isPathReadOnly] resolvedPath:", resolvedPath, "matches:", matchesPathPattern(resolvedPath, readOnlyPaths));
     if (matchesPathPattern(resolvedPath, readOnlyPaths)) {
       return true;
     }
   } catch {
-    // Path doesn't exist yet - check if parent directory is in readOnlyPaths
-    const parentDir = path.dirname(targetPath);
-    // console.error("[DEBUG isPathReadOnly] parentDir:", parentDir);
-    try {
-      const resolvedParent = fsSync.realpathSync(parentDir);
-      // console.error("[DEBUG isPathReadOnly] resolvedParent:", resolvedParent, "matches:", matchesPathPattern(resolvedParent, readOnlyPaths));
-      return matchesPathPattern(resolvedParent, readOnlyPaths);
-    } catch {
-      // Parent also doesn't exist, check other ancestors
+    // Path doesn't exist yet - traverse ancestors to check if any is read-only
+    let currentDir = path.dirname(targetPath);
+    const rootCheck = path.parse(currentDir).root;
+
+    while (currentDir !== rootCheck && currentDir !== path.dirname(currentDir)) {
+      try {
+        const resolvedAncestor = fsSync.realpathSync(currentDir);
+        if (matchesPathPattern(resolvedAncestor, readOnlyPaths)) {
+          return true;
+        }
+      } catch {
+        // Ancestor doesn't exist, continue to parent
+      }
+      currentDir = path.dirname(currentDir);
     }
   }
   return false;
