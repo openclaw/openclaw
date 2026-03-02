@@ -78,6 +78,8 @@ type WhatsAppSharedConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Optional proxy URL for WhatsApp Web connection (e.g., "http://proxy:8080" or "socks5://proxy:1080"). */
+  proxy?: string;
 };
 
 type WhatsAppConfigCore = {

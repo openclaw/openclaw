@@ -33,6 +33,7 @@ type ActiveLogin = {
   waitPromise: Promise<void>;
   restartAttempted: boolean;
   verbose: boolean;
+  proxy?: string;
 };
 
 const ACTIVE_LOGIN_TTL_MS = 3 * 60_000;
@@ -91,6 +92,7 @@ async function restartLoginSocket(login: ActiveLogin, runtime: RuntimeEnv) {
   try {
     const sock = await createWaSocket(false, login.verbose, {
       authDir: login.authDir,
+      proxy: login.proxy,
     });
     login.sock = sock;
     login.connected = false;
@@ -155,6 +157,7 @@ export async function startWebLoginWithQr(
   try {
     sock = await createWaSocket(false, Boolean(opts.verbose), {
       authDir: account.authDir,
+      proxy: account.proxy,
       onQr: (qr: string) => {
         if (pendingQr) {
           return;
@@ -182,6 +185,7 @@ export async function startWebLoginWithQr(
     isLegacyAuthDir: account.isLegacyAuthDir,
     id: randomUUID(),
     sock,
+    proxy: account.proxy,
     startedAt: Date.now(),
     connected: false,
     waitPromise: Promise.resolve(),

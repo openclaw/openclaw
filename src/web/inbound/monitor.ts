@@ -34,11 +34,14 @@ export async function monitorWebInbox(options: {
   debounceMs?: number;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: WebInboundMessage) => boolean;
+  /** Optional proxy URL for WhatsApp Web connection. */
+  proxy?: string;
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
   const sock = await createWaSocket(false, options.verbose, {
     authDir: options.authDir,
+    proxy: options.proxy,
   });
   await waitForWaConnection(sock);
   const connectedAtMs = Date.now();

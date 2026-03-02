@@ -29,6 +29,7 @@ export type ResolvedWhatsAppAccount = {
   ackReaction?: WhatsAppAccountConfig["ackReaction"];
   groups?: WhatsAppAccountConfig["groups"];
   debounceMs?: number;
+  proxy?: string;
 };
 
 const { listConfiguredAccountIds, listAccountIds, resolveDefaultAccountId } =
@@ -123,27 +124,43 @@ export function resolveWhatsAppAccount(params: {
     cfg: params.cfg,
     accountId,
   });
+  const sendReadReceipts = accountCfg?.sendReadReceipts ?? rootCfg?.sendReadReceipts ?? true;
+  const messagePrefix =
+    accountCfg?.messagePrefix ?? rootCfg?.messagePrefix ?? params.cfg.messages?.messagePrefix;
+  const selfChatMode = accountCfg?.selfChatMode ?? rootCfg?.selfChatMode;
+  const dmPolicy = accountCfg?.dmPolicy ?? rootCfg?.dmPolicy;
+  const allowFrom = accountCfg?.allowFrom ?? rootCfg?.allowFrom;
+  const groupAllowFrom = accountCfg?.groupAllowFrom ?? rootCfg?.groupAllowFrom;
+  const groupPolicy = accountCfg?.groupPolicy ?? rootCfg?.groupPolicy;
+  const textChunkLimit = accountCfg?.textChunkLimit ?? rootCfg?.textChunkLimit;
+  const chunkMode = accountCfg?.chunkMode ?? rootCfg?.chunkMode;
+  const mediaMaxMb = accountCfg?.mediaMaxMb ?? rootCfg?.mediaMaxMb;
+  const blockStreaming = accountCfg?.blockStreaming ?? rootCfg?.blockStreaming;
+  const ackReaction = accountCfg?.ackReaction ?? rootCfg?.ackReaction;
+  const groups = accountCfg?.groups ?? rootCfg?.groups;
+  const debounceMs = accountCfg?.debounceMs ?? rootCfg?.debounceMs;
+  const proxy = accountCfg?.proxy ?? rootCfg?.proxy;
   return {
     accountId,
     name: accountCfg?.name?.trim() || undefined,
     enabled,
-    sendReadReceipts: accountCfg?.sendReadReceipts ?? rootCfg?.sendReadReceipts ?? true,
-    messagePrefix:
-      accountCfg?.messagePrefix ?? rootCfg?.messagePrefix ?? params.cfg.messages?.messagePrefix,
+    sendReadReceipts,
+    messagePrefix,
     authDir,
     isLegacyAuthDir: isLegacy,
-    selfChatMode: accountCfg?.selfChatMode ?? rootCfg?.selfChatMode,
-    dmPolicy: accountCfg?.dmPolicy ?? rootCfg?.dmPolicy,
-    allowFrom: accountCfg?.allowFrom ?? rootCfg?.allowFrom,
-    groupAllowFrom: accountCfg?.groupAllowFrom ?? rootCfg?.groupAllowFrom,
-    groupPolicy: accountCfg?.groupPolicy ?? rootCfg?.groupPolicy,
-    textChunkLimit: accountCfg?.textChunkLimit ?? rootCfg?.textChunkLimit,
-    chunkMode: accountCfg?.chunkMode ?? rootCfg?.chunkMode,
-    mediaMaxMb: accountCfg?.mediaMaxMb ?? rootCfg?.mediaMaxMb,
-    blockStreaming: accountCfg?.blockStreaming ?? rootCfg?.blockStreaming,
-    ackReaction: accountCfg?.ackReaction ?? rootCfg?.ackReaction,
-    groups: accountCfg?.groups ?? rootCfg?.groups,
-    debounceMs: accountCfg?.debounceMs ?? rootCfg?.debounceMs,
+    selfChatMode,
+    dmPolicy,
+    allowFrom,
+    groupAllowFrom,
+    groupPolicy,
+    textChunkLimit,
+    chunkMode,
+    mediaMaxMb,
+    blockStreaming,
+    ackReaction,
+    groups,
+    debounceMs,
+    proxy,
   };
 }
 

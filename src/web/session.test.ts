@@ -85,6 +85,22 @@ describe("web session", () => {
     expect(saveCreds).toHaveBeenCalled();
   });
 
+  it("passes proxy agent to makeWASocket when proxy is provided", async () => {
+    await createWaSocket(false, false, { proxy: "http://proxy.example.com:8080" });
+    const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
+    const passed = makeWASocket.mock.calls[0][0];
+    expect(passed).toHaveProperty("agent");
+    expect(passed).toHaveProperty("fetchAgent");
+  });
+
+  it("does not set agent when proxy is not provided", async () => {
+    await createWaSocket(false, false, {});
+    const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
+    const passed = makeWASocket.mock.calls[0][0];
+    expect(passed.agent).toBeUndefined();
+    expect(passed.fetchAgent).toBeUndefined();
+  });
+
   it("waits for connection open", async () => {
     const ev = new EventEmitter();
     const promise = waitForWaConnection({ ev } as unknown as ReturnType<

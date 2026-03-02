@@ -204,6 +204,7 @@ export async function monitorWebChannel(
       sendReadReceipts: account.sendReadReceipts,
       debounceMs: inboundDebounceMs,
       shouldDebounce,
+      proxy: account.proxy,
       onMessage: async (msg: WebInboundMsg) => {
         handledMessages += 1;
         lastMessageAt = Date.now();
