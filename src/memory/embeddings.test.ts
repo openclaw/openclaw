@@ -27,14 +27,10 @@ const createGeminiFetchMock = () =>
     json: async () => ({ embedding: { values: [1, 2, 3] } }),
   }));
 
-function readFirstFetchRequest(fetchMock: { mock: { calls: unknown[][] } }) {
-  const [url, init] = fetchMock.mock.calls[0] ?? [];
-  return { url, init: init as RequestInit | undefined };
-}
-
 afterEach(() => {
   vi.resetAllMocks();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 function requireProvider(result: Awaited<ReturnType<typeof createEmbeddingProvider>>) {
@@ -201,7 +197,8 @@ describe("embedding provider remote overrides", () => {
     const provider = requireProvider(result);
     await provider.embedQuery("hello");
 
-    const { url, init } = readFirstFetchRequest(fetchMock);
+    const url = fetchMock.mock.calls[0]?.[0];
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
     expect(url).toBe(
       "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent",
     );
@@ -238,7 +235,8 @@ describe("embedding provider remote overrides", () => {
     const provider = requireProvider(result);
     await provider.embedQuery("hello");
 
-    const { url, init } = readFirstFetchRequest(fetchMock);
+    const url = fetchMock.mock.calls[0]?.[0];
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
     expect(url).toBe("https://api.mistral.ai/v1/embeddings");
     const headers = (init?.headers ?? {}) as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer mistral-key");
@@ -315,6 +313,7 @@ describe("embedding provider auto selection", () => {
   });
 
   it("uses mistral when openai/gemini/voyage are missing", async () => {
+    vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "");
     const fetchMock = createFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
@@ -473,6 +472,7 @@ describe("local embedding normalization", () => {
 
 describe("FTS-only fallback when no provider available", () => {
   it("returns null provider with reason when auto mode finds no providers", async () => {
+    vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "");
     vi.mocked(authModule.resolveApiKeyForProvider).mockRejectedValue(
       new Error('No API key found for provider "openai"'),
     );

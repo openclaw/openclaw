@@ -553,6 +553,7 @@ export const MemorySearchSchema = z
         z.literal("local"),
         z.literal("gemini"),
         z.literal("voyage"),
+        z.literal("bedrock"),
         z.literal("mistral"),
       ])
       .optional(),
@@ -580,6 +581,7 @@ export const MemorySearchSchema = z
         z.literal("gemini"),
         z.literal("local"),
         z.literal("voyage"),
+        z.literal("bedrock"),
         z.literal("mistral"),
         z.literal("none"),
       ])

@@ -3,6 +3,10 @@ import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
 import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
+import {
+  createBedrockEmbeddingProvider,
+  type BedrockEmbeddingClient,
+} from "./embeddings-bedrock.js";
 import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
 import {
   createMistralEmbeddingProvider,
@@ -21,6 +25,7 @@ function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
   return sanitized.map((value) => value / magnitude);
 }
 
+export type { BedrockEmbeddingClient } from "./embeddings-bedrock.js";
 export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 export type { MistralEmbeddingClient } from "./embeddings-mistral.js";
 export type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
@@ -34,11 +39,11 @@ export type EmbeddingProvider = {
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
 
-export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "mistral";
+export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "bedrock" | "mistral";
 export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
 export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
 
-const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral"] as const;
+const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "bedrock", "mistral"] as const;
 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider | null;
@@ -49,6 +54,7 @@ export type EmbeddingProviderResult = {
   openAi?: OpenAiEmbeddingClient;
   gemini?: GeminiEmbeddingClient;
   voyage?: VoyageEmbeddingClient;
+  bedrock?: BedrockEmbeddingClient;
   mistral?: MistralEmbeddingClient;
 };
 
@@ -159,6 +165,10 @@ export async function createEmbeddingProvider(
     if (id === "voyage") {
       const { provider, client } = await createVoyageEmbeddingProvider(options);
       return { provider, voyage: client };
+    }
+    if (id === "bedrock") {
+      const { provider, client } = await createBedrockEmbeddingProvider(options);
+      return { provider, bedrock: client };
     }
     if (id === "mistral") {
       const { provider, client } = await createMistralEmbeddingProvider(options);
