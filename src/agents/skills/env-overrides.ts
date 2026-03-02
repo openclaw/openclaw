@@ -33,6 +33,8 @@ function isAlwaysBlockedSkillEnvKey(key: string): boolean {
 function sanitizeSkillEnvOverrides(params: {
   overrides: Record<string, string>;
   allowedSensitiveKeys: Set<string>;
+  /** Keys from user-configured skill.env that should bypass pattern blocking */
+  userConfiguredKeys?: Set<string>;
 }): SanitizedSkillEnvOverrides {
   if (Object.keys(params.overrides).length === 0) {
     return { allowed: {}, blocked: [], warnings: [] };
@@ -42,6 +44,7 @@ function sanitizeSkillEnvOverrides(params: {
   const allowed: Record<string, string> = {};
   const blocked = new Set<string>();
   const warnings = [...result.warnings];
+  const userConfiguredKeys = params.userConfiguredKeys ?? new Set<string>();
 
   for (const [key, value] of Object.entries(result.allowed)) {
     if (isAlwaysBlockedSkillEnvKey(key)) {
@@ -52,6 +55,16 @@ function sanitizeSkillEnvOverrides(params: {
   }
 
   for (const key of result.blocked) {
+    // Always allow user-configured env vars from skill config - they are explicitly
+    // set by the user in openclaw.json and should not be blocked by pattern matching.
+    // This allows skills to use env vars like GOG_KEYRING_PASSWORD for CLI authentication.
+    if (userConfiguredKeys.has(key)) {
+      const value = params.overrides[key];
+      if (value) {
+        allowed[key] = value;
+      }
+      continue;
+    }
     if (isAlwaysBlockedSkillEnvKey(key) || !params.allowedSensitiveKeys.has(key)) {
       blocked.add(key);
       continue;
@@ -93,8 +106,8 @@ function applySkillConfigEnvOverrides(params: {
       allowedSensitiveKeys.add(trimmedEnv);
     }
   }
-
   const pendingOverrides: Record<string, string> = {};
+  const userConfiguredKeys = new Set<string>();
   if (skillConfig.env) {
     for (const [rawKey, envValue] of Object.entries(skillConfig.env)) {
       const envKey = rawKey.trim();
@@ -102,6 +115,7 @@ function applySkillConfigEnvOverrides(params: {
         continue;
       }
       pendingOverrides[envKey] = envValue;
+      userConfiguredKeys.add(envKey);
     }
   }
 
@@ -115,6 +129,7 @@ function applySkillConfigEnvOverrides(params: {
   const sanitized = sanitizeSkillEnvOverrides({
     overrides: pendingOverrides,
     allowedSensitiveKeys,
+    userConfiguredKeys,
   });
 
   if (sanitized.blocked.length > 0) {
