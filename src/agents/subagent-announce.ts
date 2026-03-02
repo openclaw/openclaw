@@ -53,6 +53,9 @@ const FAST_TEST_MODE = process.env.OPENCLAW_TEST_FAST === "1";
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 60_000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
+
+/** Hard cap on findings text forwarded in completion messages. */
+const MAX_FINDINGS_LENGTH = 2000;
 let subagentRegistryRuntimePromise: Promise<
   typeof import("./subagent-registry-runtime.js")
 > | null = null;

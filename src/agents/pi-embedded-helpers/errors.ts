@@ -858,6 +858,96 @@ export function isImageSizeError(errorMessage?: string): boolean {
   return Boolean(parseImageSizeError(errorMessage));
 }
 
+/**
+ * Detects SyntaxError / JSON parse failures that originate from malformed SSE events.
+ * This typically happens when a reverse proxy (Azure, CloudFlare, nginx) truncates
+ * SSE `data:` lines or splits them via raw newlines in thinking_delta content.
+ * The Anthropic SDK's `JSON.parse(sse.data)` throws, killing the entire stream.
+ */
+export function isLikelySSEParseError(
+  errorMessage?: string,
+  errorStackOrOpts?: string | { stack?: string; streamingContext?: boolean },
+): boolean {
+  if (!errorMessage) {
+    return false;
+  }
+  const errorStack =
+    typeof errorStackOrOpts === "string"
+      ? errorStackOrOpts
+      : typeof errorStackOrOpts === "object"
+        ? errorStackOrOpts.stack
+        : undefined;
+  const explicitStreamingContext =
+    typeof errorStackOrOpts === "object" ? errorStackOrOpts.streamingContext : undefined;
+  const lower = errorMessage.toLowerCase();
+  const stackLower = errorStack?.toLowerCase() ?? "";
+
+  // When a stack trace is available, check if the error originated from SSE/streaming code.
+  // This narrows detection so generic JSON parse errors (e.g. from tool results or config
+  // parsing) are not misidentified as SSE failures.
+  // When no stack is available, require the error message itself to mention SSE/streaming
+  // context to avoid false positives on generic JSON parse errors.
+  const stackIndicatesStreaming =
+    stackLower.includes("streaming") ||
+    stackLower.includes("fromsse") ||
+    stackLower.includes("from_sse") ||
+    stackLower.includes("sse") ||
+    stackLower.includes("stream.") ||
+    stackLower.includes("_stream") ||
+    stackLower.includes("anthropic/streaming") ||
+    stackLower.includes("openai/streaming");
+  const messageIndicatesStreaming = lower.includes("sse") || /\bstream(ing)?\b/.test(lower);
+  const hasStreamingContext =
+    explicitStreamingContext !== undefined
+      ? explicitStreamingContext
+      : errorStack
+        ? stackIndicatesStreaming
+        : messageIndicatesStreaming;
+
+  // Core pattern: SyntaxError from JSON.parse on SSE data
+  const hasSyntaxError =
+    lower.includes("syntaxerror") ||
+    lower.includes("syntax error") ||
+    lower.includes("unexpected end of json") ||
+    lower.includes("unexpected token") ||
+    lower.includes("unterminated string in json") ||
+    lower.includes("bad control character in string literal");
+
+  const hasJsonContext =
+    lower.includes("json") ||
+    lower.includes("json.parse") ||
+    lower.includes("sse") ||
+    /\bstream(ing)?\b/.test(lower);
+
+  if (hasSyntaxError && hasJsonContext && hasStreamingContext) {
+    return true;
+  }
+
+  // Anthropic SDK streaming.js specific patterns (already highly specific, no stack check needed)
+  if (
+    lower.includes("could not parse sse event") ||
+    lower.includes("failed to parse sse") ||
+    lower.includes("malformed sse")
+  ) {
+    return true;
+  }
+
+  // Generic JSON parse failure from streaming context (pi-ai error wrapper).
+  // Require streaming stack when available to avoid false positives.
+  if (
+    (lower.includes("expected ',' or '}' after property value in json") ||
+      lower.includes("expected double-quoted property name in json")) &&
+    hasStreamingContext &&
+    !isLikelyContextOverflowError(errorMessage) &&
+    !isRateLimitErrorMessage(errorMessage) &&
+    !isBillingErrorMessage(errorMessage)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 export function isCloudCodeAssistFormatError(raw: string): boolean {
   return !isImageDimensionErrorMessage(raw) && matchesFormatErrorPattern(raw);
 }
