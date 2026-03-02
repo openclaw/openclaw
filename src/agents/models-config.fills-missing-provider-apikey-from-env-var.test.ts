@@ -44,19 +44,19 @@ function createMergeConfigProvider() {
   return {
     baseUrl: "https://config.example/v1",
     apiKey: "CONFIG_KEY",
-    api: "openai-responses",
+    api: "openai-responses" as const,
     models: [
       {
         id: "config-model",
         name: "Config model",
-        input: ["text"],
+        input: ["text"] as Array<"text" | "image">,
         reasoning: false,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 8192,
         maxTokens: 2048,
       },
     ],
-  } as const;
+  };
 }
 
 async function runCustomProviderMergeTest(seedProvider: {

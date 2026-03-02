@@ -84,12 +84,14 @@ function createTelegramCfg(botToken: string, enabled?: boolean): OpenClawConfig 
 
 function patchTelegramAdapter(overrides: Parameters<typeof patchChannelOnboardingAdapter>[1]) {
   return patchChannelOnboardingAdapter("telegram", {
-    getStatus: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
-      channel: "telegram",
-      configured: Boolean(cfg.channels?.telegram?.botToken),
-      statusLines: [],
-    })),
     ...overrides,
+    getStatus:
+      overrides.getStatus ??
+      vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+        channel: "telegram",
+        configured: Boolean(cfg.channels?.telegram?.botToken),
+        statusLines: [],
+      })),
   });
 }
 

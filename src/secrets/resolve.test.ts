@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SecretProviderConfig } from "../config/types.secrets.js";
 import { resolveSecretRefString, resolveSecretRefValue } from "./resolve.js";
 
 async function writeSecureFile(filePath: string, content: string, mode = 0o600): Promise<void> {
@@ -28,7 +29,7 @@ describe("secret ref resolver", () => {
 
   function createProviderConfig(
     providerId: string,
-    provider: Record<string, unknown>,
+    provider: SecretProviderConfig,
   ): OpenClawConfig {
     return {
       secrets: {
@@ -42,7 +43,7 @@ describe("secret ref resolver", () => {
   async function resolveWithProvider(params: {
     ref: Parameters<typeof resolveSecretRefString>[0];
     providerId: string;
-    provider: Record<string, unknown>;
+    provider: SecretProviderConfig;
   }) {
     return await resolveSecretRefString(params.ref, {
       config: createProviderConfig(params.providerId, params.provider),
@@ -52,17 +53,17 @@ describe("secret ref resolver", () => {
   function createExecProvider(
     command: string,
     overrides?: Record<string, unknown>,
-  ): Record<string, unknown> {
+  ): SecretProviderConfig {
     return {
       source: "exec",
       command,
       passEnv: ["PATH"],
       ...overrides,
-    };
+    } as SecretProviderConfig;
   }
 
   async function expectExecResolveRejects(
-    provider: Record<string, unknown>,
+    provider: SecretProviderConfig,
     message: string,
   ): Promise<void> {
     await expect(

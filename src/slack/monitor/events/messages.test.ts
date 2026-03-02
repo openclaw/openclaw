@@ -87,7 +87,7 @@ async function runMessageCase(input: MessageCase = {}): Promise<void> {
 }
 
 describe("registerSlackMessageEvents", () => {
-  it.each([
+  const cases: Array<{ name: string; input: MessageCase; calls: number }> = [
     {
       name: "enqueues message_changed system events when dmPolicy is open",
       input: { overrides: { dmPolicy: "open" }, event: makeChangedEvent() },
@@ -130,7 +130,8 @@ describe("registerSlackMessageEvents", () => {
       },
       calls: 0,
     },
-  ])("$name", async ({ input, calls }) => {
+  ];
+  it.each(cases)("$name", async ({ input, calls }) => {
     await runMessageCase(input);
     expect(messageQueueMock).toHaveBeenCalledTimes(calls);
   });

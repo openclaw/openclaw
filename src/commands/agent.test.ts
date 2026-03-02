@@ -227,7 +227,7 @@ function createTelegramOutboundPlugin() {
       };
       to: string;
       text: string;
-      accountId?: string;
+      accountId?: string | null;
       mediaUrl?: string;
     },
     mediaUrl?: string,
