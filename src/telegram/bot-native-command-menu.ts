@@ -1,4 +1,9 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { Bot } from "grammy";
+import { resolveStateDir } from "../config/paths.js";
 import {
   normalizeTelegramCommandName,
   TELEGRAM_COMMAND_NAME_PATTERN,
@@ -101,13 +106,59 @@ export function buildCappedTelegramMenuCommands(params: {
   return { commandsToRegister, totalCommands, maxCommands, overflowCount };
 }
 
+/** Compute a stable hash of the command list for change detection. */
+export function hashCommandList(commands: TelegramMenuCommand[]): string {
+  const sorted = [...commands].toSorted((a, b) => a.command.localeCompare(b.command));
+  return createHash("sha256").update(JSON.stringify(sorted)).digest("hex").slice(0, 16);
+}
+
+function resolveCommandHashPath(accountId?: string): string {
+  const stateDir = resolveStateDir(process.env, os.homedir);
+  const normalized = accountId?.trim().replace(/[^a-z0-9._-]+/gi, "_") || "default";
+  return path.join(stateDir, "telegram", `command-hash-${normalized}.txt`);
+}
+
+async function readCachedCommandHash(accountId?: string): Promise<string | null> {
+  try {
+    return (await fs.readFile(resolveCommandHashPath(accountId), "utf-8")).trim();
+  } catch {
+    return null;
+  }
+}
+
+async function writeCachedCommandHash(accountId?: string, hash?: string): Promise<void> {
+  if (!hash) {
+    return;
+  }
+  const filePath = resolveCommandHashPath(accountId);
+  try {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, hash, "utf-8");
+  } catch {
+    // Best-effort: failing to cache the hash just means the next restart
+    // will sync commands again, which is the pre-fix behaviour.
+  }
+}
+
 export function syncTelegramMenuCommands(params: {
   bot: Bot;
   runtime: RuntimeEnv;
   commandsToRegister: TelegramMenuCommand[];
+  accountId?: string;
 }): void {
-  const { bot, runtime, commandsToRegister } = params;
+  const { bot, runtime, commandsToRegister, accountId } = params;
   const sync = async () => {
+    // Skip sync if the command list hasn't changed since the last successful
+    // sync. This prevents hitting Telegram's 429 rate limit when the gateway
+    // is restarted several times in quick succession.
+    // See: openclaw/openclaw#32017
+    const currentHash = hashCommandList(commandsToRegister);
+    const cachedHash = await readCachedCommandHash(accountId);
+    if (cachedHash === currentHash) {
+      runtime.log?.("telegram: command menu unchanged; skipping sync");
+      return;
+    }
+
     // Keep delete -> set ordering to avoid stale deletions racing after fresh registrations.
     if (typeof bot.api.deleteMyCommands === "function") {
       await withTelegramApiErrorLogging({
@@ -118,6 +169,7 @@ export function syncTelegramMenuCommands(params: {
     }
 
     if (commandsToRegister.length === 0) {
+      await writeCachedCommandHash(accountId, currentHash);
       return;
     }
 
@@ -129,6 +181,7 @@ export function syncTelegramMenuCommands(params: {
           runtime,
           fn: () => bot.api.setMyCommands(retryCommands),
         });
+        await writeCachedCommandHash(accountId, currentHash);
         return;
       } catch (err) {
         if (!isBotCommandsTooMuchError(err)) {
