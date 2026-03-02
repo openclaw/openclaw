@@ -263,13 +263,76 @@ export function markdownToTelegramChunks(
 // Telegram Bot API hard limit for message text (HTML mode).
 const TELEGRAM_HTML_MAX_CHARS = 4096;
 
+/**
+ * Re-chunks a single source text whose rendered HTML exceeded the hard limit.
+ * Splits the source text at a safe whitespace/newline boundary near the midpoint,
+ * renders each half, and recurses until all pieces fit within the limit.
+ */
+function rechunkOverflow(sourceText: string): string[] {
+  const rendered = wrapFileReferencesInHtml(
+    renderTelegramHtml(
+      markdownToIR(sourceText, {
+        linkify: true,
+        enableSpoilers: true,
+        headingStyle: "none",
+        blockquotePrefix: "",
+      }),
+    ),
+  );
+
+  if (rendered.length <= TELEGRAM_HTML_MAX_CHARS) {
+    return [rendered];
+  }
+
+  // Find a safe split point near the midpoint — prefer newline, then whitespace
+  const mid = Math.floor(sourceText.length / 2);
+  let splitAt = -1;
+
+  // Search backwards from mid for a newline
+  for (let i = mid; i >= 0; i--) {
+    if (sourceText[i] === "\n") {
+      splitAt = i + 1;
+      break;
+    }
+  }
+  // Fall back to whitespace
+  if (splitAt < 0) {
+    for (let i = mid; i >= 0; i--) {
+      if (/\s/.test(sourceText[i])) {
+        splitAt = i + 1;
+        break;
+      }
+    }
+  }
+  // Last resort: hard split at midpoint
+  if (splitAt <= 0) {
+    splitAt = mid;
+  }
+
+  const left = sourceText.slice(0, splitAt);
+  const right = sourceText.slice(splitAt);
+
+  // Avoid infinite loop if we cannot split further
+  if (!left || !right) {
+    return [rendered.slice(0, TELEGRAM_HTML_MAX_CHARS - 1) + "\u2026"];
+  }
+
+  return [...rechunkOverflow(left), ...rechunkOverflow(right)];
+}
+
 export function markdownToTelegramHtmlChunks(markdown: string, limit: number): string[] {
-  const chunks = markdownToTelegramChunks(markdown, limit).map((chunk) => chunk.html);
+  const chunks = markdownToTelegramChunks(markdown, limit);
   // Safety guard: chunkMarkdownIR splits by plain-text length, but HTML rendering can
   // expand the output (entity escaping, tag overhead). If any rendered chunk still
-  // exceeds Telegram's hard limit, truncate it with an ellipsis rather than letting
-  // the API reject the whole message.
-  return chunks.map((html) =>
-    html.length > TELEGRAM_HTML_MAX_CHARS ? html.slice(0, TELEGRAM_HTML_MAX_CHARS - 1) + "…" : html,
-  );
+  // exceeds Telegram's hard limit, re-chunk the overflow rather than truncating it —
+  // silent data loss is worse than sending an extra message.
+  const result: string[] = [];
+  for (const chunk of chunks) {
+    if (chunk.html.length > TELEGRAM_HTML_MAX_CHARS) {
+      result.push(...rechunkOverflow(chunk.text));
+    } else {
+      result.push(chunk.html);
+    }
+  }
+  return result;
 }
