@@ -38,6 +38,8 @@ export function isPlainTextSurface(channelId: string): boolean {
 export function sanitizeForPlainText(text: string): string {
   return (
     text
+      // Preserve angle-bracket autolinks as plain URLs before tag stripping.
+      .replace(/<((?:https?:\/\/|mailto:)[^<>\s]+)>/gi, "$1")
       // Line breaks
       .replace(/<br\s*\/?>/gi, "\n")
       // Block elements → newlines
