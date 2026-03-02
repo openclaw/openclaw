@@ -317,11 +317,33 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("fails when announce delivery reports false and best-effort is disabled", async () => {
-    const { res, deps } = await runAnnounceFlowResult(false);
-    expect(res.status).toBe("error");
-    expect(res.error).toContain("cron announce delivery failed");
-    expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+  it("returns ok when announce delivery reports false and best-effort is disabled", async () => {
+    await withTempCronHome(async (home) => {
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      const deps = createCliDeps();
+      mockAgentPayloads([{ text: "hello from cron" }]);
+      vi.mocked(runSubagentAnnounceFlow).mockResolvedValueOnce(false);
+
+      const res = await runTelegramAnnounceTurn({
+        home,
+        storePath,
+        deps,
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "123",
+          bestEffort: false,
+        },
+      });
+
+      // Announce delivery failure should not mark a successful agent execution
+      // as error. The execution succeeded; only delivery failed.
+      expect(res.status).toBe("ok");
+      expect(res.delivered).toBe(false);
+      expect(res.deliveryAttempted).toBe(true);
+      expect(res.error).toBe("cron announce delivery failed");
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+    });
   });
 
   it("marks attempted when announce delivery reports false and best-effort is enabled", async () => {
@@ -331,6 +353,37 @@ describe("runCronIsolatedAgentTurn", () => {
     expect(res.deliveryAttempted).toBe(true);
     expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
     expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("returns ok when announce flow throws and best-effort is disabled", async () => {
+    await withTempCronHome(async (home) => {
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      const deps = createCliDeps();
+      mockAgentPayloads([{ text: "hello from cron" }]);
+      vi.mocked(runSubagentAnnounceFlow).mockRejectedValueOnce(
+        new Error("gateway closed (1008): pairing required"),
+      );
+
+      const res = await runTelegramAnnounceTurn({
+        home,
+        storePath,
+        deps,
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "123",
+          bestEffort: false,
+        },
+      });
+
+      // Even when announce throws (e.g. "pairing required"), the agent
+      // execution succeeded so the job status should be ok.
+      expect(res.status).toBe("ok");
+      expect(res.delivered).toBe(false);
+      expect(res.deliveryAttempted).toBe(true);
+      expect(res.error).toContain("pairing required");
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+    });
   });
 
   it("ignores structured direct delivery failures when best-effort is enabled", async () => {
