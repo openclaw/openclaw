@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
@@ -9,6 +8,7 @@ import {
   archiveSessionTranscripts,
   cleanupArchivedSessionTranscripts,
 } from "../../gateway/session-utils.fs.js";
+import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   deliveryContextFromSession,
@@ -771,57 +771,34 @@ async function saveSessionStoreUnlocked(
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
   const json = JSON.stringify(store, null, 2);
 
-  // Windows: use temp-file + rename for atomic writes, same as other platforms.
-  // Direct `writeFile` truncates the target to 0 bytes before writing, which
-  // allows concurrent `readFileSync` calls (from unlocked `loadSessionStore`)
-  // to observe an empty file and lose the session store contents.
+  // Windows: keep retry semantics because rename can fail while readers hold locks.
   if (process.platform === "win32") {
-    const tmp = `${storePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-    try {
-      await fs.promises.writeFile(tmp, json, "utf-8");
-      // Retry rename up to 5 times with increasing backoff — rename can fail
-      // on Windows when the target is locked by a concurrent reader.  We do
-      // NOT fall back to writeFile or copyFile because both use CREATE_ALWAYS
-      // on Windows, which truncates the target to 0 bytes before writing —
-      // reintroducing the exact race this fix addresses.  If all attempts
-      // fail, the temp file is cleaned up and the next save cycle (which is
-      // serialized by the write lock) will succeed.
-      for (let i = 0; i < 5; i++) {
-        try {
-          await fs.promises.rename(tmp, storePath);
-          break;
-        } catch {
-          if (i < 4) {
-            await new Promise((r) => setTimeout(r, 50 * (i + 1)));
-          }
-          // Final attempt failed — skip this save.  The write lock ensures
-          // the next save will retry with fresh data.  Log for diagnostics.
-          if (i === 4) {
-            log.warn(`rename failed after 5 attempts: ${storePath}`);
-          }
-        }
-      }
-    } catch (err) {
-      const code =
-        err && typeof err === "object" && "code" in err
-          ? String((err as { code?: unknown }).code)
-          : null;
-      if (code === "ENOENT") {
+    for (let i = 0; i < 5; i++) {
+      try {
+        await writeTextAtomic(storePath, json, { mode: 0o600 });
         return;
+      } catch (err) {
+        const code =
+          err && typeof err === "object" && "code" in err
+            ? String((err as { code?: unknown }).code)
+            : null;
+        if (code === "ENOENT") {
+          return;
+        }
+        if (i < 4) {
+          await new Promise((r) => setTimeout(r, 50 * (i + 1)));
+          continue;
+        }
+        // Final attempt failed — skip this save. The write lock ensures
+        // the next save will retry with fresh data. Log for diagnostics.
+        log.warn(`atomic write failed after 5 attempts: ${storePath}`);
       }
-      throw err;
-    } finally {
-      await fs.promises.rm(tmp, { force: true }).catch(() => undefined);
     }
     return;
   }
 
-  const tmp = `${storePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
   try {
-    await fs.promises.writeFile(tmp, json, { mode: 0o600, encoding: "utf-8" });
-    await fs.promises.rename(tmp, storePath);
-    // Ensure permissions are set even if rename loses them
-    await fs.promises.chmod(storePath, 0o600);
+    await writeTextAtomic(storePath, json, { mode: 0o600 });
   } catch (err) {
     const code =
       err && typeof err === "object" && "code" in err
@@ -832,9 +809,7 @@ async function saveSessionStoreUnlocked(
       // In tests the temp session-store directory may be deleted while writes are in-flight.
       // Best-effort: try a direct write (recreating the parent dir), otherwise ignore.
       try {
-        await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
-        await fs.promises.writeFile(storePath, json, { mode: 0o600, encoding: "utf-8" });
-        await fs.promises.chmod(storePath, 0o600);
+        await writeTextAtomic(storePath, json, { mode: 0o600 });
       } catch (err2) {
         const code2 =
           err2 && typeof err2 === "object" && "code" in err2
@@ -849,8 +824,6 @@ async function saveSessionStoreUnlocked(
     }
 
     throw err;
-  } finally {
-    await fs.promises.rm(tmp, { force: true });
   }
 }
 

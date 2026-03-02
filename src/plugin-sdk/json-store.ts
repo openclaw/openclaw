@@ -1,6 +1,5 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
-import path from "node:path";
+import { writeJsonAtomic } from "../infra/json-files.js";
 import { safeParseJson } from "../utils.js";
 
 export async function readJsonFileWithFallback<T>(
@@ -24,12 +23,9 @@ export async function readJsonFileWithFallback<T>(
 }
 
 export async function writeJsonFileAtomically(filePath: string, value: unknown): Promise<void> {
-  const dir = path.dirname(filePath);
-  await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-  const tmp = path.join(dir, `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
-  await fs.promises.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: "utf-8",
+  await writeJsonAtomic(filePath, value, {
+    mode: 0o600,
+    trailingNewline: true,
+    ensureDirMode: 0o700,
   });
-  await fs.promises.chmod(tmp, 0o600);
-  await fs.promises.rename(tmp, filePath);
 }
