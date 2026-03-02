@@ -275,13 +275,6 @@ export function handleControlUiHttpRequest(
   if (!urlRaw) {
     return false;
   }
-  if (req.method !== "GET" && req.method !== "HEAD") {
-    res.statusCode = 405;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end("Method Not Allowed");
-    return true;
-  }
-
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts?.basePath);
   const pathname = url.pathname;
@@ -313,6 +306,19 @@ export function handleControlUiHttpRequest(
     if (!pathname.startsWith(`${basePath}/`)) {
       return false;
     }
+  }
+
+  // Method guard must run AFTER path checks so that POST requests to non-UI
+  // paths (channel webhooks etc.) fall through to later handlers.  When no
+  // basePath is configured the SPA catch-all would otherwise 405 every POST.
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    if (!basePath) {
+      return false;
+    }
+    res.statusCode = 405;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end("Method Not Allowed");
+    return true;
   }
 
   applyControlUiSecurityHeaders(res);

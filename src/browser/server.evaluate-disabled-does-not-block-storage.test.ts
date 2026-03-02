@@ -1,6 +1,6 @@
-import { createServer, type AddressInfo } from "node:net";
 import { fetch as realFetch } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getFreePort } from "./test-port.js";
 
 let testPort = 0;
 let prevGatewayPort: string | undefined;
@@ -67,17 +67,6 @@ vi.mock("./server-context.js", async (importOriginal) => {
 
 const { startBrowserControlServerFromConfig, stopBrowserControlServer } =
   await import("./server.js");
-
-async function getFreePort(): Promise<number> {
-  const probe = createServer();
-  await new Promise<void>((resolve, reject) => {
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => resolve());
-  });
-  const addr = probe.address() as AddressInfo;
-  await new Promise<void>((resolve) => probe.close(() => resolve()));
-  return addr.port;
-}
 
 describe("browser control evaluate gating", () => {
   beforeEach(async () => {
