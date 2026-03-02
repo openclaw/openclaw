@@ -76,6 +76,18 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
+  it("does not warn when local provider relies on the default local model", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {});
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
   it("does not warn when remote apiKey is configured for explicit provider", async () => {
     await expectNoWarningWithConfiguredRemoteApiKey("openai");
   });

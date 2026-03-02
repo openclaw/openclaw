@@ -42,7 +42,7 @@ export async function noteMemorySearchHealth(
   // If a specific provider is configured (not "auto"), check only that one.
   if (resolved.provider !== "auto") {
     if (resolved.provider === "local") {
-      if (hasLocalEmbeddings(resolved.local)) {
+      if (hasLocalEmbeddings(resolved.local, { assumeDefaultModelWhenUnset: true })) {
         return; // local model file exists
       }
       note(
@@ -135,10 +135,13 @@ export async function noteMemorySearchHealth(
   );
 }
 
-function hasLocalEmbeddings(local: { modelPath?: string }): boolean {
+function hasLocalEmbeddings(
+  local: { modelPath?: string },
+  opts?: { assumeDefaultModelWhenUnset?: boolean },
+): boolean {
   const modelPath = local.modelPath?.trim();
   if (!modelPath) {
-    return false;
+    return opts?.assumeDefaultModelWhenUnset ?? false;
   }
   // Remote/downloadable models (hf: or http:) aren't pre-resolved on disk,
   // so we can't confirm availability without a network call. Treat as
