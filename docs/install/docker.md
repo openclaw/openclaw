@@ -60,6 +60,7 @@ Optional env vars:
 - `OPENCLAW_EXTRA_MOUNTS` — add extra host bind mounts
 - `OPENCLAW_HOME_VOLUME` — persist `/home/node` in a named volume
 - `OPENCLAW_SANDBOX` — opt in to Docker gateway sandbox bootstrap. Only explicit truthy values enable it: `1`, `true`, `yes`, `on`
+- `OPENCLAW_INSTALL_DOCKER_CLI` — build arg passthrough for local image builds (`1` installs Docker CLI in the image). `docker-setup.sh` sets this automatically when `OPENCLAW_SANDBOX=1` for local builds.
 - `OPENCLAW_DOCKER_SOCKET` — override Docker socket path (default: `DOCKER_HOST=unix://...` path, else `/var/run/docker.sock`)
 - `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` — break-glass: allow trusted private-network
   `ws://` targets for CLI/onboarding client paths (default is loopback-only)
