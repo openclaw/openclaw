@@ -59,6 +59,31 @@ After it finishes:
 - Paste the token into the Control UI (Settings → token).
 - Need the URL again? Run `docker compose run --rm openclaw-cli dashboard --no-open`.
 
+### Automation/CI (non-interactive, no TTY noise)
+
+For scripts and CI, disable Compose pseudo-TTY allocation with `-T`:
+
+```bash
+docker compose run -T --rm openclaw-cli gateway probe
+docker compose run -T --rm openclaw-cli devices list --json
+```
+
+If your automation exports no Claude session vars, leaving them unset now resolves to
+empty values by default in `docker-compose.yml` to avoid repeated "variable is not set"
+warnings.
+
+### Shared-network security note (CLI + gateway)
+
+`openclaw-cli` uses `network_mode: "service:openclaw-gateway"` so CLI commands can
+reliably reach the gateway over `127.0.0.1` in Docker.
+
+Treat this as a shared trust boundary: loopback binding is not isolation between these two
+containers. If you need stronger separation, run commands from a separate container/host
+network path instead of the bundled `openclaw-cli` service.
+
+To reduce impact if the CLI process is compromised, the compose config drops
+`NET_RAW`/`NET_ADMIN` and enables `no-new-privileges` on `openclaw-cli`.
+
 It writes config/workspace on the host:
 
 - `~/.openclaw/`
@@ -322,9 +347,30 @@ scripts/e2e/onboard-docker.sh
 pnpm test:docker:qr
 ```
 
+### LAN vs loopback (Docker Compose)
+
+`docker-setup.sh` defaults `OPENCLAW_GATEWAY_BIND=lan` so host access to
+`http://127.0.0.1:18789` works with Docker port publishing.
+
+- `lan` (default): host browser + host CLI can reach the published gateway port.
+- `loopback`: only processes inside the container network namespace can reach
+  the gateway directly; host-published port access may fail.
+
+The setup script also pins `gateway.mode=local` after onboarding so Docker CLI
+commands default to local loopback targeting.
+
+If you see `Gateway target: ws://172.x.x.x:18789` or repeated `pairing required`
+errors from Docker CLI commands, run:
+
+```bash
+docker compose run --rm openclaw-cli config set gateway.mode local
+docker compose run --rm openclaw-cli config set gateway.bind lan
+docker compose run --rm openclaw-cli devices list --url ws://127.0.0.1:18789
+```
+
 ### Notes
 
-- Gateway bind defaults to `lan` for container use.
+- Gateway bind defaults to `lan` for container use (`OPENCLAW_GATEWAY_BIND`).
 - Dockerfile CMD uses `--allow-unconfigured`; mounted config with `gateway.mode` not `local` will still start. Override CMD to enforce the guard.
 - The gateway container is the source of truth for sessions (`~/.openclaw/agents/<agentId>/sessions/`).
 
