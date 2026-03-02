@@ -7,6 +7,7 @@ import {
   createWebhookAnomalyTracker,
   readJsonWebhookBodyOrReject,
   applyBasicWebhookRequestGuards,
+  type RegisterWebhookTargetOptions,
   registerWebhookTarget,
   resolveSingleWebhookTarget,
   resolveWebhookTargets,
@@ -106,8 +107,14 @@ function recordWebhookStatus(
   });
 }
 
-export function registerZaloWebhookTarget(target: ZaloWebhookTarget): () => void {
-  return registerWebhookTarget(webhookTargets, target).unregister;
+export function registerZaloWebhookTarget(
+  target: ZaloWebhookTarget,
+  opts?: Pick<
+    RegisterWebhookTargetOptions<ZaloWebhookTarget>,
+    "onFirstPathTarget" | "onLastPathTargetRemoved"
+  >,
+): () => void {
+  return registerWebhookTarget(webhookTargets, target, opts).unregister;
 }
 
 export async function handleZaloWebhookRequest(

@@ -31,6 +31,59 @@ describe("registerWebhookTarget", () => {
     registered.unregister();
     expect(targets.has("/hook")).toBe(false);
   });
+
+  it("runs first/last path lifecycle hooks only at path boundaries", () => {
+    const targets = new Map<string, Array<{ path: string; id: string }>>();
+    const teardown = vi.fn();
+    const onFirstPathTarget = vi.fn(() => teardown);
+    const onLastPathTargetRemoved = vi.fn();
+
+    const registeredA = registerWebhookTarget(
+      targets,
+      { path: "hook", id: "A" },
+      { onFirstPathTarget, onLastPathTargetRemoved },
+    );
+    const registeredB = registerWebhookTarget(
+      targets,
+      { path: "/hook", id: "B" },
+      { onFirstPathTarget, onLastPathTargetRemoved },
+    );
+
+    expect(onFirstPathTarget).toHaveBeenCalledTimes(1);
+    expect(onFirstPathTarget).toHaveBeenCalledWith({
+      path: "/hook",
+      target: expect.objectContaining({ id: "A", path: "/hook" }),
+    });
+
+    registeredB.unregister();
+    expect(teardown).not.toHaveBeenCalled();
+    expect(onLastPathTargetRemoved).not.toHaveBeenCalled();
+
+    registeredA.unregister();
+    expect(teardown).toHaveBeenCalledTimes(1);
+    expect(onLastPathTargetRemoved).toHaveBeenCalledTimes(1);
+    expect(onLastPathTargetRemoved).toHaveBeenCalledWith({ path: "/hook" });
+
+    registeredA.unregister();
+    expect(teardown).toHaveBeenCalledTimes(1);
+    expect(onLastPathTargetRemoved).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not register target when first-path hook throws", () => {
+    const targets = new Map<string, Array<{ path: string; id: string }>>();
+    expect(() =>
+      registerWebhookTarget(
+        targets,
+        { path: "/hook", id: "A" },
+        {
+          onFirstPathTarget: () => {
+            throw new Error("boom");
+          },
+        },
+      ),
+    ).toThrow("boom");
+    expect(targets.has("/hook")).toBe(false);
+  });
 });
 
 describe("resolveWebhookTargets", () => {
