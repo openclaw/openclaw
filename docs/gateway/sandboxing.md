@@ -169,9 +169,18 @@ for containerized workloads. Current container defaults include:
 - `--metrics-recording-only`
 - `--renderer-process-limit=2`
 - `--no-sandbox` and `--disable-setuid-sandbox` when `noSandbox` is enabled.
+- The three graphics hardening flags (`--disable-3d-apis`,
+  `--disable-software-rasterizer`, `--disable-gpu`) are optional and are useful
+  when containers lack GPU support. Set `OPENCLAW_BROWSER_DISABLE_GRAPHICS_FLAGS=0`
+  if your workload requires WebGL or other 3D/browser features.
+- `--disable-extensions` is enabled by default and can be disabled with
+  `OPENCLAW_BROWSER_DISABLE_EXTENSIONS=0` for extension-reliant flows.
+- `--renderer-process-limit=2` is controlled by
+  `OPENCLAW_BROWSER_RENDERER_PROCESS_LIMIT=<N>`, where `0` keeps Chromium's default.
 
 If you need a different runtime profile, use a custom browser image and provide
-your own entrypoint.
+your own entrypoint. For local (non-container) Chromium profiles, use
+`browser.extraArgs` to append additional startup flags.
 
 Security defaults:
 

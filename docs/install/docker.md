@@ -64,6 +64,13 @@ Optional env vars:
 - `OPENCLAW_DOCKER_SOCKET` — override Docker socket path (default: `DOCKER_HOST=unix://...` path, else `/var/run/docker.sock`)
 - `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` — break-glass: allow trusted private-network
   `ws://` targets for CLI/onboarding client paths (default is loopback-only)
+- `OPENCLAW_BROWSER_DISABLE_GRAPHICS_FLAGS=0` — disable container browser hardening flags
+  `--disable-3d-apis`, `--disable-software-rasterizer`, `--disable-gpu` when you need
+  WebGL/3D compatibility.
+- `OPENCLAW_BROWSER_DISABLE_EXTENSIONS=0` — keep extensions enabled when browser
+  flows require them (default keeps extensions disabled in sandbox browser).
+- `OPENCLAW_BROWSER_RENDERER_PROCESS_LIMIT=<N>` — set Chromium renderer process
+  limit; set to `0` to skip the flag and use Chromium default behavior.
 
 After it finishes:
 
@@ -692,6 +699,18 @@ Notes:
   - `--disable-extensions`
   - If `agents.defaults.sandbox.browser.noSandbox` is set, `--no-sandbox` and
     `--disable-setuid-sandbox` are also appended.
+  - The three graphics hardening flags above are optional. If your workload needs
+    WebGL/3D, set `OPENCLAW_BROWSER_DISABLE_GRAPHICS_FLAGS=0` to run without
+    `--disable-3d-apis`, `--disable-software-rasterizer`, and `--disable-gpu`.
+  - Extension behavior is controlled by `--disable-extensions` and can be disabled
+    (enables extensions) via `OPENCLAW_BROWSER_DISABLE_EXTENSIONS=0` for
+    extension-dependent pages or extensions-heavy workflows.
+  - `--renderer-process-limit=2` is also configurable with
+    `OPENCLAW_BROWSER_RENDERER_PROCESS_LIMIT`; set `0` to let Chromium choose its
+    default process limit when browser concurrency needs tuning.
+
+Defaults are applied by default in the bundled image. If you need different
+Chromium flags, use a custom browser image and provide your own entrypoint.
 
 Use config:
 

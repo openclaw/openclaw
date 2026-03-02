@@ -1194,8 +1194,18 @@ noVNC observer access uses VNC auth by default and OpenClaw emits a short-lived 
   - `--renderer-process-limit=2`
   - `--no-zygote`
   - `--metrics-recording-only`
-  - plus `--disable-extensions`
+  - `--disable-extensions` (default enabled)
+  - `--disable-3d-apis`, `--disable-software-rasterizer`, and `--disable-gpu` are
+    enabled by default and can be disabled with
+    `OPENCLAW_BROWSER_DISABLE_GRAPHICS_FLAGS=0` if WebGL/3D usage requires it.
+  - `OPENCLAW_BROWSER_DISABLE_EXTENSIONS=0` re-enables extensions if your workflow
+    depends on them.
+  - `--renderer-process-limit=2` can be changed with
+    `OPENCLAW_BROWSER_RENDERER_PROCESS_LIMIT=<N>`; set `0` to use Chromium's
+    default process limit.
   - plus `--no-sandbox` and `--disable-setuid-sandbox` when `noSandbox` is enabled.
+  - Defaults are the container image baseline; use a custom browser image with a custom
+    entrypoint to change container defaults.
 
 </Accordion>
 

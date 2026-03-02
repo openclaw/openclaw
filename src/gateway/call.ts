@@ -286,6 +286,7 @@ function resolveGatewayCredentials(context: ResolvedGatewayCallContext): {
     env: process.env,
     explicitAuth: context.explicitAuth,
     urlOverride: context.urlOverride,
+    urlOverrideSource: context.urlOverrideSource,
     remotePasswordPrecedence: "env-first",
   });
 }
