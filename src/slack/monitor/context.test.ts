@@ -47,6 +47,49 @@ function createTestContext() {
   });
 }
 
+describe("createSlackMonitorContext isChannelAllowed closure correctness", () => {
+  it("picks up channelsConfig mutations made after context creation", () => {
+    const ctx = createTestContext();
+    // Initially no channelsConfig — channel should be allowed under allowlist policy
+    // only if groupPolicy is "open" (default is "allowlist", so blocked).
+    ctx.groupPolicy = "open";
+    expect(ctx.isChannelAllowed({ channelId: "C_ROOM", channelType: "channel" })).toBe(true);
+
+    // Mutate ctx.channelsConfig to explicitly deny the channel.
+    ctx.channelsConfig = { C_ROOM: { allow: false } };
+    expect(ctx.isChannelAllowed({ channelId: "C_ROOM", channelType: "channel" })).toBe(false);
+  });
+
+  it("reflects channelsConfig set from undefined to a value", () => {
+    const ctx = createTestContext();
+    ctx.groupPolicy = "allowlist";
+    // No channelsConfig — allowlist policy blocks all channels by default.
+    expect(ctx.isChannelAllowed({ channelId: "C_NEW", channelType: "channel" })).toBe(false);
+
+    // Set channelsConfig to allow the channel — closure must see the update.
+    ctx.channelsConfig = { C_NEW: { allow: true } };
+    expect(ctx.isChannelAllowed({ channelId: "C_NEW", channelType: "channel" })).toBe(true);
+  });
+
+  it("reflects dmEnabled mutations", () => {
+    const ctx = createTestContext();
+    // Default: dmEnabled is true
+    expect(ctx.isChannelAllowed({ channelId: "D_DM", channelType: "im" })).toBe(true);
+
+    ctx.dmEnabled = false;
+    expect(ctx.isChannelAllowed({ channelId: "D_DM", channelType: "im" })).toBe(false);
+  });
+
+  it("reflects groupDmEnabled mutations", () => {
+    const ctx = createTestContext();
+    // Default: groupDmEnabled is false
+    expect(ctx.isChannelAllowed({ channelId: "G_GDM", channelType: "mpim" })).toBe(false);
+
+    ctx.groupDmEnabled = true;
+    expect(ctx.isChannelAllowed({ channelId: "G_GDM", channelType: "mpim" })).toBe(true);
+  });
+});
+
 describe("createSlackMonitorContext shouldDropMismatchedSlackEvent", () => {
   it("drops mismatched top-level app/team identifiers", () => {
     const ctx = createTestContext();
