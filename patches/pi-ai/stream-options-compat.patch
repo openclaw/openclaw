@@ -1,0 +1,35 @@
+diff --git a/dist/providers/openai-completions.js b/dist/providers/openai-completions.js
+index 5db0fc3..b2390da 100644
+--- a/dist/providers/openai-completions.js
++++ b/dist/providers/openai-completions.js
+@@ -462,9 +462,11 @@ function buildParams(model, context, options) {
+     const params = {
+         model: model.id,
+         messages,
+         stream: true,
+     };
+-    if (compat.supportsUsageInStreaming !== false) {
+-        params.stream_options = { include_usage: true };
++    // Some OpenAI-compatible providers reject `stream_options` entirely.
++    const supportsStreamOptions = compat.supportsStreamOptions !== false;
++    if (supportsStreamOptions && compat.supportsUsageInStreaming !== false) {
++        params.stream_options = { include_usage: true };
+     }
+     if (compat.supportsStore) {
+         params.store = false;
+     }
+diff --git a/dist/types.d.ts b/dist/types.d.ts
+index 2bb5bb1..d47255e 100644
+--- a/dist/types.d.ts
++++ b/dist/types.d.ts
+@@ -169,6 +169,8 @@ export interface OpenAICompletionsCompat {
+     /** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */
+     supportsReasoningEffort?: boolean;
+     /** Whether the provider supports `stream_options: { include_usage: true }` for token usage in streaming responses. Default: true. */
+     supportsUsageInStreaming?: boolean;
++    /** Whether the provider supports `stream_options` at all. Default: true. */
++    supportsStreamOptions?: boolean;
+     /** Which field to use for max tokens. Default: auto-detected from URL. */
+     maxTokensField?: "max_completion_tokens" | "max_tokens";
+     /** Whether tool results require the `name` field. Default: auto-detected from URL. */
+     requiresToolResultName?: boolean;

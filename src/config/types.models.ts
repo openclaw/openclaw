@@ -19,6 +19,9 @@ export type ModelCompatConfig = {
   supportsReasoningEffort?: boolean;
   supportsUsageInStreaming?: boolean;
   supportsStrictMode?: boolean;
+  // Some OpenAI-compatible providers reject `stream_options`.
+  // Disable to avoid sending `stream_options: { include_usage: true }`.
+  supportsStreamOptions?: boolean;
   maxTokensField?: "max_completion_tokens" | "max_tokens";
   thinkingFormat?: "openai" | "zai" | "qwen";
   requiresToolResultName?: boolean;
