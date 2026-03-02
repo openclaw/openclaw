@@ -114,38 +114,48 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     }
 
     private static func connectChallengeData(nonce: String) -> Data {
-        let json = """
-        {
-          "type": "event",
-          "event": "connect.challenge",
-          "payload": { "nonce": "\(nonce)" }
-        }
-        """
-        return Data(json.utf8)
+        let frame: [String: Any] = [
+            "type": "event",
+            "event": "connect.challenge",
+            "payload": ["nonce": nonce],
+        ]
+        return (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
     }
 
     private static func connectOkData(id: String) -> Data {
-        let json = """
-        {
-          "type": "res",
-          "id": "\(id)",
-          "ok": true,
-          "payload": {
+        let payload: [String: Any] = [
             "type": "hello-ok",
             "protocol": 2,
-            "server": { "version": "test", "connId": "test" },
-            "features": { "methods": [], "events": [] },
-            "snapshot": {
-              "presence": [ { "ts": 1 } ],
-              "health": {},
-              "stateVersion": { "presence": 0, "health": 0 },
-              "uptimeMs": 0
-            },
-            "policy": { "maxPayload": 1, "maxBufferedBytes": 1, "tickIntervalMs": 30000 }
-          }
-        }
-        """
-        return Data(json.utf8)
+            "server": [
+                "version": "test",
+                "connId": "test",
+            ],
+            "features": [
+                "methods": [],
+                "events": [],
+            ],
+            "snapshot": [
+                "presence": [["ts": 1]],
+                "health": [:],
+                "stateVersion": [
+                    "presence": 0,
+                    "health": 0,
+                ],
+                "uptimeMs": 0,
+            ],
+            "policy": [
+                "maxPayload": 1,
+                "maxBufferedBytes": 1,
+                "tickIntervalMs": 30_000,
+            ],
+        ]
+        let frame: [String: Any] = [
+            "type": "res",
+            "id": id,
+            "ok": true,
+            "payload": payload,
+        ]
+        return (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
     }
 }
 
