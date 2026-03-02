@@ -173,7 +173,9 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       chatLog.updateAssistant(displayText, evt.runId);
-      setActivityStatus("streaming");
+      if (state.activeChatRunId === evt.runId) {
+        setActivityStatus("streaming");
+      }
     }
     if (evt.state === "final") {
       const wasActiveRun = state.activeChatRunId === evt.runId;

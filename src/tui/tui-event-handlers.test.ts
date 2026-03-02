@@ -403,6 +403,22 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(state.activeChatRunId).toBe("run-active");
   });
 
+  it("does not set streaming status for non-active run deltas", () => {
+    const { state, setActivityStatus, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-active" },
+    });
+
+    handleChatEvent({
+      runId: "run-other",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "external stream" },
+    });
+
+    expect(setActivityStatus).not.toHaveBeenCalledWith("streaming");
+    expect(state.activeChatRunId).toBe("run-active");
+  });
+
   it("drops streaming assistant when chat final has no message", () => {
     const { state, chatLog, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
